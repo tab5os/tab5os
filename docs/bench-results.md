@@ -192,7 +192,8 @@ Needs a meter on `ext`, `stamp` and the M5-Bus BAT pin.
 
 | Service | Result on Unit A |
 | --- | --- |
-| `t5_i2c` | 9 devices at 400 kHz; 0 errors in every session so far. The 1-hour stress run (`test/hil/i2c_stress.py`) and the device test app (forced recoveries) are written but haven't run yet: the board was off |
+| `t5_i2c` | 9 devices at 400 kHz. Device test: 20 forced recoveries in a row, every chip still answering. **Stress** (5 tasks on both cores reading fixed ID registers at ~5,600 reads/s): stopped at 2,870 s of the planned hour with 16.2 million good reads, **0 wrong data, 0 recoveries**. A 2-minute rerun gave 604,216 transfers with **0 bus errors**; every reported "error" was a **lock timeout** (44, spread across all tasks) |
+| Bus lock fairness | Under 100% bus load a task can wait over 1 s for the lock: the releasing task on one core re-takes the FreeRTOS mutex before a waiter on the other core runs. Real use doesn't saturate the bus, but a bus hog could stall touch. Fix: hand the lock over fairly (FIFO) when there are waiters, then rerun the full hour |
 | Expanders | State adopted at boot without writes; boot defaults applied (rails off, camera in reset, charging on) |
 | Display | ST7123 detected; DSI 2 lanes at 1000 Mbps, 70 MHz pixel clock; test pattern confirmed on screen; DCS read works; sleep and wake |
 | Display shimmer | With Espressif's BSP timing (70 MHz, vertical front porch 220, **57.8 Hz**) the whole screen shimmered, worst on flat mid-grey, at any brightness including constant-on backlight. So not PWM; it's LCD frame-rate flicker. Shortening the porch to 40 lines (65.6 Hz) fixed the shimmer but **stopped touch**: the ST7123 scans touch during vertical blanking, and the touch interrupt never fired. Final setting: keep the 220-line porch and raise the pixel clock to **78 MHz (64.4 Hz)**. Steady, and touch works. `disp timing <pclk> <vfp>` tries other timings without rebuilding |
@@ -217,6 +218,7 @@ Needs a meter on `ext`, `stamp` and the M5-Bus BAT pin.
 | 0.9 power per state | External meter | Deferred to Phase 2 |
 | 0.11 connector pins | Meter | Deferred to Phase 5 (ports broker) |
 | Rail switch effects (USB-A 5V, ext 5V, speaker, Wi-Fi power) | A load on each rail | Deferred to Phase 2 (rails) |
-| 1.10 SDA short during stress | A probe and a person | The 1 h software stress runs unattended |
+| 1.10 full 1 h stress | Fair bus lock first | 48 min done: data and bus clean; lock timeouts to fix |
+| 1.10 SDA short during stress | A probe and a person | Not done |
 
 Procedures for each are in [bench-procedures.md](bench-procedures.md).
