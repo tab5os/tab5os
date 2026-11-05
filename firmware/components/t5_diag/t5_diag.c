@@ -27,6 +27,7 @@ esp_err_t t5_diag_start(void)
     esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_cfg.prompt = "tab5> ";
     repl_cfg.max_cmdline_length = 256;
+    repl_cfg.task_stack_size = 12288;   /* scan tables and BLE results live on the stack */
 
     esp_console_dev_usb_serial_jtag_config_t dev_cfg =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
@@ -42,6 +43,8 @@ esp_err_t t5_diag_start(void)
     diag_register_bench();
     diag_register_log();
     diag_register_elf();
+    diag_register_power();
+    diag_register_net();
 
     return esp_console_start_repl(repl);
 }

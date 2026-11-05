@@ -34,6 +34,23 @@ add_library(t5_host STATIC
     ${FW}/t5_storage/storage.c
     ${FW}/t5_display/display.c
     ${FW}/t5_input/touch.c
+    ${FW}/t5_core/t5_crc.c
+    ${FW}/t5_power/arbiter.c
+    ${FW}/t5_power/wake_reason.c
+    ${FW}/t5_power/rail.c
+    ${FW}/t5_power/wakelock.c
+    ${FW}/t5_power/suspend.c
+    ${FW}/t5_power/autosave.c
+    ${FW}/t5_power/power.c
+    ${FW}/t5_battery/ina226.c
+    ${FW}/t5_battery/gauge.c
+    ${FW}/t5_battery/policy.c
+    ${FW}/t5_battery/battery.c
+    ${FW}/t5_net/netcfg.c
+    ${FW}/t5_net/c6img.c
+    ${FW}/t5_net/ble_util.c
+    mocks/power_hw_mock.c
+    mocks/chips_mock.c
     mocks/t5_os_mock.c
     mocks/t5_event_mock.c
     mocks/t5_i2c_hw_mock.c
@@ -48,11 +65,14 @@ target_include_directories(t5_host PUBLIC
     ${FW}/t5_imu/include
     ${FW}/t5_storage/include ${FW}/t5_storage
     ${FW}/t5_display/include ${FW}/t5_display
-    ${FW}/t5_input/include ${FW}/t5_input)
+    ${FW}/t5_input/include ${FW}/t5_input
+    ${FW}/t5_power/include ${FW}/t5_power
+    ${FW}/t5_battery/include ${FW}/t5_battery
+    ${FW}/t5_net/include ${FW}/t5_net)
 target_link_libraries(t5_host PUBLIC unity)
 
 enable_testing()
-foreach(t test_bsp_names test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch)
+foreach(t test_bsp_names test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch test_power test_battery test_net)
     add_executable(${t} ${t}.c)
     target_link_libraries(${t} PRIVATE t5_host)
     add_test(NAME ${t} COMMAND ${t})

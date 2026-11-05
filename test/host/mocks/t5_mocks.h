@@ -68,6 +68,13 @@ void t5_time_reset_for_test(void);
 void t5_imu_reset_for_test(void);
 void t5_storage_reset_for_test(void);
 void t5_display_reset_for_test(void);
+void t5_rail_reset_for_test(void);
+void t5_wakelock_reset_for_test(void);
+void t5_suspend_reset_for_test(void);
+void t5_autosave_reset_for_test(void);
+void t5_power_reset_for_test(void);
+void t5_battery_reset_for_test(void);
+void t5_rtc_reset_for_test(void);
 
 /* ---- other hardware stubs ----------------------------------------------- */
 extern time_t mock_system_time;
@@ -83,6 +90,33 @@ extern int mock_backlight;
 extern bool mock_panel_asleep;
 
 void mock_i2c_handles_reset(void);
+
+/* power and battery hardware */
+typedef struct {
+    bool rail[8];
+    int rail_writes;
+    bool rail_fail;
+    bool cpu_low;
+    int reset;                  /* t5_reset_t */
+    bool deep_sleep_timer;
+    int notifies;
+    int halted;
+    uint32_t halt_ms;
+    void (*task)(void);
+    void (*battery_task)(void);
+    int16_t chip_c10;           /* INT16_MIN: no sensor */
+    bool usb_host;
+} mock_power_t;
+extern mock_power_t mock_power;
+void mock_power_reset(void);
+
+/* Simulated PI4IOE5V6408 expanders at 0x43/0x44 with t5_xpin started. */
+void mock_expanders_start(void);
+/* Simulated RX8130 at 0x32 (write-0-to-clear flags), started. flags: 0x1D at boot. */
+mock_i2c_dev_t *mock_rtc_start(uint8_t boot_flags);
+/* Simulated INA226 at 0x41. */
+mock_i2c_dev_t *mock_ina226_add(void);
+void mock_ina226_set(mock_i2c_dev_t *d, uint16_t mv, int32_t ma10);
 
 /* Everything back to a clean state; call from setUp(). */
 static inline void mock_reset_all(void)

@@ -45,7 +45,19 @@ int t5_display_brightness(void);
 /* Diagnostics: change the backlight PWM frequency (default 19531 Hz). */
 t5_err_t t5_display_set_backlight_freq(uint32_t hz);
 
-/* Backlight off, display off, panel sleep-in. Wake reverses it. */
+/* Power states (Phase 2). Both keep the DSI video stream running, because the
+ * ST7123 only scans touch while it receives video (bench 0.8):
+ *   blank: backlight off, panel on. Used by Screen off and Sleep.
+ *   dim:   cap the backlight at percent without changing the user's
+ *          brightness; -1 removes the cap. Used by Dim and low-power mode. */
+t5_err_t t5_display_blank(bool blank);
+bool t5_display_blanked(void);
+t5_err_t t5_display_dim(int percent);
+/* The backlight level actually applied (0 when asleep or blanked). */
+int t5_display_effective_brightness(void);
+
+/* Backlight off, display off, panel sleep-in. Wake reverses it. Touch stops
+ * working while the panel sleeps, so only soft off and charge mode use this. */
 t5_err_t t5_display_sleep(void);
 t5_err_t t5_display_wake(void);
 bool t5_display_asleep(void);

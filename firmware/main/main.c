@@ -5,11 +5,14 @@
  * expanders (every rail and reset line), then services that only need the
  * bus. Display before touch: the probe that picks the panel also tells touch
  * which controller is fitted. Storage and the IMU must never block boot.
+ * Power comes after storage (its settings) and the display (the backlight
+ * rail); the battery service after power (soft off, charge mode).
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "t5_battery/battery.h"
 #include "t5_bsp/board.h"
 #include "t5_bsp/xpin.h"
 #include "t5_core/event.h"
@@ -19,6 +22,8 @@
 #include "t5_i2c/t5_i2c.h"
 #include "t5_imu/t5_imu.h"
 #include "t5_input/t5_touch.h"
+#include "t5_net/net.h"
+#include "t5_power/power.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_time/t5_time.h"
 
@@ -33,6 +38,9 @@ static const char *TAG = "main";
 static void log_event(t5_event_id_t id, const void *data, size_t len, void *arg)
 {
     (void)len; (void)arg;
+    if (id == T5_EV_BATTERY_UPDATE) {
+        return;   /* once per percent; the console has 'bat' */
+    }
     if (id >= T5_EV_I2C_DEVICE_FAULT && id <= T5_EV_I2C_DEVICE_OK) {
         const t5_ev_i2c_t *e = data;
         T5_LOGW(TAG, "event %s: 0x%02x err %s", t5_event_name(id), e->addr, t5_err_str((t5_err_t)e->err));
@@ -55,6 +63,12 @@ void app_main(void)
     START("expanders", t5_xpin_init());
     START("board defaults", t5_xpin_apply_boot_defaults());
     START("time", t5_time_init());
+    /* A charge-mode timer wake checks USB and goes back to deep sleep here,
+     * before the display or anything slow starts. */
+    t5_power_read_wake_reason();
+    if (t5_power_wake_reason() == T5_WAKE_CHARGE_TIMER) {
+        t5_battery_charge_mode_resume();
+    }
     START("imu", t5_imu_start());          /* background */
     START("storage", t5_storage_init());
     START("display", t5_display_init());
@@ -62,6 +76,9 @@ void app_main(void)
         START("test pattern", t5_display_test_pattern());
     }
     START("touch", t5_touch_init());
+    START("power", t5_power_init());       /* after storage and display: settings, backlight */
+    START("battery", t5_battery_init());
+    START("net", t5_net_init());           /* background: powers the C6 and connects */
 
     ESP_ERROR_CHECK(t5_diag_start());
     ESP_LOGI(TAG, "boot complete");

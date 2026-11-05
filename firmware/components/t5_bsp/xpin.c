@@ -214,7 +214,8 @@ t5_err_t t5_xpin_apply_boot_defaults(void)
 {
     /* Charging stays on: losing CHG_EN on a crash loop would flatten the pack. */
     T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_CHG_EN, true));
-    T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_NCHG_QC_EN, false));
+    /* Fast charge off (nCHG_QC_EN high) until the battery service applies the setting. */
+    T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_NCHG_QC_EN, true));
     T5_RETURN_ON_ERR(t5_xpin_input(T5_XP_CHG_STAT, T5_XPIN_PULL_NONE));
     /* Never driven high here. Output-low is its idle state. */
     T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_PWROFF_PULSE, false));

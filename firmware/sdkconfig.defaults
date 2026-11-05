@@ -45,3 +45,39 @@ CONFIG_FATFS_MAX_LFN=255
 CONFIG_FATFS_VFS_FSTAT_BLKSIZE=4096
 CONFIG_LITTLEFS_MAX_PARTITIONS=1
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Phase 2: no power management (DFS). IDF's DSI DPI driver holds a
+# CPU_FREQ_MAX lock while the panel runs, and Sleep keeps the panel fed for
+# touch (bench 0.8), so DFS never lowers the clock; it only adds lock traffic.
+# Idle cores still wait in WFI. t5_power_hw_cpu_low() is ready if that changes.
+
+# Phase 3: Wi-Fi through the ESP32-C6 (esp_hosted over SDIO, slot 1).
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP32P4_TAB5_C6_BOARD=y
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO=y
+# t5_net powers the C6 (WLAN_PWR_EN on the expander) before starting the
+# link, so no automatic init before app_main.
+CONFIG_ESP_HOSTED_AUTO_CALL_INIT_BEFORE_APP_MAIN=n
+# A dead C6 must not reboot the OS: t5_net power-cycles it instead.
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_RESTART_ON_FAILURE=n
+CONFIG_ESP_HOSTED_HOST_CP_BRINGUP_ON_TIMEOUT_NONE=y
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
+# Fast rejoin after a C6 reset or resume: reuse the last lease, skip the
+# ~2 s ARP probe, and give the freshly powered C6 less settle time.
+CONFIG_LWIP_DHCP_RESTORE_LAST_IP=y
+CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP=y
+CONFIG_ESP_HOSTED_HOST_CP_RESET_SETTLE_MS=800
+# BLE (plan 3.6): NimBLE on the P4, controller on the C6 over hosted HCI.
+CONFIG_ESP_HOSTED_HOST_FEAT_BT=y
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_42_FEATURE_SUPPORT=y
+CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y

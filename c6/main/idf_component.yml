@@ -1,0 +1,3 @@
+dependencies:
+  # Same esp_hosted release as the P4 host (firmware/components/t5_net).
+  espressif/esp_hosted: "~3.1.0"

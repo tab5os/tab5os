@@ -2,11 +2,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
+#include "t5_core/crc.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_storage_hw.h"
 
@@ -209,6 +211,61 @@ t5_err_t t5_storage_write_atomic(const char *path, const void *data, size_t len)
         }
     }
     return T5_OK;
+}
+
+typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t reserved;
+    uint32_t len;
+    uint32_t crc;
+} blob_hdr_t;
+
+#define BLOB_MAGIC 0x42355431u   /* "1T5B" */
+#define BLOB_MAX (64 * 1024)
+
+t5_err_t t5_storage_blob_write(const char *path, uint16_t version, const void *data, size_t len)
+{
+    if (!path || (len && !data) || len > BLOB_MAX) {
+        return T5_ERR_INVALID_ARG;
+    }
+    size_t total = sizeof(blob_hdr_t) + len;
+    uint8_t *buf = malloc(total);
+    if (!buf) {
+        return T5_ERR_NO_MEM;
+    }
+    blob_hdr_t h = { BLOB_MAGIC, version, 0, (uint32_t)len, t5_crc32(0, data, len) };
+    memcpy(buf, &h, sizeof h);
+    if (len) {
+        memcpy(buf + sizeof h, data, len);
+    }
+    t5_err_t err = t5_storage_write_atomic(path, buf, total);
+    free(buf);
+    return err;
+}
+
+t5_err_t t5_storage_blob_read(const char *path, uint16_t version, void *out, size_t cap, size_t *len)
+{
+    if (!path || (cap && !out)) {
+        return T5_ERR_INVALID_ARG;
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return T5_ERR_NOT_FOUND;
+    }
+    blob_hdr_t h;
+    t5_err_t err = T5_ERR_IO;
+    if (fread(&h, 1, sizeof h, f) == sizeof h && h.magic == BLOB_MAGIC && h.version == version &&
+        h.len <= BLOB_MAX) {
+        if (h.len > cap) {
+            err = T5_ERR_NO_MEM;
+        } else if (fread(out, 1, h.len, f) == h.len && t5_crc32(0, out, h.len) == h.crc) {
+            if (len) *len = h.len;
+            err = T5_OK;
+        }
+    }
+    fclose(f);
+    return err;
 }
 
 t5_err_t t5_storage_register_sync(t5_sync_hook_t fn, void *arg)

@@ -23,6 +23,8 @@ usage: t5 [--rev rev1|rev3] [--port PORT] [--docker] <command>
   host-test        build and run host unit tests
   device-test      build, flash and run the on-device tests (replaces the OS; run 'flash' after)
   console CMD...   run bring-up console commands and print the replies
+  c6-build         build the ESP32-C6 radio firmware (c6/build/)
+  c6-stage         write that image to the c6fw partition; then 'net update' on the device
 
 Defaults: rev from \$T5_REV (rev1), port auto-detected (/dev/cu.usbmodem*).
 USAGE
@@ -76,6 +78,16 @@ case "$cmd" in
         "$IDF_PYTHON" "$ROOT/tools/t5/t5devtest.py" --port "$PORT" ;;
     console)
         "$IDF_PYTHON" "$ROOT/tools/t5/t5console.py" ${PORT:+--port "$PORT"} "$@" ;;
+    c6-build)
+        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+        (cd "$ROOT/c6" && { [ -f sdkconfig ] || idf.py -B build set-target esp32c6; } && idf.py -B build build "$@") ;;
+    c6-stage)
+        detect_port
+        img="$ROOT/c6/build/tab5os_c6.bin"
+        [ -f "$img" ] || { echo "no $img; run 't5 c6-build'" >&2; exit 1; }
+        size=$(stat -f %z "$img" 2>/dev/null || stat -c %s "$img")
+        [ "$size" -le $((0x180000)) ] || { echo "C6 image ($size bytes) exceeds the 1.5 MB c6fw partition" >&2; exit 1; }
+        esptool --port "$PORT" write-flash 0x9D0000 "$img" ;;
     host-test)
         cmake -S "$ROOT/test/host" -B "$ROOT/test/host/build" -G Ninja >/dev/null
         cmake --build "$ROOT/test/host/build"

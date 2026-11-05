@@ -1,10 +1,10 @@
 idf_component_register(
-    SRCS "t5_diag.c" "diag_sys.c" "diag_i2c.c" "diag_exp.c" "diag_dev.c" "diag_bench.c" "diag_log.c" "diag_elf.c"
+    SRCS "t5_diag.c" "diag_sys.c" "diag_i2c.c" "diag_exp.c" "diag_dev.c" "diag_bench.c" "diag_log.c" "diag_elf.c" "diag_power.c" "diag_net.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES console
-    PRIV_REQUIRES t5_core t5_pins t5_i2c t5_bsp t5_time t5_imu t5_storage t5_display t5_input
-                  esp_psram esp_timer esp_hw_support app_update spi_flash efuse esp_system esp_driver_gpio
+    PRIV_REQUIRES t5_core t5_pins t5_i2c t5_bsp t5_time t5_imu t5_storage t5_display t5_input t5_power t5_battery t5_net lwip
+                  esp_psram esp_timer esp_hw_support app_update spi_flash efuse esp_system esp_driver_gpio esp_pm
 )
 
 # Bench check 11: build elfbench.elf with the target compiler and embed it.

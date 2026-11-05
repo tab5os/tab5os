@@ -3,7 +3,7 @@
 An operating system for the M5Stack Tab5 (ESP32-P4 + ESP32-C6), built on ESP-IDF.
 See [docs/tab5os-design.md](docs/tab5os-design.md) and [docs/tab5os-implementation-plan.md](docs/tab5os-implementation-plan.md).
 
-**Status:** Phase 1 (board services). The firmware boots, starts every internal chip behind a service, draws a test pattern and opens a bring-up console on USB-C. Bench results: [docs/bench-results.md](docs/bench-results.md).
+**Status:** Phases 2 (power and battery) and 3 (C6 modem). On top of the Phase 1 board services: power states and wake locks, rails, soft off, charge mode, a fuel gauge, and Wi-Fi and BLE through the ESP32-C6. Bench results: [docs/bench-results.md](docs/bench-results.md).
 
 ## Build and flash
 
@@ -16,6 +16,7 @@ t5 monitor                     # console (Ctrl-] to quit)
 t5 host-test                   # host unit tests (service logic against mocks)
 t5 device-test                 # on-device Unity tests (replaces the OS; `t5 flash` after)
 t5 console "sys" "i2c scan"    # run console commands from a script
+t5 c6-build / t5 c6-stage      # C6 radio firmware, staged in the c6fw partition
 ```
 
 Without a native ESP-IDF install, `t5 --docker build` builds in `espressif/idf`. Flashing always runs on the host.
@@ -45,6 +46,12 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `sleep light <ms> [MB] [g<pin>...]` / `sleep result` | Light-sleep test |
 | `elf bench [rounds]` | ELF-in-PSRAM benchmark |
 | `dmesg` | Log since boot |
+| `power` / `power locks\|hooks\|sleep\|wake\|screenoff` | Power state, wake locks, suspend hooks |
+| `power lock <type> [ms]` / `unlock` / `profile` / `timers` / `alarm <s>` / `off --force` | Locks, idle timers, scheduled wake, soft off |
+| `rail` / `rail on\|off <rail>` | Switched rails and who holds them |
+| `bat` / `bat log start\|stop` / `bat limit\|fast on\|off` | Fuel gauge, charging, trace log |
+| `net` / `net scan\|connect <ssid> [pass]\|forget\|reset\|update\|ant\|echo` | Wi-Fi via the C6 |
+| `ble on\|scan\|connect <addr>\|gatt\|read\|sub` | BLE central via the C6 |
 
 Bench scripts in `test/hil/` use `tools/t5/t5link.py` to drive the console; run them with the IDF Python env. Steps that need a person are in [docs/bench-procedures.md](docs/bench-procedures.md).
 

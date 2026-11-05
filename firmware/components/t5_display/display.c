@@ -14,9 +14,12 @@ static const char *TAG = "t5.display";
 #define TOUCH_BOOT_MS 500   /* Espressif's BSP waits this long after TP_RST before probing */
 
 static t5_panel_t s_panel = T5_PANEL_UNKNOWN;
-static bool s_ready, s_asleep;
+static bool s_ready, s_asleep, s_blank;
 static int s_brightness = 80;
+static int s_dim = -1;
 static uint16_t *s_fb;
+
+static t5_err_t apply_backlight(void);
 
 const char *t5_display_panel_name(t5_panel_t p)
 {
@@ -88,7 +91,7 @@ t5_err_t t5_display_init(void)
     T5_RETURN_ON_ERR(t5_display_hw_init(s_panel, &s_fb));
     s_ready = true;
     s_asleep = false;
-    T5_RETURN_ON_ERR(t5_display_hw_backlight(s_brightness));
+    T5_RETURN_ON_ERR(apply_backlight());
     t5_event_post(T5_EV_DISPLAY_READY, NULL, 0);
     return T5_OK;
 }
@@ -98,15 +101,44 @@ bool t5_display_ready(void)
     return s_ready;
 }
 
+int t5_display_effective_brightness(void)
+{
+    if (!s_ready || s_asleep || s_blank) {
+        return 0;
+    }
+    return (s_dim >= 0 && s_dim < s_brightness) ? s_dim : s_brightness;
+}
+
+static t5_err_t apply_backlight(void)
+{
+    return s_ready ? t5_display_hw_backlight(t5_display_effective_brightness()) : T5_OK;
+}
+
 t5_err_t t5_display_set_brightness(int percent)
 {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
     s_brightness = percent;
-    if (!s_ready || s_asleep) {
-        return T5_OK;   /* applied on init / wake */
-    }
-    return t5_display_hw_backlight(percent);
+    return apply_backlight();   /* a no-op until init; 0 while asleep or blanked */
+}
+
+t5_err_t t5_display_blank(bool blank)
+{
+    if (!s_ready) return T5_ERR_STATE;
+    s_blank = blank;
+    return apply_backlight();
+}
+
+bool t5_display_blanked(void)
+{
+    return s_blank;
+}
+
+t5_err_t t5_display_dim(int percent)
+{
+    if (percent > 100) percent = 100;
+    s_dim = percent < 0 ? -1 : percent;
+    return apply_backlight();
 }
 
 t5_err_t t5_display_set_backlight_freq(uint32_t hz)
@@ -114,7 +146,7 @@ t5_err_t t5_display_set_backlight_freq(uint32_t hz)
     if (!s_ready) return T5_ERR_STATE;
     if (hz < 100 || hz > 40000) return T5_ERR_INVALID_ARG;
     T5_RETURN_ON_ERR(t5_display_hw_backlight_freq(hz));
-    return t5_display_hw_backlight(s_asleep ? 0 : s_brightness);
+    return apply_backlight();
 }
 
 int t5_display_brightness(void)
@@ -138,7 +170,7 @@ t5_err_t t5_display_wake(void)
     if (!s_asleep) return T5_OK;
     T5_RETURN_ON_ERR(t5_display_hw_sleep(false));
     s_asleep = false;
-    return t5_display_hw_backlight(s_brightness);
+    return apply_backlight();
 }
 
 bool t5_display_asleep(void)
@@ -219,6 +251,8 @@ void t5_display_reset_for_test(void)
     s_panel = T5_PANEL_UNKNOWN;
     s_ready = false;
     s_asleep = false;
+    s_blank = false;
+    s_dim = -1;
     s_fb = NULL;
     s_brightness = 80;
 }

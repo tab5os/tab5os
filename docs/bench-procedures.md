@@ -66,3 +66,24 @@ Meter each `ext` and `stamp` pin against the table in the design doc. Toggle the
 
 1. Run `test/hil/i2c_stress.py --seconds 3600`. It runs for 1 hour unattended.
 2. For the physical part, run it with `--manual-short` and short the system SDA line (G31, brought out as `SYS_SDA` on the M5-Bus connector) to GND with a probe for about 100 ms, a few times. Pass means `I2C STRESS PASS`: no bad data, recoveries counted, and every device answering afterwards.
+
+## Phase 2 on battery
+
+Unplug USB. Keep a hand near the power button: one press brings the board back.
+
+1. **Soft off (also 0.5).** `power off --force`. Expected: the screen goes dark within a second and the board stays off. Press the button: `power` should then show `wake reason button, last off user`.
+2. **RTC alarm wake.** `power alarm 120`, then `power off --force`. Expected: the board comes back on by itself about 2 minutes later, with `wake reason rtc-alarm`.
+3. **USB detection.** `bat` should show `usb no` and a current well above 50 mA. Note the `CHG_STAT` level.
+4. **Discharge trace.** `bat log start` (writes `/sd/battery-<epoch>.csv`), then leave it running to empty. The device turns itself off at 5% or 6.5 V. Copy the file off the card.
+5. **Draw per state (0.9).** Meter in series with the pack, then `test/hil/power_cycle.py --cycles 1 --meter-pause`.
+
+## Charge mode (bench checks 7 and 8)
+
+With USB attached, `power off --force` enters charge mode: a battery screen for 5 s, then the P4 deep-sleeps and checks every 60 s. Check that the pack keeps charging (`CHG_EN` holds in deep sleep, bench check 8), that unplugging USB turns the board off within a minute, and that the button boots normally.
+
+## C6 firmware update (plan 3.5)
+
+This replaces the factory C6 firmware (esp_hosted 1.4.1) with ours (3.1.0). It's done over the link, but rollback depends on the C6's factory bootloader, which hasn't been checked. If the C6 doesn't come back, recovering it needs its UART.
+
+1. `t5 c6-build`, then `t5 c6-stage` (writes the `c6fw` partition).
+2. `t5 console "net"` should show the staged version, then run `net update`. Watch the log for `C6 updated to t5-c6-...`.

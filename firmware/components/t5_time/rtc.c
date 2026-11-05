@@ -15,6 +15,7 @@ enum {
     REG_FLAG = 0x1D,        /* write-0-to-clear */
     REG_CTRL0 = 0x1E,       /* AIE bit3, TIE bit4, UIE bit5, STOP bit6 */
     REG_CTRL1 = 0x1F,       /* INIEN bit4, CHGEN bit5 */
+    REG_RAM = 0x20,         /* 0x20..0x23 user RAM */
 };
 
 #define EXT_WADA  0x08
@@ -224,6 +225,22 @@ t5_err_t t5_rtc_timer_set(uint32_t seconds, uint32_t *actual)
         *actual = err == T5_OK ? got : 0;
     }
     return err;
+}
+
+t5_err_t t5_rtc_ram_read(uint8_t out[T5_RTC_RAM_LEN])
+{
+    if (!s_dev || !out) {
+        return T5_ERR_STATE;
+    }
+    return t5_i2c_read(s_dev, REG_RAM, out, T5_RTC_RAM_LEN);
+}
+
+t5_err_t t5_rtc_ram_write(const uint8_t in[T5_RTC_RAM_LEN])
+{
+    if (!s_dev || !in) {
+        return T5_ERR_STATE;
+    }
+    return t5_i2c_write(s_dev, REG_RAM, in, T5_RTC_RAM_LEN);
 }
 
 void t5_rtc_reset_for_test(void)

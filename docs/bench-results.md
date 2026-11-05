@@ -210,12 +210,59 @@ Needs a meter on `ext`, `stamp` and the M5-Bus BAT pin.
 - **eFuse boot loop (IDF v6.1, v1.3 silicon).** After one of many quick USB resets during flash writes, every boot asserted in IDF's PVT init (`get_lp_hp_gap pmu_pvt.c:47`). The real eFuse value (`LP_DCDC_DBIAS_VOL_GAP` = 4, from `espefuse summary`) passes the check, so the app was reading stale eFuse shadow registers. The panic reboot is a CPU-only reset, which doesn't reload eFuses, so the board looped until a reset through the ROM bootloader (`esptool chip-id`) fixed it. A real power loss reloads eFuses, so users wouldn't hit it this way, but the crash guard can't catch it (it fires before `app_main`). Phase 9: add a bootloader check that forces a full system reset if those registers look invalid.
 - **Real power-cut test stopped after 1 cycle.** `test/hil/fs_powerloss.py --mode powercut` cuts power through the RTC interrupt. The first cut and restore worked (data intact); after the second cut the board stayed off and needs the power button. The PMS150G's behaviour on repeated pulses isn't understood yet (see 0.6/0.7).
 
+## Phase 2 results — 2026-11-05
+
+Unit A on USB (pack full, 8.38 V). Battery-only measurements are still to do (see "Still to answer").
+
+| Item | Result |
+| --- | --- |
+| State machine | Active → Dim → Screen off → Sleep and back, on the board, with the handheld timers and with 5/10/5 s test timers. Touch wakes from Sleep because the panel keeps its video (Screen off and Sleep only turn the backlight off) |
+| Sleep and wake cycles (2.13) | `test/hil/power_cycle.py`, 5 minutes: **179 cycles, 179 resumes, 0 failures**; the panel answered its DCS ID and power mode 0x9C after every wake. The C6 was powered off and on in each cycle. The plan's 1,000 cycles weren't run (test runs are kept to 5 minutes); about 30 minutes reaches it |
+| Wake to first frame | 0–1 ms from the wake trigger to backlight on. The panel never stops receiving video, so the first frame is the one already on screen. The 300 ms target holds trivially |
+| Suspend sequence | 89 ms into Sleep with the C6 powered off; 0–1 ms resume (the C6 restarts in the background) |
+| **CPU clock in Sleep** | **Stays at 360 MHz.** With `CONFIG_PM_ENABLE`, `esp_pm_dump_locks` shows IDF's DSI DPI driver holding a `CPU_FREQ_MAX` lock for as long as the panel runs, and Sleep must keep the panel running for touch. DFS could never lower the clock, so power management is off again; idle cores still wait in WFI. Sleep saves power by suspending services, dropping rails and powering the C6 off |
+| INA226 | IDs 0x5449/0x2260, configured for 16× averaging and 1.1 ms conversions. On USB with the full pack: 8386–8388 mV, −0.5 to 0 mA. The bus-voltage anomaly from 0.4 shows up constantly (10 of the first 12 samples read ~4.4 V); the gauge drops those samples as implausible |
+| **Charge temperature proxy** | The BMI270 reads **42–43 °C** idle on USB at room temperature, and the P4 die 39 °C. The design's 40 °C pause would stop charging almost all the time (it did, on the first boot). The pause is now 50 °C on the IMU, resume at 47 °C |
+| Rails | `rail on usb5v` / `rail off` switch EXP1 P3 and read back; refcounting and owners shown by `rail` |
+| Wake reason | Reads the RTC flags and the shutdown record in RX8130 RAM (0x20–0x23). RTS resets classify as `reboot`, the panic below as `crash` |
+| Autosave | `/data/sys/power.bin`, `battery.bin`, `charge.bin` and `session.bin`, each with a CRC header, written atomically every 30 s and on each state change |
+
+### Problems found
+
+- **NimBLE stopped mid-start.** Sleep powered the C6 off while NimBLE was still in its start-up sync, and the host task then used freed timers (panic in `ble_hs_timer_sched`, from the core dump). `t5_ble` now waits up to 3 s for the sync before stopping.
+- **Console commands don't count as input.** A bench session drifts into Sleep after the normal timers. Scripts hold `power lock screen`.
+
+## Phase 3 results — 2026-11-05
+
+| Item | Result |
+| --- | --- |
+| C6 firmware | The factory C6 runs **esp_hosted 1.4.1** (capabilities: Wi-Fi and BLE over SDIO). It works with the esp_hosted 3.1.0 host as is, so no C6 update was needed to start |
+| SDIO link | 4-bit, 40 MHz on CLK 12, CMD 13, D0–D3 11/10/9/8, reset G15 (esp_hosted's own Tab5 board option agrees with M5Unified). Shares the SDMMC controller with the SD card (slot 0): both drivers tear down only their own slot, and `/sd` keeps working |
+| C6 power-up to link up | **1.5 s** (2.2 s before the reset settle time was cut from 1500 to 800 ms) |
+| Scan | 16 access points |
+| Connect | First join 4.4–7.5 s to an address (WPA2/3, −40 dBm) |
+| SNTP | Time set from `pool.ntp.org` about 2 s after the address; written to the RTC |
+| **C6 reset to connected** | 4.8, 4.8, 4.9, 6.3, 4.8 s, and in `test/hil/net_check.py` 7.8, 4.8, 4.8 s: **usually under the 5 s target, but not always** (2 of 8 over). The 5 s target needed: rejoining the last network directly by channel and BSSID (no scan), restoring the last DHCP lease, no ARP probe on the offered address, and ignoring the C6's stale disconnect at boot. Was 10–12 s |
+| **Sleep with a TCP connection open** | `net echo 7777` (holds a net lock), device forced into Sleep, packets from a Mac on the LAN: every reply tagged `[sleep]`, **8 ms** for the first, under 1 ms after. Target 1 s |
+| Sleep without a net lock | The C6 is powered off (`WLAN_PWR_EN` low, 89 ms suspend) and comes back on wake |
+| BLE | NimBLE on the P4, controller on the C6 over hosted HCI. The 1.4.1 C6 firmware doesn't answer the controller init RPC (it enables its controller at boot), so `t5_ble` skips that step for C6 firmware before 2.x. Scan: 32 devices. Connect and GATT discovery to a nearby phone: 16 characteristics |
+| C6 firmware build (3.1) | `c6/` builds esp_hosted 3.1.0 for the C6 with the Tab5 board option, BLE, host wake on IO2 and rollback: **1.46 MB**, 95% of the 1.5 MB `c6fw` partition. Not yet installed on Unit A (see below) |
+| Device tests | `t5 device-test`: 18 tests, 0 failures (13 Phase 1, plus INA226, rails, RTC RAM, wake reason, C6 link and scan) |
+| Image size | `tab5os.bin` 1.22 MB (rev1) and 1.23 MB (rev3), with Wi-Fi, lwIP and NimBLE, against a 3.6 MB budget |
+
 ## Still to answer
 
 | Item | Needs | Status |
 | --- | --- | --- |
-| 0.5 confirm `PWROFF_PLUSE` cuts power | Battery only, a person | Deferred to Phase 2 (soft off) |
-| 0.9 power per state | External meter | Deferred to Phase 2 |
+| 0.5 confirm `PWROFF_PLUSE` cuts power | Battery only, a person | Soft off is implemented (`power off --force`, M5Unified's 10 × 50 ms toggle). Not yet run on battery |
+| 0.9 power per state | External meter | `test/hil/power_cycle.py --meter-pause`; not measured |
+| Charge mode, bench checks 7 and 8 | USB attached, a person | Implemented (deep sleep with a 60 s timer check); not yet run |
+| `CHG_STAT` polarity | Battery only | Reads 1 on USB with a full pack. `bat` counts its level against current direction; the gauge doesn't use it yet |
+| USB-power detection on battery | Battery only | Assumed from battery current (under 50 mA means USB). Confirm the running draw on battery is well above that |
+| Gauge accuracy (exit: under 5%) | A full discharge trace | Host-tested on synthetic traces only. Start `bat log start` on battery |
+| Soft-off wake by button and RTC alarm | Battery only, a person | Implemented; the alarm path arms an RTC interrupt, so it needs a person ready to press the button |
+| C6 reset to connected under 5 s every time | Board time | The slow cases spend their time in association and DHCP; look at the AP side, or a static lease |
+| C6 update round trip with forced rollback | Permission to update the C6 | The factory C6 bootloader's rollback support is unknown. `t5 c6-stage` then `net update` when agreed |
 | 0.11 connector pins | Meter | Deferred to Phase 5 (ports broker) |
 | Rail switch effects (USB-A 5V, ext 5V, speaker, Wi-Fi power) | A load on each rail | Deferred to Phase 2 (rails) |
 | 1.10 full 1 h stress | Board time | 48 min before the fix (data and bus clean) + 10 min after it with 0 errors of any kind. A full uninterrupted hour is optional |

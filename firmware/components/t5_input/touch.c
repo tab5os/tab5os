@@ -35,6 +35,8 @@ static t5_mutex_t s_lock;
 static bool s_mirror_x, s_mirror_y;
 static t5_touch_cb_t s_cb;
 static void *s_cb_arg;
+static t5_touch_cb_t s_activity;
+static void *s_activity_arg;
 
 int t5_touch_parse_st712x(const uint8_t *r, int n, t5_touch_point_t *out, int max)
 {
@@ -131,6 +133,9 @@ static void publish(const t5_touch_state_t *st)
     s_state = *st;
     s_info.samples++;
     t5_mutex_unlock(s_lock);
+    if (s_activity) {
+        s_activity(st, s_activity_arg);
+    }
     if (s_cb) {
         s_cb(st, s_cb_arg);
     }
@@ -240,6 +245,12 @@ void t5_touch_set_callback(t5_touch_cb_t cb, void *arg)
 {
     s_cb_arg = arg;
     s_cb = cb;
+}
+
+void t5_touch_set_activity_hook(t5_touch_cb_t cb, void *arg)
+{
+    s_activity_arg = arg;
+    s_activity = cb;
 }
 
 /* Host tests: set up the parser state without a task. */

@@ -41,6 +41,12 @@ t5_err_t t5_rtc_alarm_clear(void);
  * rounded up to whole minutes). 0 stops it. Returns the actual seconds in *actual. */
 t5_err_t t5_rtc_timer_set(uint32_t seconds, uint32_t *actual);
 
+/* Four bytes of user RAM (0x20-0x23). The RTC sits on the standby rail, so
+ * this survives soft off: the power service keeps its shutdown record here. */
+#define T5_RTC_RAM_LEN 4
+t5_err_t t5_rtc_ram_read(uint8_t out[T5_RTC_RAM_LEN]);
+t5_err_t t5_rtc_ram_write(const uint8_t in[T5_RTC_RAM_LEN]);
+
 /* ---- Pure helpers (host-tested) ---------------------------------------- */
 uint8_t t5_rtc_bin2bcd(uint8_t v);
 uint8_t t5_rtc_bcd2bin(uint8_t v);

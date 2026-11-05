@@ -11,6 +11,8 @@ void diag_register_dev(void);
 void diag_register_bench(void);
 void diag_register_log(void);
 void diag_register_elf(void);
+void diag_register_power(void);
+void diag_register_net(void);
 void diag_print_boot_banner(void);
 
 /* Parse "0x43", "67" etc. Returns false if not a number in [min, max]. */

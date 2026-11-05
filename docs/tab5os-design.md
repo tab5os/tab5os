@@ -180,8 +180,8 @@ Apps do not choose a state. They hold wake locks, and the Power service picks th
 | --- | --- | --- | --- | --- |
 | Active | Input or a foreground wake lock | Whatever is claimed | n/a | Running |
 | Dim | 30 s idle by default | As Active, with lower backlight and clock | Touch, button | Running |
-| Screen off | 2 min idle, or a button press | Panel off; audio, radio and CPU only if locked | Button, touch, timer | Foreground paused, services run |
-| Sleep | Screen off with no locks left | Backlight off; the video stream to the panel stays alive (touch needs it); CPU idles at low clock; C6 in power save; codecs, camera and switched rails off | Touch, timer, C6 signal, claimed M5-Bus pins | Frozen, resumes in place |
+| Screen off | 2 min idle, or the power menu | Backlight off; panel and video stay on so touch works; audio, radio and CPU only if locked | Touch, timer | Foreground paused, services run |
+| Sleep | Screen off with no CPU or audio lock, 10 s on | Backlight off; the video stream to the panel stays alive (touch needs it); CPU idles in WFI at full clock (IDF's DSI driver pins it, measured); C6 off, or in modem power save if a net lock is held; codecs, camera and switched rails off | Touch, timer, C6 traffic, claimed M5-Bus pins | Suspended by hooks, resumes in place |
 | Soft off | Shutdown, critical battery or 24 h asleep | Standby rail: PMS150G, RTC, IMU | Button, RTC alarm, IMU | Saved, then restored after boot |
 | Charge mode | Shutdown with USB attached | Charger enabled, P4 in deep sleep | Button, unplug check | None |
 
@@ -205,7 +205,7 @@ Resume runs this in reverse. Aim for a first frame within 300 ms, measured from 
 
 ### Soft-off sequence
 
-Save the session and battery estimate, program the RTC alarm and IMU wake, then pulse `PWROFF_PLUSE` (expander 0x44, P4, per the schematic). On the next boot, read the wake reason and restore the last app unless the wake came from a background alarm.
+Save the session and battery estimate, program the RTC alarm and IMU wake, record the reason in the RX8130's four bytes of RAM, then toggle `PWROFF_PLUSE` (expander 0x44, P4, per the schematic) ten times at 50 ms, as M5Unified does. If power is still on 1.5 s later (USB holding the rails up), soft off undoes itself and reports failure. On the next boot, read the wake reason and restore the last app unless the wake came from a background alarm.
 
 The wake reason comes from the RTC flags, which `t5_rtc_init()` records before clearing them. A power-up caused by the PMS150G reports reset reason `ESP_RST_WDT` on the P4, not power-on. The RX8130 countdown timer reloads itself, so boot must stop it early, or its next pulse switches the board off again.
 
@@ -274,7 +274,7 @@ Soft off still draws from the pack, so a device stored for months could reach pr
 | Charge status | `CHG_STAT`, E2.P6 | Cross-checked against INA226 current direction |
 | Charge limit | Software | Optional 80% stop with a 5% restart gap, for permanently mounted screens |
 
-The board has no battery temperature sensor. Pause charging if the BMI270 or P4 temperature sensor reads above 40°C, the top of the rated range. These are proxies, so the rule is deliberately conservative.
+The board has no battery temperature sensor. The design asked for a 40 °C pause on the BMI270 or P4 sensor, but on Unit A the BMI270 idles at 42–43 °C on USB at room temperature, so that rule would never charge. Charging pauses at 50 °C on the BMI270 and resumes at 47 °C, roughly 40 °C ambient. A better proxy (rise above a cold-boot baseline) is still open.
 
 ### Pack swaps and power loss
 

@@ -48,6 +48,9 @@ void t5_touch_info(t5_touch_info_t *out);
 /* Called from the touch task for every sample, including the release (count 0). */
 typedef void (*t5_touch_cb_t)(const t5_touch_state_t *s, void *arg);
 void t5_touch_set_callback(t5_touch_cb_t cb, void *arg);
+/* A second, independent hook for the power service's idle timers: called
+ * from the touch task on every sample, before the callback above. */
+void t5_touch_set_activity_hook(t5_touch_cb_t cb, void *arg);
 
 /* One read from the controller (task internal; exposed for host tests). */
 t5_err_t t5_touch_sample(t5_touch_state_t *out);

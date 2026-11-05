@@ -63,6 +63,30 @@ jobs:
             firmware/build-${{ matrix.rev }}/ota_data_initial.bin
             firmware/build-${{ matrix.rev }}/flasher_args.json
 
+  c6:
+    needs: idf-version
+    runs-on: ubuntu-latest
+    container: espressif/idf:${{ needs.idf-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the C6 radio firmware
+        shell: bash
+        working-directory: c6
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -B build set-target esp32c6
+          idf.py -B build build
+      - name: Fits the c6fw partition
+        shell: bash
+        run: |
+          size=$(stat -c %s c6/build/tab5os_c6.bin)
+          echo "tab5os_c6.bin: $size bytes, partition $((0x180000))"
+          [ "$size" -le $((0x180000)) ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tab5os-c6
+          path: c6/build/tab5os_c6.bin
+
   host-tests:
     runs-on: ubuntu-latest
     steps:

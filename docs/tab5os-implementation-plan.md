@@ -207,6 +207,8 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 
 **Trace collection:** start logging INA226 data on every dev unit from the first day of Phase 2. Discharge curves from full to 6.5 V at a few loads are what tune the gauge. One full curve takes about 6 hours.
 
+**Status (2026-11-05):** all items implemented (`t5_power`, `t5_battery`). On Unit A: the state machine, rails, wake reason, autosave and 179 sleep/wake cycles with no failed resume. Not yet run: anything on battery alone (soft off, `PWROFF_PLUSE`, charge mode, gauge against a real discharge, draw per state). Sleep keeps the CPU at full clock (see bench-results).
+
 **Exit criteria:** 1,000 sleep and wake cycles with no failed resume. Soft off wakes from the button and from an RTC alarm, and restores the last app (a stub for now). Gauge error under 5% against a measured full discharge. Every power state's draw is recorded in `bench-results.md`.
 
 ## Phase 3: C6 modem
@@ -222,6 +224,8 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 | 3.5 | C6 updates | C6 image kept in its partition, version compared at boot, update over the existing link with rollback if the C6 doesn't come back | M |
 | 3.6 | BLE | `t5_ble_*` basics: scan, connect, GATT client. HID keyboards over BLE can come later | M |
 | 3.7 | Antenna | `t5_radio_antenna` switching internal or MMCX through E1.P0 | S |
+
+**Status (2026-11-05):** all items implemented (`t5_net`, `t5_ble`, `c6/`). On Unit A, with the factory C6 firmware (esp_hosted 1.4.1): packets answered in Sleep within 450 ms, C6 reset to connected in about 4.8 s (two runs over 5 s), BLE scan, connect and GATT discovery. Not yet run: the C6 update round trip, which installs our C6 build for the first time.
 
 **Exit criteria:** the P4 sleeps with a TCP connection open, and wakes on an incoming packet within 1 s. Reconnect after a C6 reset takes under 5 s. A C6 update round trip works, including a forced failure that rolls back.
 

@@ -56,6 +56,13 @@ t5_err_t t5_storage_sd_rescan(void);
  * the old file is removed first, so a power cut can lose it. */
 t5_err_t t5_storage_write_atomic(const char *path, const void *data, size_t len);
 
+/* A small binary record with a header (magic, version, length, CRC-32),
+ * written with t5_storage_write_atomic(). read returns T5_ERR_NOT_FOUND if
+ * the file is missing and T5_ERR_IO if the header, length or CRC is wrong,
+ * so a torn or foreign file is never mistaken for data. */
+t5_err_t t5_storage_blob_write(const char *path, uint16_t version, const void *data, size_t len);
+t5_err_t t5_storage_blob_read(const char *path, uint16_t version, void *buf, size_t cap, size_t *len);
+
 /* Things that buffer writes (settings, logs) register a flush. Power calls
  * t5_storage_sync() before sleep and soft off. */
 typedef t5_err_t (*t5_sync_hook_t)(void *arg);

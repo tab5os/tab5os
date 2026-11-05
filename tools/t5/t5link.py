@@ -52,29 +52,38 @@ class Tab5:
     def __exit__(self, *exc):
         self.close()
 
-    def _read_until_prompt(self, timeout):
+    def _read_until_prompt(self, timeout, skip=0):
+        """Read until the prompt shows up past the first `skip` bytes (the
+        echo). Log lines from other tasks may follow the prompt, so it only
+        has to appear, not end the buffer; whatever follows is dropped."""
         buf = b""
         end = time.time() + timeout
         while time.time() < end:
             chunk = self.ser.read(4096)
             if chunk:
                 buf += chunk
-                if buf.rstrip().endswith(PROMPT.rstrip()):
-                    return buf, True
+                i = buf.find(PROMPT, skip)
+                if i >= 0:
+                    return buf[: i + len(PROMPT)], True
         return buf, False
 
     def cmd(self, line, timeout=None):
         """Run one command; return its output without the echo and prompt."""
         self.ser.reset_input_buffer()
         self.ser.write(line.encode() + b"\r\n")
-        out, ok = self._read_until_prompt(timeout or self.timeout)
+        out, ok = self._read_until_prompt(timeout or self.timeout, skip=len(line))
         text = out.decode(errors="replace").replace("\r", "")
         body = text.rsplit(PROMPT.decode(), 1)[0]
         lines = body.split("\n")
         if lines and line in lines[0]:
             lines = lines[1:]
         if not ok:
-            raise TimeoutError(f"no prompt after '{line}': {text[-300:]}")
+            # Name the command by its first two words only, and drop the echo:
+            # arguments can be secrets (net connect <ssid> <password>).
+            words = line.split()
+            name = " ".join(words[:2])
+            tail = (text.replace(line, name + " ...") if len(words) > 2 else text)[-300:]
+            raise TimeoutError(f"no prompt after '{name} ...': {tail}")
         return "\n".join(lines).strip()
 
     def reset(self, settle=3.0):
