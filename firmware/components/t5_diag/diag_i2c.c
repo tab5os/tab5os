@@ -65,9 +65,9 @@ static int i2c_stats(void)
 {
     t5_i2c_bus_stats_t b;
     t5_i2c_bus_stats(&b);
-    printf("bus: %u xfers, %u errors, %u recoveries (%u failed), %u lock timeouts\n",
+    printf("bus: %u xfers, %u errors, %u recoveries (%u failed), %u lock timeouts, %u hand-offs\n",
            (unsigned)b.xfers, (unsigned)b.errors, (unsigned)b.recoveries,
-           (unsigned)b.recovery_failures, (unsigned)b.lock_timeouts);
+           (unsigned)b.recovery_failures, (unsigned)b.lock_timeouts, (unsigned)t5_i2c_handoffs());
     t5_i2c_dev_stats_t d[T5_I2C_MAX_DEVICES];
     int n = t5_i2c_dev_stats(d, T5_I2C_MAX_DEVICES);
     printf("addr  name          xfers    errors  nack   timeout  state\n");
@@ -166,10 +166,12 @@ static int i2c_stress(uint32_t secs)
         tot_bad += s_stress[i].bad;
     }
     t5_i2c_bus_stats(&b1);
+    uint32_t lt = b1.lock_timeouts - b0.lock_timeouts;
+    bool pass = tot_bad == 0 && lt == 0;
     printf("STRESS %s: errors %u, bad data %u, recoveries %u, lock timeouts %u\n",
-           tot_bad == 0 ? "PASS" : "FAIL", (unsigned)tot_err, (unsigned)tot_bad,
-           (unsigned)(b1.recoveries - b0.recoveries), (unsigned)(b1.lock_timeouts - b0.lock_timeouts));
-    return tot_bad != 0;
+           pass ? "PASS" : "FAIL", (unsigned)tot_err, (unsigned)tot_bad,
+           (unsigned)(b1.recoveries - b0.recoveries), (unsigned)lt);
+    return !pass;
 }
 
 static int cmd_i2c(int argc, char **argv)

@@ -73,6 +73,54 @@ TEST_CASE("bus recovery leaves devices working", "[i2c]")
     t5_i2c_close(d);
 }
 
+typedef struct {
+    uint8_t addr;
+    volatile uint32_t ok, err;
+    volatile bool run, done;
+} hammer_t;
+
+static void hammer(void *arg)
+{
+    hammer_t *h = arg;
+    t5_i2c_dev_t *d;
+    t5_i2c_open(h->addr, 400000, "hammer", &d);
+    uint8_t v;
+    while (h->run) {
+        if (t5_i2c_read_u8(d, 0x01, &v) == T5_OK) h->ok++; else h->err++;
+    }
+    t5_i2c_close(d);
+    h->done = true;
+    vTaskDelete(NULL);
+}
+
+TEST_CASE("bus lock is fair under full contention", "[i2c]")
+{
+    /* Three tasks on both cores keep the bus 100% busy. Before the fair
+     * hand-off, one task could wait over a second for the lock. */
+    t5_i2c_bus_stats_t b0, b1;
+    t5_i2c_bus_stats(&b0);
+    static hammer_t h[3] = { { .addr = T5_I2C_ADDR_EXP0 }, { .addr = T5_I2C_ADDR_EXP1 }, { .addr = T5_I2C_ADDR_INA226 } };
+    for (int i = 0; i < 3; i++) {
+        h[i].ok = h[i].err = 0;
+        h[i].run = true;
+        h[i].done = false;
+        xTaskCreatePinnedToCore(hammer, "hammer", 3072, &h[i], 3, NULL, i % 2);
+    }
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    for (int i = 0; i < 3; i++) h[i].run = false;
+    for (int i = 0; i < 3; i++) while (!h[i].done) vTaskDelay(pdMS_TO_TICKS(5));
+    t5_i2c_bus_stats(&b1);
+    uint32_t total = h[0].ok + h[1].ok + h[2].ok;
+    printf("hammer: %u / %u / %u ok, lock timeouts %u, hand-offs %u\n", (unsigned)h[0].ok,
+           (unsigned)h[1].ok, (unsigned)h[2].ok, (unsigned)(b1.lock_timeouts - b0.lock_timeouts),
+           (unsigned)t5_i2c_handoffs());
+    TEST_ASSERT_EQUAL(0, b1.lock_timeouts - b0.lock_timeouts);
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT_EQUAL(0, h[i].err);
+        TEST_ASSERT_GREATER_THAN_UINT32(total / 6, h[i].ok);   /* each gets at least half its fair share */
+    }
+}
+
 /* ---- expanders ---------------------------------------------------------- */
 TEST_CASE("expander output reads back from the chip", "[xpin]")
 {

@@ -60,6 +60,8 @@ t5_err_t t5_i2c_probe(uint8_t addr);
 /* Hold the bus across several transfers (e.g. a multi-step init). Recursive. */
 t5_err_t t5_i2c_lock(uint32_t timeout_ms);
 void t5_i2c_unlock(void);
+/* Times a releasing task stepped aside for a waiter (fairness counter). */
+uint32_t t5_i2c_handoffs(void);
 
 /* Force a bus recovery now (console, stress test). */
 t5_err_t t5_i2c_recover(void);

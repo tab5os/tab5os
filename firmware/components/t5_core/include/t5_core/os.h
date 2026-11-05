@@ -48,6 +48,9 @@ t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t s
 typedef void (*t5_task_hook_t)(t5_task_t task, void *app_ctx);
 void t5_core_set_task_hook(t5_task_hook_t hook);
 
+/* The calling task (an opaque id, never NULL). */
+t5_task_t t5_task_self(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -127,6 +127,23 @@ static void test_trace_ring_keeps_newest(void)
     TEST_ASSERT_EQUAL_HEX8((T5_I2C_TRACE_LEN + 9) & 0xFF, t[n - 1].first);
 }
 
+static void test_lock_nests_and_no_handoff_when_idle(void)
+{
+    mock_i2c_add(0x50, false);
+    t5_i2c_dev_t *d;
+    t5_i2c_open(0x50, 0, "x", &d);
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock(10));
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock(10));            /* recursive */
+    uint8_t v;
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read_u8(d, 0, &v));   /* nested lock inside */
+    t5_i2c_unlock();
+    t5_i2c_unlock();
+    int64_t before = t5_time_us();
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read_u8(d, 0, &v));
+    TEST_ASSERT_EQUAL(0, t5_i2c_handoffs());              /* nobody waiting: no step-aside */
+    TEST_ASSERT_EQUAL_INT64(before, t5_time_us());        /* and no delay */
+}
+
 static void test_probe(void)
 {
     mock_i2c_add(0x50, false);
@@ -146,6 +163,7 @@ int main(void)
     RUN_TEST(test_recover_callbacks);
     RUN_TEST(test_fault_isolation_and_recovery);
     RUN_TEST(test_trace_ring_keeps_newest);
+    RUN_TEST(test_lock_nests_and_no_handoff_when_idle);
     RUN_TEST(test_probe);
     return UNITY_END();
 }

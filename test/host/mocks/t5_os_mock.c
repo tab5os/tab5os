@@ -42,3 +42,6 @@ t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t s
 int mock_tasks_count(void) { return s_ntasks; }
 const mock_task_t *mock_task(int i) { return i < s_ntasks ? &s_tasks[i] : NULL; }
 void mock_tasks_reset(void) { s_ntasks = 0; s_hook = NULL; s_ctx = NULL; }
+
+static int s_self_dummy;
+t5_task_t t5_task_self(void) { return (t5_task_t)&s_self_dummy; }

@@ -105,3 +105,8 @@ t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t s
     }
     return T5_OK;
 }
+
+t5_task_t t5_task_self(void)
+{
+    return (t5_task_t)xTaskGetCurrentTaskHandle();
+}

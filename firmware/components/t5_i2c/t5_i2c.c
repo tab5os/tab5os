@@ -30,6 +30,15 @@ struct t5_i2c_dev {
 
 static struct t5_i2c_dev s_devs[T5_I2C_MAX_DEVICES];
 static t5_mutex_t s_bus;
+/* Fair hand-off. The FreeRTOS mutex isn't fair across cores: the releasing
+ * task can re-take it before a waiter on the other core runs, so under full
+ * load a task could wait over a second (bench 1.10). We count waiters, and a
+ * task that releases the bus while others wait steps aside for one tick;
+ * FreeRTOS wakes same-priority waiters in arrival order. No cost when idle. */
+static volatile int s_waiting;
+static t5_task_t volatile s_owner;
+static int s_depth;
+static uint32_t s_handoffs;
 static bool s_ready;
 static bool s_in_recovery;
 static t5_i2c_bus_stats_t s_stats;
@@ -77,16 +86,40 @@ t5_err_t t5_i2c_lock(uint32_t timeout_ms)
     if (!s_ready) {
         return T5_ERR_STATE;
     }
-    if (!t5_mutex_lock_timeout(s_bus, timeout_ms)) {
+    t5_task_t me = t5_task_self();
+    if (s_owner == me) {        /* recursive: only the owner ever sees itself here */
+        s_depth++;
+        return T5_OK;
+    }
+    __atomic_add_fetch(&s_waiting, 1, __ATOMIC_SEQ_CST);
+    bool ok = t5_mutex_lock_timeout(s_bus, timeout_ms);
+    __atomic_sub_fetch(&s_waiting, 1, __ATOMIC_SEQ_CST);
+    if (!ok) {
         s_stats.lock_timeouts++;
         return T5_ERR_BUSY;
     }
+    s_owner = me;
+    s_depth = 1;
     return T5_OK;
 }
 
 void t5_i2c_unlock(void)
 {
+    if (--s_depth > 0) {
+        return;
+    }
+    s_owner = NULL;
+    bool contended = __atomic_load_n(&s_waiting, __ATOMIC_SEQ_CST) > 0;
     t5_mutex_unlock(s_bus);
+    if (contended) {
+        s_handoffs++;
+        t5_delay_ms(1);   /* let a waiter take the bus before we come back for it */
+    }
+}
+
+uint32_t t5_i2c_handoffs(void)
+{
+    return s_handoffs;
 }
 
 t5_err_t t5_i2c_open(uint8_t addr, uint32_t hz, const char *name, t5_i2c_dev_t **out)
@@ -375,4 +408,8 @@ void t5_i2c_reset_for_test(void)
     s_trace_on = false;
     s_ready = false;
     s_in_recovery = false;
+    s_owner = NULL;
+    s_depth = 0;
+    s_waiting = 0;
+    s_handoffs = 0;
 }
