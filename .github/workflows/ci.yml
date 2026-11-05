@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  idf-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "version=$(tr -d '[:space:]' < firmware/idf_version.txt)" >> "$GITHUB_OUTPUT"
+
+  firmware:
+    needs: idf-version
+    runs-on: ubuntu-latest
+    container: espressif/idf:${{ needs.idf-version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        rev: [rev1, rev3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check IDF version matches idf_version.txt
+        shell: bash
+        run: |
+          want="$(tr -d '[:space:]' < firmware/idf_version.txt)"
+          have="$(cd "$IDF_PATH" && git describe --tags --exact-match 2>/dev/null || echo unknown)"
+          echo "want $want, container has $have"
+          [ "$want" = "$have" ]
+      - name: Build
+        shell: bash
+        working-directory: firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -B build-${{ matrix.rev }} -D T5_REV=${{ matrix.rev }} build
+      - name: Build device test app
+        shell: bash
+        working-directory: test/device
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -B build-${{ matrix.rev }} -D T5_REV=${{ matrix.rev }} build
+      - name: Image size budget
+        shell: bash
+        working-directory: firmware
+        run: |
+          # ota slots are 4 MiB; fail at 90% so there is always headroom for a fix.
+          size=$(stat -c %s build-${{ matrix.rev }}/tab5os.bin)
+          budget=$((4 * 1024 * 1024 * 9 / 10))
+          echo "tab5os.bin: $size bytes, budget $budget"
+          [ "$size" -le "$budget" ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tab5os-${{ matrix.rev }}
+          path: |
+            firmware/build-${{ matrix.rev }}/tab5os.bin
+            firmware/build-${{ matrix.rev }}/tab5os.elf
+            firmware/build-${{ matrix.rev }}/bootloader/bootloader.bin
+            firmware/build-${{ matrix.rev }}/partition_table/partition-table.bin
+            firmware/build-${{ matrix.rev }}/ota_data_initial.bin
+            firmware/build-${{ matrix.rev }}/flasher_args.json
+
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y ninja-build
+      - run: tools/t5/t5 host-test

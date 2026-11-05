@@ -1,0 +1,21 @@
+# Tab5 OS flash layout (16 MB). Offsets are fixed from Phase 0: never move them,
+# or A/B updates and recovery stop working on deployed units.
+#
+# Partition table at 0x10000 (not the IDF default 0x8000) so the bootloader
+# has 56 KB for the Phase 9 recovery hook and secure boot.
+#
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0x11000,   0x2F000,
+otadata,    data, ota,      0x40000,   0x2000,
+nvs_keys,   data, nvs_keys, 0x42000,   0x1000,
+# Recovery image (Phase 9). Subtype "test" so the bootloader never picks it by
+# default and `idf.py flash` writes the OS to ota_0. Phase 9 adds the
+# bootloader hook that enters it after three failed boots.
+recovery,   app,  test,     0x50000,   0x180000,
+ota_0,      app,  ota_0,    0x1D0000,  0x400000,
+ota_1,      app,  ota_1,    0x5D0000,  0x400000,
+# Image used to update the ESP32-C6 radio (Phase 3).
+c6fw,       data, 0x40,     0x9D0000,  0x180000,
+coredump,   data, coredump, 0xB50000,  0x40000,
+# /data, LittleFS (Phase 1.8). Runs to the end of flash.
+data,       data, littlefs, 0xB90000,  0x470000,

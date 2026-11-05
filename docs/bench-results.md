@@ -1,0 +1,222 @@
+# Bench results
+
+Answers from real hardware. Each entry says which unit it came from and how it was measured.
+
+## Unit A (MAC 80:f1:b2:d1:43:f4)
+
+### 0.0 Chip revision — 2026-11-05
+
+Measured with `esptool chip-id` and `flash-id` (esptool v5.6.0) over USB-C.
+
+| Item | Result |
+| --- | --- |
+| Chip | ESP32-P4, **revision v1.3** |
+| Build variant | **`rev1`** (`ESP32P4_SELECTS_REV_LESS_V3=y`, minimum Rev v1.0) |
+| esptool features line | Dual Core + LP Core, 400MHz. That is the chip family's rating; plan for 360 MHz on v1.x until 0.2 measures it |
+| Crystal | 40 MHz |
+| USB on USB-C | USB-Serial/JTAG, port `/dev/cu.usbmodem1101` |
+| Flash | 16 MB (manufacturer 0x46, device 0x4018) |
+
+### Factory firmware backup
+
+The full 16 MB flash is saved at `../../backups/tab5-factory-80f1b2d143f4.bin`, outside the repo.
+SHA-256 `eee8d49d5b7a39ac0a8f00e438774d510fc1dcb8ffd1a5106f5eead19edd6da8`.
+Restore with `esptool --port <port> write-flash 0 tab5-factory-80f1b2d143f4.bin`.
+
+Factory partition table at 0x8000:
+
+| Name | Type | Subtype | Offset | Size |
+| --- | --- | --- | --- | --- |
+| nvs | data | nvs | 0x9000 | 24K |
+| otadata | data | ota | 0xf000 | 8K |
+| phy_init | data | phy | 0x11000 | 4K |
+| app0 | app | ota_0 | 0x20000 | 6M |
+| app1 | app | ota_1 | 0x620000 | 6M |
+| coredump | data | coredump | 0xc20000 | 64K |
+
+About 3.8 MB at the end of flash is unused by the factory layout. The factory app slots are 6 MB, larger than our planned 4 MB, which is a hint about how big a full LVGL and media image gets. Check our image size against 4 MB early.
+
+### 0.2 Minimal boot — 2026-11-05
+
+Tab5 OS 0.0.1 (`rev1`, ESP-IDF v6.1) boots from `ota_0` with the console on USB-C. Measured with `sys` and `psram` in the bring-up console.
+
+| Item | Result |
+| --- | --- |
+| CPU | 360 MHz. This is the ceiling: IDF v6.1 only offers 360 MHz when `ESP32P4_SELECTS_REV_LESS_V3` is set |
+| PSRAM | 32 MB, stable at **200 MHz**. Pattern test over 24 MB found 0 bad words |
+| PSRAM, CPU memset / memcpy | 200 MHz: 88 / 57 MB/s. 80 MHz: 45 / 37 MB/s. 200 MHz is about twice as fast, so we keep it. CPU copies go through the cache and are far below what DMA2D/PPA should reach. Measure that in Phase 4.2 |
+| Internal heap after boot | 581 KB free, 352 KB largest block |
+| PSRAM heap after boot | 33.5 MB free |
+
+### Flash layout change
+
+The partition table moved from 0x8000 to **0x10000**. At 0x8000 the IDF v6.1 bootloader (24.3 KB with rollback on) had only 208 bytes left, so the Phase 9 recovery hook and secure boot would not fit. At 0x10000 it has 32 KB free. NVS shrank to 188 KB (0x11000–0x40000). Every other offset matches the design. When flashing over the factory image, erase NVS (0x11000, 0x2F000) and the core dump (0xB50000, 0x40000) once, because the old factory app left bytes there. Both regions have been erased on Unit A.
+
+### 0.3 I2C scan, bench check 1 — 2026-11-05
+
+The system bus on G31/G32 at 400 kHz answers at 9 addresses:
+
+| Address | Device |
+| --- | --- |
+| 0x10 | ES8388 audio DAC |
+| **0x28** | **A second address of the ST7123 display and touch chip.** It ignores the register address (reads `0xfc` then `0x50` repeated). It disappears together with 0x55 when either `TP_RST` or `LCD_RST` is held low (see 0.4). Reserved |
+| 0x32 | RX8130CE RTC |
+| 0x40 | ES7210 mic ADC |
+| 0x41 | INA226 battery monitor |
+| 0x43, 0x44 | PI4IOE5V6408 expanders (ID register 0xA0) |
+| 0x55 | ST7123/ST7121 touch |
+| 0x68 | BMI270 IMU |
+
+- **Bench check 1 (panel):** Unit A has the **ST712x** variant. 0x55 answers and GT911 (0x14/0x5D) doesn't. Telling ST7123 from ST7121 needs the panel ID over DSI (Phase 1.4).
+- **Camera:** **0x36** answers as soon as `CAM_RST` (0x43 P6) is released (0.4). Confirmed, and reserved.
+- **Panel ID:** ST7123 vs ST7121 is read from the touch controller's firmware-version register (16-bit address 0x0000): 3 = ST7123, 1 = ST7121. Unit A reads **3: ST7123**. The panel answers DCS ID `80 a0 fb` over DSI.
+
+### 0.4 Expander state as left by the factory firmware — 2026-11-05
+
+Read with `exp dump` after flashing. The expanders keep power across P4 resets, so this is the factory firmware's configuration, not the power-on default.
+
+| Pin | Signal | State | Notes |
+| --- | --- | --- | --- |
+| 0x43 P0 | RF_ANT_SEL | output 0 | |
+| 0x43 P1 | SPK_EN | output 0 | |
+| 0x43 P2 | EXT5V_EN | input, pull-up, reads 1 | Enabled by the pull-up rather than driven |
+| 0x43 P3 | — | output hi-z, pull-down | Unused |
+| 0x43 P4 | LCD_RST | input, pull-up, reads 1 | Same as the BSP's "LCD enable" (open drain released) |
+| 0x43 P5 | TP_RST | output 1 | |
+| 0x43 P6 | CAM_RST | output hi-z, pull-down | Camera held in reset |
+| 0x43 P7 | HP_DET | input, reads 0 | No headphones plugged in |
+| 0x44 P0 | WLAN_PWR_EN | output 0 | C6 off |
+| 0x44 P1–P2 | — | output hi-z, pull-down | Unused |
+| 0x44 P3 | USB5V_EN | output 0 | |
+| 0x44 P4 | PWROFF_PULSE? | output 0 | Not toggled. `exp out` refuses this pin without `--force` |
+| 0x44 P5 | nCHG_QC_EN | output 0 | Fast charge enabled (active low) |
+| 0x44 P6 | CHG_STAT | input, reads 1 | |
+| 0x44 P7 | CHG_EN | output 1 | Charging enabled |
+
+#### Toggling each output (`test/hil/expander_map.py`)
+
+Each output was changed on its own while the script watched the I2C bus and the INA226.
+
+| Change | Effect seen | Pin status |
+| --- | --- | --- |
+| `CAM_RST` = 1 | 0x36 (SC2356) appears | **verified** |
+| `TP_RST` = 0 | 0x55 and 0x28 vanish | **verified** |
+| `LCD_RST` = 0 (driven) | 0x55 and 0x28 vanish (ST7123 is one chip) | **verified** |
+| `nCHG_QC_EN`, `CHG_EN` | No visible change: pack full (8.38 V), board on USB | names match schematic and M5Unified; effect unverified |
+| `SPK_EN`, `EXT5V_EN`, `USB5V_EN`, `WLAN_PWR_EN`, `RF_ANT_SEL` | No change in battery current: on USB the load isn't on the battery path | names match the BSP and M5Unified; effect needs a meter or a load |
+| `PWROFF_PLUSE` | Not toggled | 0x44 P4 per the schematic netlist (U7 pin 6 = P4, ADDR tied to 3.3 V) |
+| `HP_DET`, `CHG_STAT` | Inputs; read 0 (no headphones) and 1 | not exercised |
+
+M5Unified's Tab5 init table (`Power_Class.inl`) labels every pin the same way as `pins.h`.
+
+**INA226 surprise.** With USB attached and the pack full, the INA226 bus voltage register steps between 0x0DA7 (4.37 V) and 0x1A32 (8.38 V) over a few seconds. The I2C data is consistent (no errors, stable values within each step), so the measured node really moves. Find out what the charger does here in Phase 2 before trusting the gauge on USB.
+
+
+### 0.5 `PWROFF_PLUSE` — partly answered
+
+The schematic netlist puts `PWROFF_PLUSE` on U7 pin 6 (P4); U7's ADDR pin is tied to 3.3 V, which makes it the 0x44 expander. So it's **0x44 P4**, as M5Unified also labels it. Pulsing it on battery to confirm it cuts power is still to do (procedure in `bench-procedures.md`). `exp out`/`exp pulse` refuse this pin without `--force`.
+
+### 0.6 Power button, bench check 3 — 2026-11-05
+
+Watched G35 and G23 with `gpio watch ... log` (edges written to `/data` with fsync) while a person pressed the button.
+
+| Action | Result |
+| --- | --- |
+| Single short press while on | **Power-cycles the board**: off, then straight back on. Next boot reports `ESP_RST_WDT` |
+| Double press while on | **Powers off and stays off** |
+| Single press while off | Powers on |
+| G35 during any press | No edge recorded before power went |
+
+**Answer:** the PMS150G handles the button by itself. The OS gets no warning and can't intercept a press, so "short press toggles screen off or sleep" isn't possible. One caveat: if power drops within a millisecond or two of the press, the fsync'd log may not have survived. The practical result is the same either way. Autosave and atomic writes (2.12) are what protect data.
+
+### 0.7 Interrupt routing, bench checks 2 and 9 — 2026-11-05
+
+**RTC `/IRQ` does not reach the P4; it toggles main power.** Method: `rtc timer 3` arms the RX8130 countdown interrupt, then `gpio watch 8000 log` samples 21 candidate GPIOs (0-4, 14, 16, 17, 23, 33, 35, 45-54) every 1 ms and writes each edge to `/data` with `fsync`.
+
+- When the timer fired, USB disappeared: the board lost main power. The edge log held only its header, so no watched GPIO changed before power went.
+- The board came back on its own 10-50 s later. The next boot showed RTC flag TF set and reset reason `ESP_RST_WDT` ("other watchdog").
+- Control run: the same `gpio watch` with no timer armed doesn't affect power.
+- The RX8130 timer reloads itself, so a running timer keeps toggling power until boot stops it (`t5_rtc_init` does, about 1.2 s into boot).
+
+Consequences, now in the design: RTC interrupts stay off while the OS runs; RTC alarm wake works only from soft off; the PMS150G power-up shows as `ESP_RST_WDT`.
+
+**IMU interrupt (supervised test):** a latched any-motion interrupt on INT1+INT2, then a tap:
+
+- Active-high push-pull: no power change, and no GPIO edge.
+- **Active-low: the tap cut main power**, with no GPIO edge first. One button press brought the board back, and it stayed on; boot's IMU soft reset releases the latched line.
+
+So the IMU interrupt joins the RTC's active-low trigger into the PMS150G and never reaches the P4. Motion wake works only from soft off, with INT configured active-low. While the OS runs, IMU interrupts must stay off or active-high.
+
+**Bench check 9 (SD detect):** a person pulled the card and reinserted it while 21 GPIOs were watched. No GPIO moved, so no card-detect line reaches the P4. The storage poller saw the removal within 2 s and remounted after reinsertion. Polling is the only mechanism, and it works.
+
+### 0.8 Light sleep, bench check 4 — 2026-11-05
+
+Measured with `sleep light <ms> <MB> [g<pin>...]`: fill PSRAM with a pattern, enter light sleep with the DSI panel running, check the pattern and read the panel's power mode after waking.
+
+| Run | Result |
+| --- | --- |
+| 3 s, timer wake, 8 MB pattern | Woke by timer at 3004 ms; PSRAM intact; panel answers, power mode 0x9C; USB console survived |
+| 5 s, G23 (touch) + G14 (C6) armed, 16 MB | Woke by timer (no false GPIO wake); PSRAM intact; panel OK |
+| 8 s, G23 + G35 + G14 armed (IDF default pad isolation) | **Board reset after a few seconds** (`ESP_RST_WDT`, ~10 s outage), no wake reported |
+| 4 s, G35 armed with `gpio_sleep_sel_dis(35)` | Woke by timer; PSRAM intact; panel OK; no reset |
+
+| 30 s, G23 armed, person touching during sleep (first attempt) | **Board hung**, screen dark, USB dead; needed a button press. Cause: `gpio_wakeup_enable()` turns G23's interrupt into a level one, and the touch service's ISR then fired non-stop while the finger was down. Fixed: mask the pin's ISR during sleep, restore its falling-edge interrupt afterwards |
+| 30 s, G23 armed, person touching (after the fix) | Survived, but **woke by timer, not touch**. Screen held grey; queued touches drew once video resumed. Touch works normally afterwards |
+
+**Answer:** light sleep keeps PSRAM and the DSI panel on this revision, and wakes cleanly from the timer. Two board rules: G35 must keep its pad config through sleep (`t5_bsp_board_init()` does this), and a pin with a live ISR must have it masked while armed as a wake source.
+
+**Touch can't wake the board from light sleep.** The ST7123 scans touch during display blanking (see the display findings), and the video stream stops in light sleep, so the touch interrupt never fires. The button can't serve as a gentle wake either (0.6). **Phase 2 decision (plan's decision rule):** the Sleep state becomes "screen off, video stream kept alive, CPU idling at low clock". Deep standby is soft off, which wakes with a reboot and a session restore.
+
+### 0.9 Baseline power draw — not yet measured
+
+Needs an external meter in series with the pack (procedure in `bench-procedures.md`).
+
+### 0.10 ELF from PSRAM, bench check 11 — 2026-11-05
+
+`elf bench`: a 61 KB position-independent ELF (built by the firmware build with the same compiler flags) is written to `/sd`, read back, loaded by `elf_loader` 2.1.0 into PSRAM (entry 0x481e2526) and run. The same two kernels are compiled into the firmware, which runs from flash via cache.
+
+| Kernel | Built in (flash, 80 MHz QIO) | ELF in PSRAM (200 MHz) |
+| --- | --- | --- |
+| Small: 16x16 matrix loop, fits in cache | 199.97 ms | 200.05 ms (1.00x) |
+| Big: 64 KB straight-line code, misses I-cache | 17.19 ms | 15.46 ms (0.90x, faster) |
+
+300 load-run-unload rounds: 0 relocation failures, 0 wrong results.
+
+**Answer:** ELF code runs reliably from PSRAM on v1.3, at built-in speed or better. Native apps stay the main runtime, and the "internal RAM region" fallback isn't needed.
+
+### 0.11 Connector pins — not yet measured
+
+Needs a meter on `ext`, `stamp` and the M5-Bus BAT pin.
+
+## Phase 1 results — 2026-11-05
+
+| Service | Result on Unit A |
+| --- | --- |
+| `t5_i2c` | 9 devices at 400 kHz; 0 errors in every session so far. The 1-hour stress run (`test/hil/i2c_stress.py`) and the device test app (forced recoveries) are written but haven't run yet: the board was off |
+| Expanders | State adopted at boot without writes; boot defaults applied (rails off, camera in reset, charging on) |
+| Display | ST7123 detected; DSI 2 lanes at 1000 Mbps, 70 MHz pixel clock; test pattern confirmed on screen; DCS read works; sleep and wake |
+| Display shimmer | With Espressif's BSP timing (70 MHz, vertical front porch 220, **57.8 Hz**) the whole screen shimmered, worst on flat mid-grey, at any brightness including constant-on backlight. So not PWM; it's LCD frame-rate flicker. Shortening the porch to 40 lines (65.6 Hz) fixed the shimmer but **stopped touch**: the ST7123 scans touch during vertical blanking, and the touch interrupt never fired. Final setting: keep the 220-line porch and raise the pixel clock to **78 MHz (64.4 Hz)**. Steady, and touch works. `disp timing <pclk> <vfp>` tries other timings without rebuilding |
+| Backlight PWM | 20 kHz needed a fractional LEDC divider (80 MHz / 3.9), which jitters. Now 19531 Hz (80 MHz / 1024 / 4, integer) and true constant-on at 100% |
+| Touch mapping | The ST7123 init table's MADCTL (0x36 = 0x03) flips the image in X and Y but not touch: a touch at top right drew at bottom left. Touch is now mirrored in both axes for ST7123; dots confirmed under the finger at all corners |
+| Touch | ST7123 firmware 3, 720x1280, interrupt on G23 |
+| RTC | Time set from the host survives a chip reset, and a real power-off by double press (within 1 s of the host afterwards) |
+| IMU | BMI270 config upload succeeds on the first attempt; 1 g at rest (-995 mg on Z, flat); die temperature 37 °C |
+| `/data` | LittleFS, 4.4 MB. Atomic-write stress interrupted by 23 chip resets mid-write: every read-back intact, sequence never went backwards |
+| `/sd` | 32 GB card mounts 4-bit at 40 MHz. Raw reads reach 14.6 MB/s with 64 KB transfers, but this card is FAT32 with **512-byte clusters**, so file I/O through FatFs is ~1.2 MB/s read, 0.4 MB/s write. Reformat with 32 KB clusters; Phase 6's Files app should format that way |
+
+### Problems found
+
+- **eFuse boot loop (IDF v6.1, v1.3 silicon).** After one of many quick USB resets during flash writes, every boot asserted in IDF's PVT init (`get_lp_hp_gap pmu_pvt.c:47`). The real eFuse value (`LP_DCDC_DBIAS_VOL_GAP` = 4, from `espefuse summary`) passes the check, so the app was reading stale eFuse shadow registers. The panic reboot is a CPU-only reset, which doesn't reload eFuses, so the board looped until a reset through the ROM bootloader (`esptool chip-id`) fixed it. A real power loss reloads eFuses, so users wouldn't hit it this way, but the crash guard can't catch it (it fires before `app_main`). Phase 9: add a bootloader check that forces a full system reset if those registers look invalid.
+- **Real power-cut test stopped after 1 cycle.** `test/hil/fs_powerloss.py --mode powercut` cuts power through the RTC interrupt. The first cut and restore worked (data intact); after the second cut the board stayed off and needs the power button. The PMS150G's behaviour on repeated pulses isn't understood yet (see 0.6/0.7).
+
+## Still to answer
+
+| Item | Needs | Status |
+| --- | --- | --- |
+| 0.5 confirm `PWROFF_PLUSE` cuts power | Battery only, a person | Deferred to Phase 2 (soft off) |
+| 0.9 power per state | External meter | Deferred to Phase 2 |
+| 0.11 connector pins | Meter | Deferred to Phase 5 (ports broker) |
+| Rail switch effects (USB-A 5V, ext 5V, speaker, Wi-Fi power) | A load on each rail | Deferred to Phase 2 (rails) |
+| 1.10 SDA short during stress | A probe and a person | The 1 h software stress runs unattended |
+
+Procedures for each are in [bench-procedures.md](bench-procedures.md).

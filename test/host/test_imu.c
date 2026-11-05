@@ -1,0 +1,130 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#include "unity.h"
+#include "t5_imu/t5_imu.h"
+#include "t5_mocks.h"
+
+static mock_i2c_dev_t *imu;
+static size_t s_uploaded;
+static bool s_fail_load;
+
+static bool imu_write(mock_i2c_dev_t *d, uint32_t reg, const uint8_t *data, size_t len)
+{
+    if (reg == 0x5E) { s_uploaded += len; return true; }            /* INIT_DATA is a port */
+    if (reg == 0x59 && data[0] == 1 && !s_fail_load && s_uploaded >= 8192) d->regs[0x21] = 0x01;
+    if (reg == 0x7E && data[0] == 0xB6) { d->regs[0x21] = 0; s_uploaded = 0; return true; }
+    for (size_t i = 0; i < len; i++) d->regs[reg + i] = data[i];
+    return true;
+}
+
+void setUp(void)
+{
+    mock_reset_all();
+    t5_imu_reset_for_test();
+    imu = mock_i2c_add(0x68, false);
+    imu->regs[0x00] = 0x24;
+    imu->on_write = imu_write;
+    s_uploaded = 0;
+    s_fail_load = false;
+}
+void tearDown(void) {}
+
+static void test_raw_to_mg(void)
+{
+    TEST_ASSERT_EQUAL(1000, t5_imu_raw_to_mg(8192));
+    TEST_ASSERT_EQUAL(-1000, t5_imu_raw_to_mg(-8192));
+    TEST_ASSERT_EQUAL(0, t5_imu_raw_to_mg(0));
+}
+
+static void test_any_motion_packing(void)
+{
+    uint8_t b[4];
+    t5_imu_pack_any_motion(100, 100, true, b);
+    uint16_t w0 = (uint16_t)(b[0] | b[1] << 8), w1 = (uint16_t)(b[2] | b[3] << 8);
+    TEST_ASSERT_EQUAL(5, w0 & 0x1FFF);            /* 100 ms / 20 ms */
+    TEST_ASSERT_EQUAL_HEX16(0xE000, w0 & 0xE000);  /* x, y, z */
+    TEST_ASSERT_EQUAL(205, w1 & 0x7FF);            /* 100 mg * 2048 / 1000 */
+    TEST_ASSERT_TRUE(w1 & 0x8000);
+    t5_imu_pack_any_motion(5000, 0, false, b);
+    w0 = (uint16_t)(b[0] | b[1] << 8); w1 = (uint16_t)(b[2] | b[3] << 8);
+    TEST_ASSERT_EQUAL(1, w0 & 0x1FFF);
+    TEST_ASSERT_EQUAL(0x7FF, w1 & 0x7FF);
+    TEST_ASSERT_FALSE(w1 & 0x8000);
+}
+
+static void test_init_uploads_config_and_reads_accel(void)
+{
+    TEST_ASSERT_EQUAL(T5_OK, t5_imu_init_blocking());
+    TEST_ASSERT_EQUAL(T5_IMU_READY, t5_imu_status());
+    TEST_ASSERT_EQUAL(1, t5_imu_attempts());
+    TEST_ASSERT_EQUAL(8192, s_uploaded);
+    TEST_ASSERT_EQUAL_HEX8(0x0C, imu->regs[0x7D]);   /* accel + temp */
+    imu->regs[0x0C] = 0x00; imu->regs[0x0D] = 0x20;  /* x = 8192 = 1 g */
+    imu->regs[0x10] = 0x00; imu->regs[0x11] = 0xE0;  /* z = -8192 */
+    t5_imu_accel_t a;
+    TEST_ASSERT_EQUAL(T5_OK, t5_imu_read_accel(&a));
+    TEST_ASSERT_EQUAL(1000, a.x);
+    TEST_ASSERT_EQUAL(-1000, a.z);
+}
+
+static void test_temp_invalid_sample(void)
+{
+    t5_imu_init_blocking();
+    imu->regs[0x22] = 0x00; imu->regs[0x23] = 0x80;
+    int32_t c;
+    TEST_ASSERT_EQUAL(T5_ERR_STATE, t5_imu_read_temp(&c));
+    imu->regs[0x22] = 0x00; imu->regs[0x23] = 0x02;  /* 512 LSB = +1 K */
+    TEST_ASSERT_EQUAL(T5_OK, t5_imu_read_temp(&c));
+    TEST_ASSERT_EQUAL(2400, c);
+}
+
+static void test_init_fails_after_retries_and_reports(void)
+{
+    s_fail_load = true;
+    TEST_ASSERT_NOT_EQUAL(T5_OK, t5_imu_init_blocking());
+    TEST_ASSERT_EQUAL(T5_IMU_FAILED, t5_imu_status());
+    TEST_ASSERT_EQUAL(T5_IMU_INIT_ATTEMPTS, t5_imu_attempts());
+    TEST_ASSERT_EQUAL(1, mock_events_count(T5_EV_IMU_FAILED));
+    t5_imu_accel_t a;
+    TEST_ASSERT_EQUAL(T5_ERR_STATE, t5_imu_read_accel(&a));
+}
+
+static void test_wrong_chip(void)
+{
+    imu->regs[0x00] = 0x26;
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_imu_init_blocking());
+}
+
+static void test_start_is_async(void)
+{
+    TEST_ASSERT_EQUAL(T5_OK, t5_imu_start());
+    TEST_ASSERT_EQUAL(T5_IMU_STARTING, t5_imu_status());
+    TEST_ASSERT_EQUAL(1, mock_tasks_count());
+}
+
+static void test_motion_config(void)
+{
+    t5_imu_init_blocking();
+    t5_imu_motion_cfg_t c = { .threshold_mg = 100, .duration_ms = 100, .pins = T5_IMU_INT1,
+                              .active_high = true, .latched = true };
+    TEST_ASSERT_EQUAL(T5_OK, t5_imu_motion_enable(&c));
+    TEST_ASSERT_EQUAL_HEX8(0x40, imu->regs[0x56]);
+    TEST_ASSERT_EQUAL_HEX8(0x0A, imu->regs[0x53]);   /* output enable, active high, push-pull */
+    TEST_ASSERT_EQUAL_HEX8(0x00, imu->regs[0x57]);
+    TEST_ASSERT_EQUAL_HEX8(0x80, imu->regs[0x30 + 0x0F] & 0x80);   /* enable bit in page */
+    TEST_ASSERT_EQUAL(T5_OK, t5_imu_motion_disable());
+    TEST_ASSERT_EQUAL_HEX8(0x00, imu->regs[0x56]);
+}
+
+int main(void)
+{
+    UNITY_BEGIN();
+    RUN_TEST(test_raw_to_mg);
+    RUN_TEST(test_any_motion_packing);
+    RUN_TEST(test_init_uploads_config_and_reads_accel);
+    RUN_TEST(test_temp_invalid_sample);
+    RUN_TEST(test_init_fails_after_retries_and_reports);
+    RUN_TEST(test_wrong_chip);
+    RUN_TEST(test_start_is_async);
+    RUN_TEST(test_motion_config);
+    return UNITY_END();
+}

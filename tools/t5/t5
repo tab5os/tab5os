@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Tab5 OS developer CLI (Phase 0 subset: build, flash, monitor, chip).
+# Phase 8 grows this into new/build/run/sim/pack.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+FW="$ROOT/firmware"
+REV="${T5_REV:-rev1}"
+PORT="${T5_PORT:-}"
+DOCKER=0
+
+usage() {
+    cat <<USAGE
+usage: t5 [--rev rev1|rev3] [--port PORT] [--docker] <command>
+
+  build            build firmware (build-<rev>/)
+  flash            flash bootloader, partition table and OS to ota_0
+  monitor          serial console
+  fm               flash then monitor
+  chip             print chip revision (esptool chip-id)
+  size             image size report
+  clean            remove build-<rev>/
+  host-test        build and run host unit tests
+  device-test      build, flash and run the on-device tests (replaces the OS; run 'flash' after)
+  console CMD...   run bring-up console commands and print the replies
+
+Defaults: rev from \$T5_REV (rev1), port auto-detected (/dev/cu.usbmodem*).
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --rev) REV="$2"; shift 2 ;;
+        --port) PORT="$2"; shift 2 ;;
+        --docker) DOCKER=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) break ;;
+    esac
+done
+[ $# -ge 1 ] || { usage; exit 1; }
+case "$REV" in rev1|rev3) ;; *) echo "bad --rev $REV" >&2; exit 1 ;; esac
+BUILD="build-$REV"
+IDF_VER="$(tr -d '[:space:]' < "$FW/idf_version.txt")"
+IDF_PYTHON="${IDF_PYTHON_ENV_PATH:+$IDF_PYTHON_ENV_PATH/bin/python}"
+IDF_PYTHON="${IDF_PYTHON:-python3}"
+
+detect_port() {
+    if [ -z "$PORT" ]; then
+        PORT="$(ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null | head -1 || true)"
+        [ -n "$PORT" ] || { echo "no Tab5 found; pass --port" >&2; exit 1; }
+    fi
+}
+
+idf() {
+    if [ "$DOCKER" = 1 ]; then
+        docker run --rm -v "$ROOT":/project -w /project/firmware -e T5_REV="$REV" \
+            "espressif/idf:$IDF_VER" idf.py -B "$BUILD" -D T5_REV="$REV" "$@"
+    else
+        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+        (cd "$FW" && idf.py -B "$BUILD" -D T5_REV="$REV" "$@")
+    fi
+}
+
+cmd="$1"; shift
+case "$cmd" in
+    build) idf build "$@" ;;
+    size) idf size "$@" ;;
+    clean) rm -rf "$FW/$BUILD" "$FW/sdkconfig.$REV" ;;
+    flash) detect_port; DOCKER=0 idf -p "$PORT" flash "$@" ;;
+    monitor) detect_port; DOCKER=0 idf -p "$PORT" monitor "$@" ;;
+    fm) detect_port; DOCKER=0 idf -p "$PORT" flash monitor "$@" ;;
+    chip) detect_port; esptool --port "$PORT" chip-id ;;
+    device-test)
+        detect_port
+        (cd "$ROOT/test/device" && idf.py -B "build-$REV" -D T5_REV="$REV" -p "$PORT" build flash)
+        "$IDF_PYTHON" "$ROOT/tools/t5/t5devtest.py" --port "$PORT" ;;
+    console)
+        "$IDF_PYTHON" "$ROOT/tools/t5/t5console.py" ${PORT:+--port "$PORT"} "$@" ;;
+    host-test)
+        cmake -S "$ROOT/test/host" -B "$ROOT/test/host/build" -G Ninja >/dev/null
+        cmake --build "$ROOT/test/host/build"
+        ctest --test-dir "$ROOT/test/host/build" --output-on-failure ;;
+    *) usage; exit 1 ;;
+esac
