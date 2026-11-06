@@ -8,7 +8,7 @@ Open the console with `. tools/env.sh && t5 monitor` (Ctrl-] quits), or run sing
 
 ## Visual checks for Phase 1
 
-1. Reset the board. The screen should show eight colour bars on the top half, a grey ramp, then a dark grid with a 4 px white border. There's a red square at the top-left of the panel's native portrait orientation.
+1. Reset the board. The screen stays dark until the launcher's first frame is drawn, then the backlight comes on. (The Phase 1 colour-bar test pattern was removed in Phase 5; `disp fill <r> <g> <b>` still paints the panel for checks, when the UI isn't running.)
 2. Run `touch dots on` and draw on the screen. Coloured dots should follow your finger, in a different colour for each finger. Turn it off with `touch dots off`.
 3. Run `disp sleep` then `disp wake`. The screen goes dark and comes back with the same image.
 4. Run `disp bl 10`, `disp bl 100`, then `disp bl 80`. Check that the brightness steps and doesn't flicker or whine.
@@ -87,3 +87,25 @@ This replaces the factory C6 firmware (esp_hosted 1.4.1) with ours (3.1.0). It's
 
 1. `t5 c6-build`, then `t5 c6-stage` (writes the `c6fw` partition).
 2. `t5 console "net"` should show the staged version, then run `net update`. Watch the log for `C6 updated to t5-c6-...`.
+
+## Phase 4: display pipeline and the rendering gate
+
+Flash the current firmware (`t5 build && t5 flash`). After boot the screen stays dark until the launcher (a list titled "Tab5 OS") is drawn.
+
+1. **Orientation and touch.** Run `ui rot 90`, `ui rot 270`, `ui rot 0`, `ui rot 180` in turn. Each time, the app bar must be along the top edge as you look at it, and tapping a list row must ripple under your finger (not mirrored). If landscape comes out upside down or mirrored, the PPA angle mapping in `t5_ui/ui_hw.c` (`angle()`) is the thing to change.
+2. **Auto-rotate axes.** Run `ui imu 10` and hold the board upright in portrait, then turn it to each edge. The angle should read about 0, 90, 180 and 270, and the screen should follow after half a second. If the angle is off by 90 or 180 degrees, or runs backwards, fix the IMU axis map in `t5_ui/ui.c` (`s_axes`, marked unverified). Lay it flat: the screen must not rotate.
+3. **Rotation lock.** `ui lock on`, reboot, and check the orientation and the lock survived.
+4. **The gate (plan 4.8).** Run `ui stats on` to see counters on screen, then `ui gate all 10` in landscape (`ui rot 90`) and again in portrait (`ui rot 0`). Targets: scroll ≥ 57 fps sustained (60 on the 64.4 Hz panel, one dropped frame a second allowed), transitions and the dialog ≥ 30 fps. The command prints PASS or FAIL per mode with render and PPA copy times. Record both orientations in bench-results. If it fails, try the fallbacks in the plan's order.
+5. **Touch to ripple.** With `ui stats on`, tap a list row: the `touch` figure is press to the end of the refresh that drew the first ripple frame. It should be under 16.7 ms.
+6. **Tearing.** During `ui gate transition`, look for a horizontal tear line. There should be none (three buffers, swapped at the end of a frame).
+7. **Banding.** Look at the dialog's shadow and the app bar overlay on the dark background, close up. Note any visible steps.
+
+## Phase 5: apps
+
+Build the test apps with `t5 apps`. Either copy `test/apps/build/*.t5app` to the SD card and run `app install /sd/<name>.t5app`, or serve the build directory from the Mac (`python3 -m http.server 8765 --bind <mac-ip>` in `test/apps/build`) and run `app fetch http://<mac-ip>:8765/<name>.t5app` on the device. Reinstalling an app clears its crash record.
+
+1. **Lifecycle and cleanup (the exit test).** `app stress com.t5.test.leaky 500`. Every line must say heap, pins, locks and rails are back at baseline, and the summary must say PASS. The run takes about 4 minutes and holds a screen wake lock so the idle timers don't turn the UI off. Also open Leaky by hand, check that grove shows as claimed (`port`), the wake lock (`power locks`) and the dialog, then `app exit` and check they're gone.
+2. **Crash guard.** `app run com.t5.test.crasher`. The screen goes dark at once (the backlight is switched off in the panic handler), stays dark through the reboot, and comes back on with the launcher: no blue, cyan or test-pattern screens. `app crashes` should show one crash with a dump path. Do it again: two in a row, and `app` shows "auto-launch blocked". Open Hello and exit it; Crasher stays blocked until it exits cleanly.
+3. **UI watchdog.** `app run com.t5.test.hang`. After about 2.5 s "App not responding" appears. Tap Wait: it goes away and comes back about 5 s later. Tap Close app: the board restarts to the launcher, and `app crashes` lists Hang as "not responding".
+4. **ABI stability.** Rebuild the firmware after any unrelated change, flash it, and check the `.t5app` files built earlier still run without reinstalling.
+5. **Revisions.** Only `rev1` (v1.x silicon) is targeted; `rev3` is not tested.

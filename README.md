@@ -3,7 +3,7 @@
 An operating system for the M5Stack Tab5 (ESP32-P4 + ESP32-C6), built on ESP-IDF.
 See [docs/tab5os-design.md](docs/tab5os-design.md) and [docs/tab5os-implementation-plan.md](docs/tab5os-implementation-plan.md).
 
-**Status:** Phases 2 (power and battery) and 3 (C6 modem). On top of the Phase 1 board services: power states and wake locks, rails, soft off, charge mode, a fuel gauge, and Wi-Fi and BLE through the ESP32-C6. Bench results: [docs/bench-results.md](docs/bench-results.md).
+**Status:** Phases 4 (graphics and MD2) and 5 (app platform). Phase 5's exit criteria pass on Unit A; Phase 4's rendering gate doesn't yet (29–35 fps scrolling against 57). On top of Phases 1–3 (board services, power and battery, Wi-Fi and BLE through the ESP32-C6): LVGL 9.6 with a triple-buffered, PPA-rotated display pipeline, auto-rotate, a Material Design 2 theme and widgets, an SDL simulator, the ports broker, and native apps loaded from storage with tracking, permissions, a stable ABI, a crash guard and a UI watchdog. Bench results: [docs/bench-results.md](docs/bench-results.md). App SDK: [docs/sdk.md](docs/sdk.md).
 
 ## Build and flash
 
@@ -17,6 +17,9 @@ t5 host-test                   # host unit tests (service logic against mocks)
 t5 device-test                 # on-device Unity tests (replaces the OS; `t5 flash` after)
 t5 console "sys" "i2c scan"    # run console commands from a script
 t5 c6-build / t5 c6-stage      # C6 radio firmware, staged in the c6fw partition
+t5 sim                         # SDL simulator (needs SDL2); t5 sim-shots checks its screenshots
+t5 apps                        # build the SDK test apps (test/apps/build/*.t5app)
+t5 lint                        # UI density lint and the ABI symbol file check
 ```
 
 Without a native ESP-IDF install, `t5 --docker build` builds in `espressif/idf`. Flashing always runs on the host.
@@ -40,7 +43,7 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `rtc` / `rtc set <epoch>` / `alarm` / `timer` / `clear` | RTC and wall time. **An RTC interrupt while running cuts power** |
 | `imu` / `imu watch <s>` / `imu motion <mg>\|off` | BMI270 |
 | `fs df\|ls\|cat\|rm\|stress\|verify\|eject\|rescan\|sdraw\|sdbench` | `/data` and `/sd` |
-| `disp` / `disp bl\|pattern\|fill\|sleep\|wake\|ids` | Display |
+| `disp` / `disp bl\|fill\|sleep\|wake\|ids` | Display |
 | `touch` / `touch watch <s>` / `touch dots on\|off` | Touch |
 | `gpio watch <ms> [pins] [log]` / `gpio get` | Edge watcher for bench checks |
 | `sleep light <ms> [MB] [g<pin>...]` / `sleep result` | Light-sleep test |
@@ -52,6 +55,12 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `bat` / `bat log start\|stop` / `bat limit\|fast on\|off` | Fuel gauge, charging, trace log |
 | `net` / `net scan\|connect <ssid> [pass]\|forget\|reset\|update\|ant\|echo` | Wi-Fi via the C6 |
 | `ble on\|scan\|connect <addr>\|gatt\|read\|sub` | BLE central via the C6 |
+| `ui` / `ui rot\|lock\|auto\|imu\|stats\|accent` | Display pipeline, rotation, frame counters, MD2 accent |
+| `ui gate [all\|scroll\|transition\|dialog] [s]` | The rendering gate (plan 4.8), PASS/FAIL against the frame-rate targets |
+| `app` / `app run\|exit\|install\|rm\|usage\|crashes\|abi\|alarm` | App runtime |
+| `app fetch <url> [sd\|data]` | Download a `.t5app` over HTTP (outgoing only) and install it |
+| `app stress <id> <n>` | Open and close an app n times, checking heap, claims, locks and rails return to baseline |
+| `port` / `port open\|close\|i2c\|gpio\|pwm\|adc\|uart\|scan\|profiles\|modbus ...` | External ports: owners and pin levels, claims, raw I/O, module scan, Modbus RTU |
 
 Bench scripts in `test/hil/` use `tools/t5/t5link.py` to drive the console; run them with the IDF Python env. Steps that need a person are in [docs/bench-procedures.md](docs/bench-procedures.md).
 

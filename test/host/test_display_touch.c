@@ -63,6 +63,9 @@ static void test_brightness_and_sleep(void)
     mock_i2c_dev_t *tp = mock_i2c_add(0x55, true);
     tp->regs[0] = 3;
     TEST_ASSERT_EQUAL(T5_OK, t5_display_init());
+    TEST_ASSERT_EQUAL(0, mock_backlight);        /* held off until the first frame */
+    TEST_ASSERT_EQUAL(0, t5_display_effective_brightness());
+    TEST_ASSERT_EQUAL(T5_OK, t5_display_release_hold());
     TEST_ASSERT_EQUAL(80, mock_backlight);
     t5_display_set_brightness(150);
     TEST_ASSERT_EQUAL(100, t5_display_brightness());
@@ -76,15 +79,17 @@ static void test_brightness_and_sleep(void)
     TEST_ASSERT_FALSE(mock_panel_asleep);
 }
 
-static void test_pattern_and_fill_clip(void)
+static void test_init_black_and_fill_clip(void)
 {
     mock_i2c_dev_t *tp = mock_i2c_add(0x55, true);
     tp->regs[0] = 3;
     t5_display_init();
-    TEST_ASSERT_EQUAL(T5_OK, t5_display_test_pattern());
     uint16_t *fb = t5_display_fb();
-    TEST_ASSERT_EQUAL_HEX16(0xFFFF, fb[0]);                          /* border */
-    TEST_ASSERT_EQUAL_HEX16(t5_rgb565(255, 0, 0), fb[20 * T5_DISPLAY_W + 20]);   /* marker */
+    for (int i = 0; i < T5_DISPLAY_FBS; i++) {
+        uint16_t *b = t5_display_fb_n(i);
+        TEST_ASSERT_EQUAL_HEX16(0, b[0]);
+        TEST_ASSERT_EQUAL_HEX16(0, b[T5_DISPLAY_W * T5_DISPLAY_H - 1]);
+    }
     TEST_ASSERT_EQUAL(T5_OK, t5_display_fill_rect(-10, -10, 20, 20, 0x1234));    /* clipped */
     TEST_ASSERT_EQUAL_HEX16(0x1234, fb[0]);
     TEST_ASSERT_EQUAL_HEX16(0x1234, fb[9 * T5_DISPLAY_W + 9]);
@@ -180,7 +185,7 @@ int main(void)
     RUN_TEST(test_probe_gt911);
     RUN_TEST(test_probe_nothing);
     RUN_TEST(test_brightness_and_sleep);
-    RUN_TEST(test_pattern_and_fill_clip);
+    RUN_TEST(test_init_black_and_fill_clip);
     RUN_TEST(test_parse_st712x);
     RUN_TEST(test_parse_gt911);
     RUN_TEST(test_scale_and_clamp);

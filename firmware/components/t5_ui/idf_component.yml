@@ -1,0 +1,4 @@
+dependencies:
+  # LVGL is pinned per API level (plan 4, design "Stable ABI"). API level 1 = 9.6.0.
+  lvgl/lvgl: "9.6.0"
+  espressif/esp_lcd_st7123: "~1.0.2"

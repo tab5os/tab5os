@@ -47,6 +47,9 @@ t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t s
  * Phase 5's resource tracker uses this to record app tasks. */
 typedef void (*t5_task_hook_t)(t5_task_t task, void *app_ctx);
 void t5_core_set_task_hook(t5_task_hook_t hook);
+/* Called by a t5_task_create() task when its function returns, just before
+ * it deletes itself, so the tracker forgets it. */
+void t5_core_set_task_exit_hook(t5_task_hook_t hook);
 
 /* The calling task (an opaque id, never NULL). */
 t5_task_t t5_task_self(void);

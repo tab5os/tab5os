@@ -15,9 +15,15 @@ static const char *TAG = "t5.display";
 
 static t5_panel_t s_panel = T5_PANEL_UNKNOWN;
 static bool s_ready, s_asleep, s_blank;
+static bool s_hold = true;    /* backlight held off until there's something to show */
 static int s_brightness = 80;
 static int s_dim = -1;
-static uint16_t *s_fb;
+static uint16_t *s_fb;                      /* buffer on screen or queued */
+static uint16_t *s_fbs[T5_DISPLAY_FBS];
+static volatile int s_scanout, s_queued;
+static volatile uint32_t s_frames;
+static t5_display_frame_cb_t s_frame_cb;
+static void *s_frame_arg;
 
 static t5_err_t apply_backlight(void);
 
@@ -88,7 +94,16 @@ t5_err_t t5_display_init(void)
         return T5_OK;
     }
     T5_RETURN_ON_ERR(t5_display_probe(NULL));
-    T5_RETURN_ON_ERR(t5_display_hw_init(s_panel, &s_fb));
+    T5_RETURN_ON_ERR(t5_display_hw_init(s_panel, s_fbs));
+    s_fb = s_fbs[0];
+    s_scanout = s_queued = 0;
+    /* Black in every buffer, so whichever is shown first holds no stale
+     * PSRAM contents. The backlight stays off (s_hold) until the UI has
+     * drawn its first frame: no flashes of half-made screens at boot. */
+    for (int i = 0; i < T5_DISPLAY_FBS; i++) {
+        for (size_t k = 0; k < (size_t)T5_DISPLAY_W * T5_DISPLAY_H; k++) s_fbs[i][k] = 0;
+        t5_display_hw_flush(s_fbs[i], 0, T5_DISPLAY_H);
+    }
     s_ready = true;
     s_asleep = false;
     T5_RETURN_ON_ERR(apply_backlight());
@@ -101,9 +116,16 @@ bool t5_display_ready(void)
     return s_ready;
 }
 
+t5_err_t t5_display_release_hold(void)
+{
+    if (!s_hold) return T5_OK;
+    s_hold = false;
+    return apply_backlight();
+}
+
 int t5_display_effective_brightness(void)
 {
-    if (!s_ready || s_asleep || s_blank) {
+    if (!s_ready || s_asleep || s_blank || s_hold) {
         return 0;
     }
     return (s_dim >= 0 && s_dim < s_brightness) ? s_dim : s_brightness;
@@ -183,6 +205,49 @@ uint16_t *t5_display_fb(void)
     return s_fb;
 }
 
+uint16_t *t5_display_fb_n(int i)
+{
+    return (i >= 0 && i < T5_DISPLAY_FBS) ? s_fbs[i] : NULL;
+}
+
+t5_err_t t5_display_present(int i, bool cache_sync)
+{
+    if (!s_ready || i < 0 || i >= T5_DISPLAY_FBS || !s_fbs[i]) return T5_ERR_STATE;
+    T5_RETURN_ON_ERR(t5_display_hw_present(s_fbs[i], cache_sync));
+    s_queued = i;
+    s_fb = s_fbs[i];
+    return T5_OK;
+}
+
+int t5_display_scanout(void)
+{
+    return s_scanout;
+}
+
+int t5_display_queued(void)
+{
+    return s_queued;
+}
+
+void t5_display_set_frame_cb(t5_display_frame_cb_t cb, void *arg)
+{
+    s_frame_arg = arg;
+    s_frame_cb = cb;
+}
+
+uint32_t t5_display_frames(void)
+{
+    return s_frames;
+}
+
+/* The DMA restarts on the queued buffer when a frame completes. */
+void t5_display_frame_isr(void)
+{
+    s_scanout = s_queued;
+    s_frames++;
+    if (s_frame_cb) s_frame_cb(s_frame_arg);
+}
+
 t5_err_t t5_display_flush_rows(int y0, int y1)
 {
     if (!s_fb) return T5_ERR_STATE;
@@ -208,37 +273,6 @@ t5_err_t t5_display_fill_rect(int x, int y, int w, int h, uint16_t c)
     return t5_display_flush_rows(y0, y1);
 }
 
-t5_err_t t5_display_test_pattern(void)
-{
-    if (!s_fb) return T5_ERR_STATE;
-    static const uint8_t bars[8][3] = {
-        {255, 255, 255}, {255, 255, 0}, {0, 255, 255}, {0, 255, 0},
-        {255, 0, 255}, {255, 0, 0}, {0, 0, 255}, {0, 0, 0},
-    };
-    const int W = T5_DISPLAY_W, H = T5_DISPLAY_H;
-    for (int y = 0; y < H; y++) {
-        uint16_t *row = s_fb + (size_t)y * W;
-        for (int x = 0; x < W; x++) {
-            uint16_t c;
-            if (y < H / 2) {
-                const uint8_t *b = bars[x * 8 / W];
-                c = t5_rgb565(b[0], b[1], b[2]);
-            } else if (y < H * 5 / 8) {
-                uint8_t g = (uint8_t)(x * 255 / (W - 1));
-                c = t5_rgb565(g, g, g);
-            } else {
-                c = t5_rgb565(0x12, 0x12, 0x12);   /* MD2 dark surface */
-                if (x % 40 == 0 || y % 40 == 0) c = t5_rgb565(0x40, 0x40, 0x40);
-            }
-            /* 4 px white border, red top-left marker: shows orientation and overscan. */
-            if (x < 4 || y < 4 || x >= W - 4 || y >= H - 4) c = 0xFFFF;
-            if (x >= 8 && x < 72 && y >= 8 && y < 72) c = t5_rgb565(255, 0, 0);
-            row[x] = c;
-        }
-    }
-    return t5_display_flush_rows(0, H);
-}
-
 t5_err_t t5_display_read_ids(uint8_t id[3], uint8_t *power_mode)
 {
     if (!s_ready) return T5_ERR_STATE;
@@ -254,5 +288,10 @@ void t5_display_reset_for_test(void)
     s_blank = false;
     s_dim = -1;
     s_fb = NULL;
+    for (int i = 0; i < T5_DISPLAY_FBS; i++) s_fbs[i] = NULL;
+    s_scanout = s_queued = 0;
+    s_frames = 0;
+    s_frame_cb = NULL;
+    s_hold = true;
     s_brightness = 80;
 }

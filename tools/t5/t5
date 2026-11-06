@@ -23,6 +23,11 @@ usage: t5 [--rev rev1|rev3] [--port PORT] [--docker] <command>
   host-test        build and run host unit tests
   device-test      build, flash and run the on-device tests (replaces the OS; run 'flash' after)
   console CMD...   run bring-up console commands and print the replies
+  sim [ARGS]       build and run the SDL simulator (sim/build/t5sim; --help for ARGS)
+  sim-shots        render the simulator's screenshots and check them against sim/golden
+  lint             UI density lint (raw pixel values) and the ABI symbol file check
+  apps             build the SDK test apps (test/apps/build/*.t5app) against build-<rev>
+  abi-check [REF]  check sdk/abi/api_v1.sym (and, with REF, that nothing published changed)
   c6-build         build the ESP32-C6 radio firmware (c6/build/)
   c6-stage         write that image to the c6fw partition; then 'net update' on the device
 
@@ -88,6 +93,25 @@ case "$cmd" in
         size=$(stat -f %z "$img" 2>/dev/null || stat -c %s "$img")
         [ "$size" -le $((0x180000)) ] || { echo "C6 image ($size bytes) exceeds the 1.5 MB c6fw partition" >&2; exit 1; }
         esptool --port "$PORT" write-flash 0x9D0000 "$img" ;;
+    sim)
+        cmake -S "$ROOT/sim" -B "$ROOT/sim/build" -G Ninja >/dev/null
+        cmake --build "$ROOT/sim/build"
+        "$ROOT/sim/build/t5sim" "$@" ;;
+    sim-shots)
+        cmake -S "$ROOT/sim" -B "$ROOT/sim/build" -G Ninja >/dev/null
+        cmake --build "$ROOT/sim/build"
+        mkdir -p "$ROOT/sim/build/shots"
+        "$ROOT/sim/build/t5sim" --shots "$ROOT/sim/build/shots" --check "$ROOT/sim/golden" "$@" ;;
+    lint)
+        python3 "$ROOT/tools/lint_px.py"
+        python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" ;;
+    apps)
+        command -v riscv32-esp-elf-gcc >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+        cmake -S "$ROOT/test/apps" -B "$ROOT/test/apps/build" -G Ninja -DT5_FIRMWARE_BUILD="$FW/$BUILD" >/dev/null
+        cmake --build "$ROOT/test/apps/build"
+        ls "$ROOT"/test/apps/build/*.t5app ;;
+    abi-check)
+        python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" ${1:+--base "$1"} ;;
     host-test)
         cmake -S "$ROOT/test/host" -B "$ROOT/test/host/build" -G Ninja >/dev/null
         cmake --build "$ROOT/test/host/build"

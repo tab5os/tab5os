@@ -6,7 +6,8 @@
  * bus. Display before touch: the probe that picks the panel also tells touch
  * which controller is fitted. Storage and the IMU must never block boot.
  * Power comes after storage (its settings) and the display (the backlight
- * rail); the battery service after power (soft off, charge mode).
+ * rail); the battery service after power (soft off, charge mode). The UI
+ * and the app runtime come last.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -22,10 +23,13 @@
 #include "t5_i2c/t5_i2c.h"
 #include "t5_imu/t5_imu.h"
 #include "t5_input/t5_touch.h"
+#include "t5_app/apps.h"
 #include "t5_net/net.h"
+#include "t5_ports/ports.h"
 #include "t5_power/power.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_time/t5_time.h"
+#include "t5_ui/t5_ui.h"
 
 static const char *TAG = "main";
 
@@ -71,14 +75,24 @@ void app_main(void)
     }
     START("imu", t5_imu_start());          /* background */
     START("storage", t5_storage_init());
-    START("display", t5_display_init());
-    if (t5_display_ready()) {
-        START("test pattern", t5_display_test_pattern());
-    }
+    /* Before the display: saving and erasing a crash's core dump means long
+     * flash operations, which would starve a running panel. */
+    START("crash check", t5_apps_boot_check());
+    START("display", t5_display_init());   /* black, backlight held off */
     START("touch", t5_touch_init());
     START("power", t5_power_init());       /* after storage and display: settings, backlight */
     START("battery", t5_battery_init());
     START("net", t5_net_init());           /* background: powers the C6 and connects */
+    START("ports", t5_ports_init());
+    /* The UI after power (suspend hooks) and touch (input); the app runtime
+     * last, since it may restore the last app or run a scheduled alarm. */
+    if (t5_display_ready()) {
+        START("ui", t5_ui_init());
+        START("apps", t5_apps_init());     /* shows the launcher, then the backlight comes on */
+        if (!t5_ui_ready() || !t5_apps_ready()) {
+            t5_display_release_hold();     /* no UI: light the panel for console tools */
+        }
+    }
 
     ESP_ERROR_CHECK(t5_diag_start());
     ESP_LOGI(TAG, "boot complete");

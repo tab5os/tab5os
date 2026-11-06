@@ -85,9 +85,11 @@
 #define T5_PIN_PWR_KEY          35      /* strap, power key, shared with PMS150G. Keep its pad config in sleep */
 #define T5_PIN_C6_WAKE          14      /* C6 IO2 -> P4, bench check 12 */
 
-/* ---- External ports [docs], [sch] for ext and stamp ---------------------- */
-#define T5_PIN_GROVE_A          53
-#define T5_PIN_GROVE_B          54
+/* ---- External ports [docs], [sch] for ext and stamp ----------------------
+ * Only t5_ports maps these to named ports and modes (ports_table.c).
+ */
+#define T5_PIN_GROVE_A          53      /* white, I2C SDA (M5Unified Port A) [docs] */
+#define T5_PIN_GROVE_B          54      /* yellow, I2C SCL                   [docs] */
 #define T5_PIN_RS485_TX         20
 #define T5_PIN_RS485_RX         21
 #define T5_PIN_RS485_DIR        34
@@ -100,3 +102,22 @@
 #define T5_PIN_MBUS_DEBUG_TX    6
 #define T5_PIN_STAMP_CS         33
 #define T5_PIN_STAMP_IO         46
+
+/* M5-Bus free GPIOs (mbus.gpio) [docs]. G35 is T5_PIN_PWR_KEY: input only */
+#define T5_PIN_MBUS_G2          2
+#define T5_PIN_MBUS_G3          3
+#define T5_PIN_MBUS_G4          4
+#define T5_PIN_MBUS_G16         16      /* ADC1 ch0 */
+#define T5_PIN_MBUS_G17         17      /* ADC1 ch1 */
+#define T5_PIN_MBUS_G35         T5_PIN_PWR_KEY
+#define T5_PIN_MBUS_G45         45
+#define T5_PIN_MBUS_G47         47
+#define T5_PIN_MBUS_G48         48
+#define T5_PIN_MBUS_G51         51      /* ADC2 ch2 */
+#define T5_PIN_MBUS_G52         52      /* ADC2 ch3 */
+
+/* ext 2.54 mm 10-pin header [sch], unmetered (bench check 10) */
+#define T5_PIN_EXT_G0           0
+#define T5_PIN_EXT_G1           1
+#define T5_PIN_EXT_G49          49      /* ADC2 ch0 */
+#define T5_PIN_EXT_G50          50      /* ADC2 ch1 */

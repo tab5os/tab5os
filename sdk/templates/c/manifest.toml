@@ -1,0 +1,9 @@
+id = "com.example.hello"
+name = "Hello"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+orientation = "any"
+
+[permissions]

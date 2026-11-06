@@ -250,6 +250,36 @@ Unit A on USB (pack full, 8.38 V). Battery-only measurements are still to do (se
 | Device tests | `t5 device-test`: 18 tests, 0 failures (13 Phase 1, plus INA226, rails, RTC RAM, wake reason, C6 link and scan) |
 | Image size | `tab5os.bin` 1.22 MB (rev1) and 1.23 MB (rev3), with Wi-Fi, lwIP and NimBLE, against a 3.6 MB budget |
 
+## Phase 4 results — 2026-11-05
+
+First boot of the LVGL pipeline on Unit A (`rev1`): the launcher draws in landscape (1280 × 720) through the PPA into three framebuffers. Image size 3.05 MB (rev1) and 3.06 MB (rev3) against a 3.6 MB budget, after the baked shadows went to A8 with fewer variants (from 5.1 MB).
+
+| Check | Result |
+| --- | --- |
+| Rendering gate, scroll, landscape (`ui gate scroll 5`) | **FAIL: 29–35 fps** (target 57). LVGL render 26.6 ms per frame, PPA rotate and copy 17.1 ms per frame (about 23 MB/s, far below what the PPA should do) |
+| Transition and dialog modes, portrait | Not run yet |
+| Rotation in four directions, touch mapping, IMU axes | Not checked yet (needs eyes on the screen) |
+
+**Next:** the copy path first (blocking per-rectangle PPA calls, burst length, cache handling), then rendering (draw with two cores, PPA fills). The plan's rule stands: no Phase 6 until the gate passes.
+
+## Phase 5 results — 2026-11-05
+
+Test apps built with the SDK (`t5 apps`), downloaded and installed with `app fetch` over Wi-Fi, which runs the install-time ABI check on each.
+
+| Exit criterion | Result |
+| --- | --- |
+| Leaky app opened and closed 500 times, heap, claims and locks back to baseline every time | **PASS**: `app stress com.t5.test.leaky 500`, 218 s, 0 cycles off baseline, worst free-heap drift 900 bytes (threshold 4 KB). Each cycle Leaky leaks 92 KB in 34 blocks, claims grove (I2C), holds ext5v and a CPU wake lock, starts two tasks (one that never stops), two LVGL timers, an animation, a top-layer dialog, an event subscription, an open file, a mutex and a semaphore; exit releases 12 handles and the heap |
+| A deliberately crashing app triggers the crash guard | **PASS**: two crashes in a row, each attributed to the app from RTC memory, core dump saved to `/data/sys/dumps/com.t5.test.crasher.elf` (20 KB), boot back to the launcher, then "auto-launch blocked" |
+| An app built against API 1 still loads after unrelated firmware changes | **PASS**: apps installed on the first Phase 5 image kept loading across five later rebuilds (console, UI and runtime changes) without reinstalling |
+| UI watchdog (5.12) | **Works**: Hang showed "App not responding" after 2.1 s; Wait hid it and it came back 5 s later; Close app restarted to the launcher and recorded "not responding" (exercised from the touch screen by hand) |
+
+### Problems found and fixed
+
+- **A use-after-free in `t5_ui_sync()`.** On a timeout the queued call still ran later, with the caller's argument (often on its stack). It now cancels the queued call under the UI lock. This is the likely cause of a `realloc() pointer is outside heap areas` assert seen once during an early stress run; the crash guard recorded it against Leaky (`/data/sys/dumps/com.t5.test.leaky.elf`), and it hasn't recurred in 730 cycles since.
+- **Session restore relaunched an app that had just hung or crashed.** After a watchdog restart the device reopened Hang and hung again, until the two-in-a-row block. An app that was running when the device reset is now never restored on the next boot.
+- **A crash showed blue, then a test pattern, then flashing cyan before the launcher** (seen by hand). The colours are the panel underrunning: the panic handler writes the core dump to flash, and at boot the crash guard copied and erased it, both while the display DMA was running. Now the panic handler turns the backlight off first (`--wrap=esp_panic_handler`, plus a shutdown handler for `esp_restart`), the crash check runs before the display starts, the framebuffers start black, and the backlight stays off until the launcher's first frame. The Phase 1 boot test pattern is gone.
+- **Launching an app with the screen off timed out.** The UI doesn't run in Screen off and Sleep; launching now counts as user activity and wakes it. `app stress` holds a screen wake lock for the same reason.
+
 ## Still to answer
 
 | Item | Needs | Status |
@@ -263,7 +293,8 @@ Unit A on USB (pack full, 8.38 V). Battery-only measurements are still to do (se
 | Soft-off wake by button and RTC alarm | Battery only, a person | Implemented; the alarm path arms an RTC interrupt, so it needs a person ready to press the button |
 | C6 reset to connected under 5 s every time | Board time | The slow cases spend their time in association and DHCP; look at the AP side, or a static lease |
 | C6 update round trip with forced rollback | Permission to update the C6 | The factory C6 bootloader's rollback support is unknown. `t5 c6-stage` then `net update` when agreed |
-| 0.11 connector pins | Meter | Deferred to Phase 5 (ports broker) |
+| 0.11 connector pins | Meter | The ports broker exists (`port`); ext and stamp pin roles still need a meter |
+| Phase 4 rendering gate | Board time | Fails at 29–35 fps scrolling; see Phase 4 results |
 | Rail switch effects (USB-A 5V, ext 5V, speaker, Wi-Fi power) | A load on each rail | Deferred to Phase 2 (rails) |
 | 1.10 full 1 h stress | Board time | 48 min before the fix (data and bus clean) + 10 min after it with 0 errors of any kind. A full uninterrupted hour is optional |
 | 1.10 SDA short during stress | A probe and a person | Not done |

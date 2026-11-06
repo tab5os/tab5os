@@ -1,0 +1,10 @@
+# Test apps for the Phase 5 exit criteria. Build: tools/t5/t5 apps
+cmake_minimum_required(VERSION 3.22)
+set(T5_SDK ${CMAKE_CURRENT_LIST_DIR}/../../sdk)
+set(CMAKE_TOOLCHAIN_FILE ${T5_SDK}/cmake/toolchain-t5.cmake)
+project(t5_test_apps C)
+include(${T5_SDK}/cmake/t5_app.cmake)
+t5_app(leaky SRCS leaky/main.c MANIFEST leaky/manifest.toml)
+t5_app(crasher SRCS crasher/main.c MANIFEST crasher/manifest.toml)
+t5_app(hang SRCS hang/main.c MANIFEST hang/manifest.toml)
+t5_app(hello SRCS ../../sdk/templates/c/main.c MANIFEST ../../sdk/templates/c/manifest.toml)

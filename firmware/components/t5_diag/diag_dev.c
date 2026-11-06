@@ -5,6 +5,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
+#include "soc/gpio_struct.h"
+#include "t5_pins/pins.h"
+#include "soc/gpio_sig_map.h"
+#include "driver/gpio.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -315,9 +319,13 @@ static int cmd_disp(int argc, char **argv)
 {
     uint32_t v, r, g, b;
     if (argc == 1) {
-        printf("panel %s, %s, brightness %d%%, %s\n", t5_display_panel_name(t5_display_panel()),
-               t5_display_ready() ? "ready" : "NOT READY", t5_display_brightness(),
-               t5_display_asleep() ? "asleep" : "awake");
+        printf("panel %s, %s, brightness %d%% (applied %d%%), %s, showing fb %d, %u frames scanned\n",
+               t5_display_panel_name(t5_display_panel()), t5_display_ready() ? "ready" : "NOT READY",
+               t5_display_brightness(), t5_display_effective_brightness(),
+               t5_display_asleep() ? "asleep" : "awake", t5_display_scanout(), (unsigned)t5_display_frames());
+        printf("backlight pin G%d: output signal %u (LEDC is %u, plain GPIO is %u), level %d\n", T5_PIN_LCD_BACKLIGHT,
+               (unsigned)GPIO.func_out_sel_cfg[T5_PIN_LCD_BACKLIGHT].out_sel, (unsigned)LEDC_LS_SIG_OUT_PAD_OUT0_IDX,
+               (unsigned)SIG_GPIO_OUT_IDX, gpio_get_level(T5_PIN_LCD_BACKLIGHT));
         return 0;
     }
     if (!strcmp(argv[1], "bl") && argc >= 3 && diag_parse_u32(argv[2], 0, 100, &v)) {
@@ -344,7 +352,6 @@ static int cmd_disp(int argc, char **argv)
             return 0;
         }
     }
-    if (!strcmp(argv[1], "pattern")) return t5_display_test_pattern() != T5_OK;
     if (!strcmp(argv[1], "sleep")) { printf("%s\n", t5_err_str(t5_display_sleep())); return 0; }
     if (!strcmp(argv[1], "wake")) { printf("%s\n", t5_err_str(t5_display_wake())); return 0; }
     if (!strcmp(argv[1], "ids")) {
@@ -357,7 +364,7 @@ static int cmd_disp(int argc, char **argv)
         diag_parse_u32(argv[3], 0, 255, &g) && diag_parse_u32(argv[4], 0, 255, &b)) {
         return t5_display_fill_rect(0, 0, T5_DISPLAY_W, T5_DISPLAY_H, t5_rgb565(r, g, b)) != T5_OK;
     }
-    printf("usage: disp | disp bl <0-100> | disp blfreq <hz> | disp timing <pclk> <vfp>|reset | disp pattern | disp fill <r> <g> <b> | disp sleep | disp wake | disp ids\n");
+    printf("usage: disp | disp bl <0-100> | disp blfreq <hz> | disp timing <pclk> <vfp>|reset | disp fill <r> <g> <b> | disp sleep | disp wake | disp ids\n");
     return 1;
 }
 
@@ -415,7 +422,7 @@ void diag_register_dev(void)
         { .command = "rtc", .help = "RTC and wall time", .hint = "| set | alarm | timer | clear", .func = cmd_rtc },
         { .command = "imu", .help = "BMI270 accelerometer", .hint = "| watch <s> | motion <mg>|off", .func = cmd_imu },
         { .command = "fs", .help = "/data and /sd", .hint = "df | ls | stress | verify | eject | rescan | sdbench", .func = cmd_fs },
-        { .command = "disp", .help = "Display and backlight", .hint = "| bl | pattern | fill | sleep | wake | ids", .func = cmd_disp },
+        { .command = "disp", .help = "Display and backlight", .hint = "| bl | fill | sleep | wake | ids", .func = cmd_disp },
         { .command = "touch", .help = "Touch controller", .hint = "| watch <s> | dots on|off", .func = cmd_touch },
     };
     for (size_t i = 0; i < sizeof cmds / sizeof cmds[0]; i++) {

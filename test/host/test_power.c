@@ -285,6 +285,7 @@ static void start_power(uint8_t rtc_flags)
     mock_expanders_start();
     s_rtc = mock_rtc_start(rtc_flags);
     t5_display_init();
+    t5_display_release_hold();            /* as the UI does after its first frame */
     TEST_ASSERT_TRUE(t5_display_ready());
     TEST_ASSERT_EQUAL(T5_OK, t5_power_init());
 }

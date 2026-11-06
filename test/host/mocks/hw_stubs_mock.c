@@ -30,14 +30,19 @@ t5_err_t t5_storage_hw_sd_info(t5_sd_info_t *out) { memset(out, 0, sizeof *out);
 /* display */
 int mock_backlight = -1;
 bool mock_panel_asleep;
-static uint16_t *s_fb;
-t5_err_t t5_display_hw_init(t5_panel_t panel, uint16_t **fb_out)
+static uint16_t *s_fbs[T5_DISPLAY_FBS];
+t5_err_t t5_display_hw_init(t5_panel_t panel, uint16_t *fbs[T5_DISPLAY_FBS])
 {
     (void)panel;
-    if (!s_fb) s_fb = calloc((size_t)T5_DISPLAY_W * T5_DISPLAY_H, 2);
-    *fb_out = s_fb;
-    return s_fb ? T5_OK : T5_ERR_NO_MEM;
+    for (int i = 0; i < T5_DISPLAY_FBS; i++) {
+        if (!s_fbs[i]) s_fbs[i] = calloc((size_t)T5_DISPLAY_W * T5_DISPLAY_H, 2);
+        if (!s_fbs[i]) return T5_ERR_NO_MEM;
+        fbs[i] = s_fbs[i];
+    }
+    return T5_OK;
 }
+uint16_t *mock_display_presented;
+t5_err_t t5_display_hw_present(uint16_t *fb, bool cache_sync) { (void)cache_sync; mock_display_presented = fb; return T5_OK; }
 t5_err_t t5_display_hw_backlight(int percent) { mock_backlight = percent; return T5_OK; }
 t5_err_t t5_display_hw_backlight_freq(uint32_t hz) { (void)hz; return T5_OK; }
 t5_err_t t5_display_hw_sleep(bool sleep) { mock_panel_asleep = sleep; return T5_OK; }

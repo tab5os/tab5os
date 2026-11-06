@@ -45,6 +45,9 @@ esp_err_t t5_diag_start(void)
     diag_register_elf();
     diag_register_power();
     diag_register_net();
+    diag_register_ports();
+    diag_register_ui();
+    diag_register_app();
 
     return esp_console_start_repl(repl);
 }

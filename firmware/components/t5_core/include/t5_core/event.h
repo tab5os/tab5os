@@ -67,6 +67,21 @@ typedef enum {
     T5_EV_BLE_SCAN_DONE,
     T5_EV_BLE_CONNECTED,
     T5_EV_BLE_DISCONNECTED,
+
+    /* UI (payload: t5_ev_ui_t) */
+    T5_EV_UI_ROTATE = 900,          /* the screen orientation changed */
+    T5_EV_UI_STALL,                 /* the UI task missed its watchdog (payload: none) */
+
+    /* Apps (payload: t5_ev_app_t) */
+    T5_EV_APP_STARTED = 1000,
+    T5_EV_APP_STOPPED,
+    T5_EV_APP_CRASHED,              /* found at boot: the app was running when the device crashed */
+    T5_EV_APP_INSTALLED,
+    T5_EV_APP_REMOVED,
+
+    /* Ports (payload: t5_ev_port_t) */
+    T5_EV_PORT_CLAIMED = 1100,
+    T5_EV_PORT_RELEASED,
 } t5_event_id_t;
 
 typedef struct {
@@ -95,6 +110,21 @@ typedef struct {
     uint8_t count;        /* scan results */
     uint8_t ip[4];
 } t5_ev_net_t;
+
+typedef struct {
+    uint8_t rotation;     /* t5_rotation_t: 0, 90, 180, 270 degrees as 0..3 */
+    uint16_t w, h;        /* logical resolution after the change */
+} t5_ev_ui_t;
+
+typedef struct {
+    char id[28];          /* app id, truncated */
+    int32_t err;          /* exit or crash code */
+} t5_ev_app_t;
+
+typedef struct {
+    char port[16];        /* port name */
+    char owner[16];       /* owner id, truncated */
+} t5_ev_port_t;
 
 #define T5_EVENT_MAX_DATA 32
 

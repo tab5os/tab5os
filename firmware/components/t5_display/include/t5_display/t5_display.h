@@ -2,8 +2,11 @@
  * Display service: panel variant probe, MIPI-DSI bring-up, backlight on G22,
  * panel sleep and wake. The panel is natively 720x1280 portrait, RGB565.
  *
- * Phase 1 renders straight into one DPI framebuffer (test pattern, touch
- * dots). Phase 4.2 replaces that with triple buffering, PPA rotation and LVGL.
+ * Three DPI framebuffers (plan 4.2), cleared to black at init. The backlight
+ * stays off until t5_display_release_hold(): the UI calls it once its first
+ * frame is on the panel, so boot never shows half-drawn screens. The UI
+ * pipeline (t5_ui) then renders into a free buffer and presents it; the
+ * panel switches buffers at the end of a frame, so nothing tears.
  */
 #pragma once
 
@@ -38,6 +41,9 @@ t5_panel_t t5_display_panel(void);
 
 t5_err_t t5_display_init(void);
 bool t5_display_ready(void);
+/* Let the backlight come on (it is held off from init until something
+ * real has been drawn). */
+t5_err_t t5_display_release_hold(void);
 
 /* 0..100. Kept across sleep. */
 t5_err_t t5_display_set_brightness(int percent);
@@ -62,13 +68,26 @@ t5_err_t t5_display_sleep(void);
 t5_err_t t5_display_wake(void);
 bool t5_display_asleep(void);
 
-/* The DPI framebuffer, 720x1280 RGB565, in PSRAM. */
+#define T5_DISPLAY_FBS 3
+
+/* The framebuffer on screen (or queued for the next frame), 720x1280 RGB565, PSRAM. */
 uint16_t *t5_display_fb(void);
+/* Framebuffer i (0..T5_DISPLAY_FBS-1), NULL before init. */
+uint16_t *t5_display_fb_n(int i);
+/* Show framebuffer i from the next frame on. Writes back the CPU cache for
+ * the whole buffer only if cache_sync (a PPA/DMA-written buffer needs none). */
+t5_err_t t5_display_present(int i, bool cache_sync);
+/* Index of the buffer being scanned out now, and of the one queued next
+ * (equal when nothing is queued). Updated from the frame-done interrupt. */
+int t5_display_scanout(void);
+int t5_display_queued(void);
+/* Called from the frame-done interrupt (ISR context: keep it short). */
+typedef void (*t5_display_frame_cb_t)(void *arg);
+void t5_display_set_frame_cb(t5_display_frame_cb_t cb, void *arg);
+uint32_t t5_display_frames(void);
 /* After writing to the framebuffer: write back the cache for rows y0..y1-1. */
 t5_err_t t5_display_flush_rows(int y0, int y1);
 
-/* Draw a test pattern: colour bars, grey ramp, 40 px grid, corner markers. */
-t5_err_t t5_display_test_pattern(void);
 /* Fill a rectangle and flush it. */
 t5_err_t t5_display_fill_rect(int x, int y, int w, int h, uint16_t rgb565);
 

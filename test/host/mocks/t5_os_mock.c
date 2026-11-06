@@ -26,6 +26,9 @@ void t5_delay_ms(uint32_t ms) { mock_time_advance_ms(ms); }
 void *t5_app_ctx_get(void) { return s_ctx; }
 void t5_app_ctx_set(void *ctx) { s_ctx = ctx; }
 void t5_core_set_task_hook(t5_task_hook_t hook) { s_hook = hook; }
+static t5_task_hook_t s_exit_hook;
+void t5_core_set_task_exit_hook(t5_task_hook_t hook) { s_exit_hook = hook; }
+void mock_task_exit(t5_task_t t) { if (s_exit_hook) s_exit_hook(t, s_ctx); }
 
 t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
                         int prio, int core, t5_task_t *out)

@@ -40,6 +40,15 @@ const char *t5_event_name(t5_event_id_t id)
     case T5_EV_BLE_SCAN_DONE: return "ble.scan_done";
     case T5_EV_BLE_CONNECTED: return "ble.connected";
     case T5_EV_BLE_DISCONNECTED: return "ble.disconnected";
+    case T5_EV_UI_ROTATE: return "ui.rotate";
+    case T5_EV_UI_STALL: return "ui.stall";
+    case T5_EV_APP_STARTED: return "app.started";
+    case T5_EV_APP_STOPPED: return "app.stopped";
+    case T5_EV_APP_CRASHED: return "app.crashed";
+    case T5_EV_APP_INSTALLED: return "app.installed";
+    case T5_EV_APP_REMOVED: return "app.removed";
+    case T5_EV_PORT_CLAIMED: return "port.claimed";
+    case T5_EV_PORT_RELEASED: return "port.released";
     }
     return "unknown";
 }

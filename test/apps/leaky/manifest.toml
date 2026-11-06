@@ -1,0 +1,9 @@
+id = "com.t5.test.leaky"
+name = "Leaky"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+
+[permissions]
+ports = ["grove"]

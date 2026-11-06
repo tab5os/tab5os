@@ -219,7 +219,6 @@ TEST_CASE("display answers, sleeps and wakes", "[display]")
     uint8_t id[3], pm;
     TEST_ASSERT_EQUAL(T5_OK, t5_display_read_ids(id, &pm));
     TEST_ASSERT_EQUAL_HEX8(0x9C, pm);   /* booster, sleep out, display on */
-    TEST_ASSERT_EQUAL(T5_OK, t5_display_test_pattern());
     TEST_ASSERT_EQUAL(T5_OK, t5_display_sleep());
     TEST_ASSERT_EQUAL(T5_OK, t5_display_read_ids(id, &pm));
     TEST_ASSERT_EQUAL_HEX8(0, pm & 0x10);   /* sleep-in */

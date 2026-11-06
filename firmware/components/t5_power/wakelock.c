@@ -2,6 +2,7 @@
 #include <string.h>
 #include "t5_core/log.h"
 #include "t5_core/os.h"
+#include "t5_core/res.h"
 #include "priv.h"
 
 static const char *TAG = "t5.lock";
@@ -36,6 +37,11 @@ const char *t5_lock_type_name(t5_lock_type_t t)
     }
 }
 
+static void release_lock(void *l)
+{
+    t5_wakelock_release(l);
+}
+
 t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owner, uint32_t timeout_ms)
 {
     if (type >= T5_LOCK_TYPE_COUNT) {
@@ -57,6 +63,7 @@ t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owne
         T5_LOGE(TAG, "table full, %s lock for %s refused", t5_lock_type_name(type), owner ? owner : "?");
         return NULL;
     }
+    t5_res_add(T5_RES_LOCK, l, release_lock);
     /* A new lock can only make the state shallower: re-arbitrate now. */
     t5_power_hw_notify(false);
     return l;
@@ -73,8 +80,16 @@ void t5_wakelock_release(t5_wakelock_t *l)
         return;
     }
     lock();
+    if (!l->used) {
+        /* Already released (its timeout ran out): a second release must not
+         * free a slot someone else now holds. */
+        t5_mutex_unlock(s_mtx);
+        return;
+    }
+    void *app = l->app;
     l->used = false;
     t5_mutex_unlock(s_mtx);
+    t5_res_remove_app(app, l);
     t5_power_hw_notify(false);
 }
 
@@ -102,16 +117,21 @@ void t5_wakelock_counts(uint16_t out[T5_LOCK_TYPE_COUNT])
 int t5_wakelock_expire(uint32_t now_ms)
 {
     int n = 0;
+    struct { void *app, *lock; } gone[T5_WAKELOCK_MAX];
     lock();
     for (int i = 0; i < T5_WAKELOCK_MAX; i++) {
         struct t5_wakelock *l = &s_locks[i];
         if (l->used && l->timeout_ms && now_ms - l->t0_ms >= l->timeout_ms) {
             T5_LOGD(TAG, "%s lock for %s timed out", t5_lock_type_name((t5_lock_type_t)l->type), l->owner);
             l->used = false;
+            gone[n].app = l->app;
+            gone[n].lock = l;
             n++;
         }
     }
     t5_mutex_unlock(s_mtx);
+    /* Outside our lock: the tracker takes its own. */
+    for (int i = 0; i < n; i++) t5_res_remove_app(gone[i].app, gone[i].lock);
     return n;
 }
 

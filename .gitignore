@@ -1,16 +1,41 @@
+# Program-generated files. Generated sources that the build reads (md/assets,
+# test/host/fixtures/*.h, sdk/abi/*.sym, tools/assets/preview/) are committed
+# on purpose: regenerate them with their tools and commit the result.
+
+# ESP-IDF builds and configs (sdkconfig is generated from sdkconfig.defaults*)
 build/
 build-*/
 sdkconfig
 sdkconfig.rev1
 sdkconfig.rev3
 sdkconfig.old
-managed_components/
-test/host/build/
-sim/build/
-.DS_Store
-__pycache__/
-*.pyc
-test/device/build*/
 test/device/sdkconfig.*
 !test/device/sdkconfig.defaults
 managed_components/
+
+# Host tests, simulator, SDK apps
+test/host/build/
+sim/build/
+test/apps/build/
+/shots/
+*.t5app
+*.elf
+*.map
+
+# Asset tool downloads
+tools/assets/.cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+.cache/
+.clangd
+compile_commands.json

@@ -126,12 +126,44 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.23.1
+  lvgl/lvgl:
+    component_hash: d5e723db3a3feca71e34e333a6598b7624e3822577d374e1d44f0e18374952e1
+    dependencies:
+    - name: espressif/freetype
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_FREETYPE} == True
+      version: ^2.14.3
+    - name: espressif/libjpeg-turbo
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_LIBJPEG_TURBO} == True
+      version: ^3.1.1
+    - name: espressif/libpng
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_LIBPNG} == True
+      version: ^1.6.58
+    - name: espressif/lz4
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: idf_version >=5.5 && $CONFIG{LV_USE_LZ4} == True && $CONFIG{LV_USE_LZ4_INTERNAL} == False
+      version: ^1.10.0
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 9.6.0
 direct_dependencies:
 - espressif/elf_loader
 - espressif/esp_hosted
 - espressif/esp_lcd_ili9881c
 - espressif/esp_lcd_st7123
 - joltwallet/littlefs
-manifest_hash: 576735e9de60a144922c97935d388c0c1f43782dc1f831e349878357c9a2707f
+- lvgl/lvgl
+manifest_hash: 0a77c64f1a437a53ed1c0a8e567bb69ea4ae4e63165375d8550290c3970df3b6
 target: esp32p4
 version: 3.0.0

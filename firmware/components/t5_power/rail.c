@@ -2,6 +2,7 @@
 #include <string.h>
 #include "t5_core/log.h"
 #include "t5_core/os.h"
+#include "t5_core/res.h"
 #include "t5_power/rail.h"
 #include "priv.h"
 
@@ -73,6 +74,11 @@ static t5_err_t apply(t5_rail_t r)
     return T5_OK;
 }
 
+static void release_hold(void *h)
+{
+    t5_rail_release(h);
+}
+
 t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out)
 {
     if (rail >= T5_RAIL_COUNT || !out) {
@@ -99,6 +105,7 @@ t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_r
     }
     unlock();
     *out = h;
+    if (h) t5_res_add(T5_RES_RAIL, h, release_hold);
     return err;
 }
 
@@ -109,9 +116,11 @@ t5_err_t t5_rail_release(t5_rail_hold_t *h)
     }
     lock();
     t5_rail_t r = (t5_rail_t)h->rail;
+    void *app = h->app;
     h->used = false;
     t5_err_t err = apply(r);
     unlock();
+    t5_res_remove_app(app, h);
     return err;
 }
 

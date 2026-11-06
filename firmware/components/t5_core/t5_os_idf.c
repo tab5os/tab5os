@@ -56,11 +56,16 @@ void t5_app_ctx_set(void *ctx)
     vTaskSetThreadLocalStoragePointer(NULL, T5_TLS_APP_CTX, ctx);
 }
 
-static t5_task_hook_t s_hook;
+static t5_task_hook_t s_hook, s_exit_hook;
 
 void t5_core_set_task_hook(t5_task_hook_t hook)
 {
     s_hook = hook;
+}
+
+void t5_core_set_task_exit_hook(t5_task_hook_t hook)
+{
+    s_exit_hook = hook;
 }
 
 typedef struct {
@@ -75,6 +80,7 @@ static void trampoline(void *p)
     free(p);
     t5_app_ctx_set(t.ctx);
     t.fn(t.arg);
+    if (s_exit_hook) s_exit_hook((t5_task_t)xTaskGetCurrentTaskHandle(), t5_app_ctx_get());
     vTaskDelete(NULL);
 }
 

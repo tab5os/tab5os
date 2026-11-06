@@ -23,7 +23,7 @@ The design leaves a few things open that implementation can't skip. The plan use
 | The roadmap diagram didn't come through as text | The phases below replace it |
 | LVGL threading rules for apps | All LVGL calls run on the UI task. App callbacks run there too. App-created tasks must use `t5_ui_async()` or `t5_ui_lock()`/`t5_ui_unlock()` |
 | How the OS tracks a native app's heap, timers and LVGL objects | The ELF symbol resolver binds `malloc`/`free`/`lv_timer_create`/`lv_anim_start`/`xTaskCreate` to tracking wrappers. All app UI sits under the app's root screen, so deleting that root frees every object |
-| Which app is "current" inside a service call | A FreeRTOS thread-local pointer holds the app context. It's set on the UI task around callbacks and inherited by `t5_task_create` |
+| Which app is "current" inside a service call | A FreeRTOS thread-local pointer holds the app context, inherited by `t5_task_create`. While an app is in the foreground the UI task carries its context the whole time, so timers and event handlers are charged to it too. System UI code on the UI task brackets its own acquisitions with `t5_sys_enter()`/`t5_sys_leave()` |
 | A native app that hangs the UI task | A UI-task watchdog (2 s) shows "App not responding". Native code can't be stopped safely, so the only choices are Wait or a restart to the launcher, which the crash guard records |
 | How the system talks to itself | One `esp_event` loop for system events (power, battery, net, ports, USB, rotation), plus direct mutex-protected calls into service APIs |
 | The camera's I2C address is missing from the reserved list | **Answered:** 0x36, once `CAM_RST` is released. Also reserved: 0x28, a second ST7123 address |
@@ -245,6 +245,8 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 | 4.8 | **Rendering gate** | The test screen from the design: app bar, 100-row list, card grid, FAB, open dialog. Measured on the device | M |
 | 4.9 | Auto-rotate | Orientation filter (flat detection, 500 ms hold, hysteresis) as host-tested logic, lock in quick settings that survives reboot, touch remapping, `on_rotate` events | M |
 
+**Status (2026-11-05):** all items implemented (`t5_ui`, `md`, `sim/`, `tools/assets/`, `tools/lint_px.py`). The simulator renders the gate in both orientations, and CI compares its screenshots. On Unit A the pipeline runs, but **the gate fails: 29–35 fps scrolling** against 57 (bench-results, "Phase 4"). Not yet checked: rotation in all four directions, the IMU axis mapping and the touch-to-ripple time. The ripple clips to the widget's box, not its 4 dp corners; round widgets ripple from their centre instead.
+
 **Dark first.** Everything in Phases 4 and 6 is designed and tuned in the dark theme. In dark, elevation is mostly shown with lighter surface overlays, which are plain fills on the PPA path, so baked shadows matter less and the gate is easier to pass. Check the dark overlays for RGB565 banding early.
 
 **The gate (4.8):** 60 fps while scrolling lists, 30 fps during full-screen transitions, touch to ripple within one frame, in both landscape and portrait. If it fails, try in this order: more nine-slices and fewer live shadows; square corners on large surfaces; a smaller list-row cache; a lower panel refresh rate with steady frame pacing. Don't start Phase 6 until this passes.
@@ -269,6 +271,8 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 | 5.10 | Lifecycle | `on_create`, `on_resume`, `on_suspend`, `on_destroy`, `on_rotate`, plus headless `on_alarm` with `max_seconds` enforced | M |
 | 5.11 | Crash guard | Running app ID kept in RTC no-init memory, checked against the reset reason at boot, back to the launcher, auto-launch blocked after two crashes, core dump kept and linked to the app | M |
 | 5.12 | UI watchdog | 2 s UI-task watchdog with the "App not responding" dialog | S |
+
+**Status (2026-11-05):** all items implemented (`t5_app`, `t5_pkg`, `t5_ports`, `sdk/`, `tools/abi/`, test apps in `test/apps/`, guide in [sdk.md](sdk.md)). Host tests cover the tracker, crash guard, ELF import scanner, ABI resolution, packages, manifests, the ports broker and Modbus framing. API level 1 exports 2,142 symbols (1,903 of them LVGL). **Complete: exit criteria met on Unit A** (bench-results, "Phase 5"): 500 open/close cycles back to baseline, the crash guard, and apps surviving firmware rebuilds. Only `rev1` (v1.x silicon) is targeted; `rev3` is not tested. Not yet run: real Grove, RS-485 and profile hardware for the ports broker.
 
 **Exit criteria:** a test app that leaks memory, claims `grove`, holds a wake lock and creates tasks and timers is opened and closed 500 times, and heap, claims and locks return to baseline every time. A test app that crashes on purpose triggers the crash guard. An app built against API 1 still loads after unrelated firmware changes.
 
