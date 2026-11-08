@@ -11,7 +11,7 @@ void app_main(void)
 {
     /* Bring up the shared pieces once; individual tests start their own service. */
     t5_event_init();
-    t5_i2c_init();
+    T5_ASSERT(t5_i2c_init() == T5_OK);   /* outside a test: Unity can't catch a failure here */
     t5_xpin_init();
     t5_xpin_apply_boot_defaults();
     vTaskDelay(pdMS_TO_TICKS(200));

@@ -9,6 +9,58 @@
 #include <string.h>
 #include "md/md.h"
 #include "md_priv.h"
+#include "md_zasset.h"
+#include "md/md_fonts.h"
+
+/* LVGL's keyboard labels its special keys with LVGL symbols (FontAwesome
+ * codepoints), which Roboto doesn't have: they drew as empty boxes. Its
+ * actions match those labels, so the labels stay; the keys' font falls back
+ * to this one, which serves the symbols from the Material icon font. */
+static uint32_t kb_symbol(uint32_t u)
+{
+    switch (u) {
+    case 0xF55A: return 0xE14A;     /* LV_SYMBOL_BACKSPACE -> backspace */
+    case 0xF8A2: return 0xE31B;     /* LV_SYMBOL_NEW_LINE -> keyboard_return */
+    case 0xF00C: return 0xE5CA;     /* LV_SYMBOL_OK -> check */
+    case 0xF11C: return 0xE31A;     /* LV_SYMBOL_KEYBOARD -> keyboard_hide */
+    case 0xF053: return 0xE5CB;     /* LV_SYMBOL_LEFT -> chevron_left */
+    case 0xF054: return 0xE5CC;     /* LV_SYMBOL_RIGHT -> chevron_right */
+    case 0xF00D: return 0xE5CD;     /* LV_SYMBOL_CLOSE -> close */
+    default: return 0;
+    }
+}
+
+static bool kb_sym_dsc(const lv_font_t *f, lv_font_glyph_dsc_t *d, uint32_t letter, uint32_t next)
+{
+    (void)f; (void)next;
+    uint32_t m = kb_symbol(letter);
+    return m && md_font_icons_36.get_glyph_dsc(&md_font_icons_36, d, m, 0);
+}
+
+static const void *kb_sym_bitmap(lv_font_glyph_dsc_t *g, lv_draw_buf_t *buf)
+{
+    /* LVGL resolved the glyph to this font; the bitmap is the icon font's. */
+    const lv_font_t *was = g->resolved_font;
+    g->resolved_font = &md_font_icons_36;
+    const void *b = md_font_icons_36.get_glyph_bitmap(g, buf);
+    g->resolved_font = was;
+    return b;
+}
+
+static lv_font_t s_kb_sym, s_kb_font;
+
+static const lv_font_t *kb_font(void)
+{
+    if (!s_kb_font.get_glyph_dsc) {
+        s_kb_sym = md_font_icons_36;
+        s_kb_sym.get_glyph_dsc = kb_sym_dsc;
+        s_kb_sym.get_glyph_bitmap = kb_sym_bitmap;
+        s_kb_sym.fallback = NULL;
+        s_kb_font = md_font_roboto_regular_32;
+        s_kb_font.fallback = &s_kb_sym;
+    }
+    return &s_kb_font;
+}
 
 static lv_theme_t *s_theme;
 static lv_display_t *s_disp;
@@ -176,7 +228,9 @@ static void build_styles(void)
     lv_style_set_bg_color(&s.sw_knob, md_color(s_dark ? 0xBDBDBD : 0xFAFAFA));
     lv_style_set_bg_opa(&s.sw_knob, LV_OPA_COVER);
     lv_style_set_radius(&s.sw_knob, LV_RADIUS_CIRCLE);
-    lv_style_set_pad_all(&s.sw_knob, -T5_DP(MD_SWITCH_HANDLE_DP - MD_SWITCH_TRACK_H_DP) / 2);
+    /* LVGL grows the knob by its padding: the 20 dp handle overhangs the
+     * 14 dp track by 3 dp all round. */
+    lv_style_set_pad_all(&s.sw_knob, T5_DP(MD_SWITCH_HANDLE_DP - MD_SWITCH_TRACK_H_DP) / 2);
     lv_style_set_bg_color(&s.sw_knob_on, md_color(c->primary));
 
     /* Checkbox: 18 dp box with a 2 dp border. */
@@ -194,6 +248,8 @@ static void build_styles(void)
     lv_style_set_border_color(&s.cb_box_on, md_color(c->primary));
     lv_style_set_border_opa(&s.cb_box_on, LV_OPA_COVER);
     lv_style_set_text_color(&s.cb_box_on, md_color(c->on_primary));
+    /* The check mark is LV_SYMBOL_OK, which Roboto doesn't have. */
+    lv_style_set_text_font(&s.cb_box, &lv_font_montserrat_28);
 
     /* Filled text field: tinted fill, 1 dp underline, 2 dp primary when focused. */
     lv_style_set_bg_color(&s.ta, md_color(c->on_surface));
@@ -278,6 +334,7 @@ static void build_styles(void)
     lv_style_set_bg_opa(&s.kb_btn, LV_OPA_COVER);
     lv_style_set_radius(&s.kb_btn, T5_DP(MD_SHAPE_SMALL_DP));
     lv_style_set_text_color(&s.kb_btn, md_color(c->on_surface));
+    lv_style_set_text_font(&s.kb_btn, kb_font());
     lv_style_set_border_width(&s.kb_btn, 0);
     lv_style_set_shadow_width(&s.kb_btn, 0);
 
@@ -411,6 +468,7 @@ static void install(void)
 
 void md_init(lv_display_t *disp)
 {
+    md_assets_load();
     s_disp = disp;
     install();
 }

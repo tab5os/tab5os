@@ -58,12 +58,15 @@ t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owne
             break;
         }
     }
+    /* Tracked before the table lock is released: an exiting app's task can't
+     * be stopped while it holds a lock, so it can't be left with an untracked
+     * slot (t5_app quiesce). */
+    if (l) t5_res_add(T5_RES_LOCK, l, release_lock);
     t5_mutex_unlock(s_mtx);
     if (!l) {
         T5_LOGE(TAG, "table full, %s lock for %s refused", t5_lock_type_name(type), owner ? owner : "?");
         return NULL;
     }
-    t5_res_add(T5_RES_LOCK, l, release_lock);
     /* A new lock can only make the state shallower: re-arbitrate now. */
     t5_power_hw_notify(false);
     return l;
@@ -86,10 +89,10 @@ void t5_wakelock_release(t5_wakelock_t *l)
         t5_mutex_unlock(s_mtx);
         return;
     }
-    void *app = l->app;
+    /* Untracked before the slot is free: once free it may be someone else's. */
+    t5_res_remove_app(l->app, l);
     l->used = false;
     t5_mutex_unlock(s_mtx);
-    t5_res_remove_app(app, l);
     t5_power_hw_notify(false);
 }
 
@@ -109,7 +112,9 @@ void t5_wakelock_counts(uint16_t out[T5_LOCK_TYPE_COUNT])
     memset(out, 0, sizeof(uint16_t) * T5_LOCK_TYPE_COUNT);
     lock();
     for (int i = 0; i < T5_WAKELOCK_MAX; i++) {
-        if (s_locks[i].used) out[s_locks[i].type]++;
+        if (!s_locks[i].used) continue;
+        T5_ASSERT(s_locks[i].type < T5_LOCK_TYPE_COUNT);   /* checked at acquire */
+        out[s_locks[i].type]++;
     }
     t5_mutex_unlock(s_mtx);
 }
@@ -117,21 +122,18 @@ void t5_wakelock_counts(uint16_t out[T5_LOCK_TYPE_COUNT])
 int t5_wakelock_expire(uint32_t now_ms)
 {
     int n = 0;
-    struct { void *app, *lock; } gone[T5_WAKELOCK_MAX];
     lock();
     for (int i = 0; i < T5_WAKELOCK_MAX; i++) {
         struct t5_wakelock *l = &s_locks[i];
         if (l->used && l->timeout_ms && now_ms - l->t0_ms >= l->timeout_ms) {
             T5_LOGD(TAG, "%s lock for %s timed out", t5_lock_type_name((t5_lock_type_t)l->type), l->owner);
+            /* Untracked before the slot is free (lock order: ours, then the tracker's). */
+            t5_res_remove_app(l->app, l);
             l->used = false;
-            gone[n].app = l->app;
-            gone[n].lock = l;
             n++;
         }
     }
     t5_mutex_unlock(s_mtx);
-    /* Outside our lock: the tracker takes its own. */
-    for (int i = 0; i < n; i++) t5_res_remove_app(gone[i].app, gone[i].lock);
     return n;
 }
 

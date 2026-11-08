@@ -145,10 +145,10 @@ static void test_rail_failure_counts_and_leaves_no_hold(void)
 static void test_rail_suspend_keeps_marked_rails(void)
 {
     t5_rail_hold_t *u, *e, *w, *bl;
-    t5_rail_acquire(T5_RAIL_USB5V, "kbd", 0, &u);
-    t5_rail_acquire(T5_RAIL_EXT5V, "logger", T5_RAIL_KEEP_IN_SLEEP, &e);
-    t5_rail_acquire(T5_RAIL_WLAN, "net", 0, &w);
-    t5_rail_acquire(T5_RAIL_BACKLIGHT, "power", 0, &bl);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_USB5V, "kbd", 0, &u));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_EXT5V, "logger", T5_RAIL_KEEP_IN_SLEEP, &e));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_WLAN, "net", 0, &w));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_BACKLIGHT, "power", 0, &bl));
     TEST_ASSERT_EQUAL(T5_OK, t5_rail_suspend(false));
     TEST_ASSERT_FALSE(mock_power.rail[T5_RAIL_USB5V]);
     TEST_ASSERT_TRUE(mock_power.rail[T5_RAIL_EXT5V]);
@@ -161,11 +161,11 @@ static void test_rail_suspend_keeps_marked_rails(void)
     /* keep_all (a RAIL wake lock) leaves everything up. */
     TEST_ASSERT_EQUAL(T5_OK, t5_rail_suspend(true));
     TEST_ASSERT_TRUE(mock_power.rail[T5_RAIL_USB5V]);
-    t5_rail_resume();
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_resume());
     /* A rail released while suspended stays off after resume. */
-    t5_rail_suspend(false);
-    t5_rail_release(u);
-    t5_rail_resume();
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_suspend(false));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_release(u));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_resume());
     TEST_ASSERT_FALSE(mock_power.rail[T5_RAIL_USB5V]);
 }
 
@@ -306,7 +306,7 @@ static void test_state_machine_walks_and_resumes(void)
     TEST_ASSERT_EQUAL(80, t5_display_effective_brightness());
     s_order[0] = 0;
     t5_suspend_hook_t h = { "app", T5_SUSPEND_PRIO_APPS, 500, hook_s, hook_r, "A" };
-    t5_power_register_hook(&h);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_power_register_hook(&h));
 
     advance(30000);
     TEST_ASSERT_EQUAL(T5_PWR_DIM, t5_power_state());
@@ -375,9 +375,9 @@ static void test_settings_persist(void)
 {
     mock_i2c_add(0x55, true)->regs[0] = 3;
     start_power(0);
-    t5_power_set_profile(T5_PROFILE_MOUNTED);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_power_set_profile(T5_PROFILE_MOUNTED));
     t5_power_timeouts_t to = { 1000, 2000, 3000, 0 };
-    t5_power_set_timeouts(&to);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_power_set_timeouts(&to));
     TEST_ASSERT_EQUAL(T5_OK, t5_autosave_now());
     t5_power_reset_for_test();
     t5_suspend_reset_for_test();
@@ -434,8 +434,8 @@ static void test_soft_off_arms_alarm_and_next_boot_sees_it(void)
     s_rtc->on_write = rtc_capture;
     memset(s_written_rec, 0, 4);
     t5_time_set(1793880000, T5_TIME_SRC_USER);
-    t5_power_schedule_wake(1793880000 + 600, 0);
-    t5_power_soft_off(T5_OFF_IDLE, false);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_power_schedule_wake(1793880000 + 600, 0));
+    TEST_ASSERT_EQUAL_INT(T5_ERR_FAIL, t5_power_soft_off(T5_OFF_IDLE, false));   /* the mock never cuts power */
     t5_offrec_t r;
     TEST_ASSERT_TRUE(t5_offrec_decode(s_written_rec, &r));
     TEST_ASSERT_EQUAL(T5_OFF_IDLE, r.reason);
@@ -467,13 +467,13 @@ static void test_shutdown_handler_and_emergency(void)
     t5_power_set_shutdown_handler(take_over, NULL);
     s_order[0] = 0;
     t5_suspend_hook_t h = { "app", T5_SUSPEND_PRIO_APPS, 500, hook_s, hook_r, "A" };
-    t5_power_register_hook(&h);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_power_register_hook(&h));
     TEST_ASSERT_EQUAL(T5_OK, t5_power_soft_off(T5_OFF_USER, false));
     TEST_ASSERT_TRUE(s_handler_called);
     TEST_ASSERT_EQUAL_STRING("sArA", s_order);     /* apps saved before charge mode */
     s_handler_called = false;
     s_order[0] = 0;
-    t5_power_soft_off(T5_OFF_BATTERY_CRITICAL, true);
+    TEST_ASSERT_EQUAL_INT(T5_ERR_FAIL, t5_power_soft_off(T5_OFF_BATTERY_CRITICAL, true));   /* the mock never cuts power */
     TEST_ASSERT_FALSE(s_handler_called);           /* emergency skips charge mode... */
     TEST_ASSERT_EQUAL_STRING("", s_order);         /* ...and app callbacks */
 }
@@ -507,7 +507,7 @@ static t5_err_t count_save(void *arg) { (void)arg; s_saves++; return T5_OK; }
 static void test_autosave_period(void)
 {
     s_saves = 0;
-    t5_autosave_register("x", count_save, NULL);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_autosave_register("x", count_save, NULL));
     t5_autosave_poll(1000);
     t5_autosave_poll(30999);
     TEST_ASSERT_EQUAL(0, s_saves);

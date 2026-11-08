@@ -161,7 +161,7 @@ t5_err_t t5_imu_start(void)
         return T5_OK;
     }
     s_status = T5_IMU_STARTING;
-    return t5_task_create("t5_imu_init", init_task, NULL, 4096, 5, 0, NULL);
+    return t5_task_create_lp("t5_imu_init", init_task, NULL, 4096, 5, 0, NULL);
 }
 
 t5_imu_status_t t5_imu_status(void)
@@ -238,7 +238,7 @@ t5_err_t t5_imu_stream(uint32_t hz, t5_imu_cb_t cb, void *arg)
     s_cb = cb;
     s_cb_arg = arg;
     if (hz && !s_stream_task) {
-        T5_RETURN_ON_ERR(t5_task_create("t5_imu", stream_task, NULL, 3072, 4, 0, NULL));
+        T5_RETURN_ON_ERR(t5_task_create_lp("t5_imu", stream_task, NULL, 3072, 4, 0, NULL));
         s_stream_task = true;
     }
     s_stream_hz = hz;

@@ -25,9 +25,9 @@ typedef struct {
 
 /* Open, check the IDs, set 16x averaging and 1.1 ms conversions (~35 ms per
  * result), continuous shunt and bus. */
-t5_err_t t5_ina226_init(void);
+T5_MUST_CHECK t5_err_t t5_ina226_init(void);
 bool t5_ina226_ready(void);
-t5_err_t t5_ina226_read(t5_ina226_sample_t *out);
+T5_MUST_CHECK t5_err_t t5_ina226_read(t5_ina226_sample_t *out);
 
 /* Pure conversions (host-tested). */
 uint16_t t5_ina226_bus_to_mv(uint16_t raw);          /* 1.25 mV/LSB */

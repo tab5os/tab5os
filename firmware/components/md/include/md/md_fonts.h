@@ -13,6 +13,7 @@
  *   md_font_roboto_medium_28     Button (14 dp, uppercase)     28 px  Roboto-Medium
  *   md_font_roboto_regular_24    Caption (12 dp)               24 px  Roboto-Regular
  *   md_font_roboto_medium_24     Overline (12 dp, uppercase)   24 px  Roboto-Medium
+ *   md_font_roboto_mono_24       Code, terminal (12 dp)        24 px  RobotoMono-Regular
  *   md_font_icons_36             Icon 18 dp (dense, status)    36 px  MaterialIcons-Regular
  *   md_font_icons_48             Icon 24 dp (standard)         48 px  MaterialIcons-Regular
  *   md_font_icons_80             Icon 40 dp (launcher)         80 px  MaterialIcons-Regular
@@ -37,6 +38,7 @@ LV_FONT_DECLARE(md_font_roboto_regular_28)
 LV_FONT_DECLARE(md_font_roboto_medium_28)
 LV_FONT_DECLARE(md_font_roboto_regular_24)
 LV_FONT_DECLARE(md_font_roboto_medium_24)
+LV_FONT_DECLARE(md_font_roboto_mono_24)
 LV_FONT_DECLARE(md_font_icons_36)
 LV_FONT_DECLARE(md_font_icons_48)
 LV_FONT_DECLARE(md_font_icons_80)

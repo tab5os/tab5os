@@ -1,0 +1,16 @@
+id = "com.t5.example.logger"
+name = "Logger"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+orientation = "any"
+
+[permissions]
+ports = ["grove"]
+net = true
+background_wake = true
+
+[background]
+entry = "on_alarm"
+max_seconds = 30

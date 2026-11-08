@@ -46,14 +46,17 @@ add_library(t5_host STATIC
     ${FW}/t5_battery/ina226.c
     ${FW}/t5_battery/gauge.c
     ${FW}/t5_battery/policy.c
+    ${FW}/t5_battery/history.c
     ${FW}/t5_battery/battery.c
     ${FW}/t5_net/netcfg.c
     ${FW}/t5_net/c6img.c
     ${FW}/t5_net/ble_util.c
+    ${FW}/t5_net/netproto.c
     ${FW}/t5_pkg/inflate.c
     ${FW}/t5_pkg/zip.c
     ${FW}/t5_pkg/toml.c
     ${FW}/t5_pkg/manifest.c
+    ${FW}/t5_app/fspolicy.c
     ${FW}/t5_pkg/pkg.c
     mocks/power_hw_mock.c
     mocks/chips_mock.c
@@ -86,6 +89,7 @@ target_include_directories(t5_host PUBLIC
     ${FW}/t5_battery/include ${FW}/t5_battery
     ${FW}/t5_net/include ${FW}/t5_net
     ${FW}/t5_pkg/include
+    ${FW}/t5_app/include
     ${FW}/t5_ports/include ${FW}/t5_ports)
 target_include_directories(t5_host PUBLIC ${FW}/t5_ui/include ${FW}/md/include)
 target_link_libraries(t5_host PUBLIC unity m)
@@ -100,7 +104,16 @@ endforeach()
 # Phase 5 runtime logic. Separate from t5_host: it brings its own small ABI
 # table instead of the generated one.
 add_executable(test_app test_app.c
-    ${FW}/t5_app/tracker.c ${FW}/t5_app/crashguard.c ${FW}/t5_app/elfsym.c ${FW}/t5_app/abi.c)
+    ${FW}/t5_app/tracker.c ${FW}/t5_app/crashguard.c ${FW}/t5_app/elfsym.c ${FW}/t5_app/abi.c
+    ${FW}/t5_app/isolate.c)
 target_include_directories(test_app PRIVATE ${FW}/t5_app/include ${FW}/t5_pkg/include ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(test_app PRIVATE t5_host)
 add_test(NAME test_app COMMAND test_app)
+
+# Phase 6 and 7 pure logic: audio DSP, per-app energy, charge history, USB
+# protocol helpers.
+add_executable(test_media test_media.c
+    ${FW}/t5_audio/dsp.c ${FW}/t5_app/energy.c ${FW}/t5_usb/usb_proto.c)
+target_include_directories(test_media PRIVATE ${FW}/t5_audio/include ${FW}/t5_app/include ${FW}/t5_usb)
+target_link_libraries(test_media PRIVATE t5_host)
+add_test(NAME test_media COMMAND test_media)

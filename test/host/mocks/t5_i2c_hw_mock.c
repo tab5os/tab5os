@@ -107,3 +107,5 @@ t5_err_t t5_i2c_hw_recover(void)
 }
 
 void mock_i2c_handles_reset(void) { memset(s_handles, 0, sizeof s_handles); }
+
+void *t5_i2c_hw_bus(void) { return 0; }

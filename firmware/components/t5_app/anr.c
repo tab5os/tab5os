@@ -5,8 +5,10 @@
  * The UI task is the one that's stuck, so LVGL can't draw the dialog. It is
  * rendered ahead of time (when an app starts, with its name) into an RGB565
  * picture, and the watchdog task copies that picture straight into the
- * framebuffers and reads touch itself. Native code can't be stopped safely,
- * so Close app restarts the device to the launcher; the crash guard records
+ * framebuffers and reads touch itself. Close app moves the UI task out of
+ * the app's code (t5_core/fault.h) and closes the app without a restart;
+ * only if the UI task is stuck somewhere it can't be moved from does it
+ * restart the device to the launcher. Either way the crash guard records
  * it as "not responding".
  */
 #include <stdio.h>
@@ -17,6 +19,9 @@
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_app/isolate.h"
+#include "t5_app/wrappers.h"
+#include "apps_hw.h"
 #include "app_priv.h"
 
 static const char *TAG = "t5.anr";
@@ -105,6 +110,42 @@ static bool hit(const lv_area_t *a, int32_t x, int32_t y)
     return x >= a->x1 && x <= a->x2 && y >= a->y1 && y <= a->y2;
 }
 
+/* Memory and CPU checks (isolate.h), on the watchdog's poll. */
+#define MEM_CHECK_MS 500
+#define HOG_CHECK_MS 1000
+
+static void isolation_checks(void)
+{
+    static uint32_t last_mem, last_hog;
+    static t5_iso_mem_t mem;
+    static t5_iso_l2_t l2;
+    uint32_t now = t5_time_ms();
+    if (now - last_mem >= MEM_CHECK_MS) {
+        last_mem = now;
+        if (t5_iso_mem_check(&mem, apps_hw_free_psram(), now)) apps_close_for_memory();
+        switch (t5_iso_l2_check(&l2, apps_hw_free_l2(), now)) {
+        case T5_ISO_L2_RELEASE:
+            T5_LOGW(TAG, "internal RAM low (%u bytes free): releasing the reserve", (unsigned)apps_hw_free_l2());
+            apps_hw_reserve_release();
+            break;
+        case T5_ISO_L2_RETAKE:
+            apps_hw_reserve_take();
+            break;
+        case T5_ISO_L2_CLOSE_APP:
+            apps_close_for_memory();
+            break;
+        default:
+            break;
+        }
+    }
+    t5_app_events_check_stuck();
+    apps_throttle_tick();
+    if (now - last_hog >= HOG_CHECK_MS) {
+        last_hog = now;
+        apps_check_hogs();
+    }
+}
+
 static void watchdog(void *arg)
 {
     (void)arg;
@@ -114,6 +155,7 @@ static void watchdog(void *arg)
     int32_t tx = 0, ty = 0;
     for (;;) {
         t5_delay_ms(POLL_MS);
+        isolation_checks();
         uint32_t stalled = t5_ui_stalled_ms();
         if (!showing) {
             if (stalled < STALL_MS) threshold = STALL_MS;
@@ -138,7 +180,10 @@ static void watchdog(void *arg)
             was_down = false;
             continue;
         }
-        if (stalled == 0) {             /* it recovered by itself */
+        /* Recovered (by itself, or Close app stopped it): the stall only
+         * grows while it lasts, so anything under the threshold means the
+         * UI task has finished an iteration since. */
+        if (stalled < STALL_MS) {
             t5_ui_overlay_restore();
             showing = false;
             continue;
@@ -152,7 +197,10 @@ static void watchdog(void *arg)
         } else if (was_down) {          /* act on release, like a button */
             if (hit(&s_btn_close, tx, ty)) {
                 T5_LOGW(TAG, "closing %s", s_app ? s_app->id : "?");
+                /* Returns only if the app was stopped without a restart:
+                 * the UI task recovers and the overlay comes down below. */
                 apps_restart_after_anr(s_app);
+                threshold = STALL_MS;
             } else if (hit(&s_btn_wait, tx, ty)) {
                 t5_ui_overlay_restore();
                 showing = false;
@@ -166,7 +214,7 @@ static void watchdog(void *arg)
 t5_err_t anr_init(void)
 {
     /* Core 0, above app tasks: it must run while core 1 is stuck. */
-    return t5_task_create("t5_anr", watchdog, NULL, 4096, 10, 0, NULL);
+    return t5_task_create_lp("t5_anr", watchdog, NULL, 4096, 10, 0, NULL);
 }
 
 /* Diagnostics: draw or remove the dialog over a healthy UI. */
@@ -181,4 +229,11 @@ t5_err_t anr_test_show(void)
 t5_err_t anr_test_hide(void)
 {
     return t5_ui_overlay_restore();
+}
+
+t5_err_t anr_test_close(void)
+{
+    if (t5_ui_stalled_ms() < STALL_MS || !s_app) return T5_ERR_STATE;
+    apps_restart_after_anr(s_app);
+    return T5_OK;
 }

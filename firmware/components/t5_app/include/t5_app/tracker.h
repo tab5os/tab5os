@@ -28,7 +28,7 @@ typedef struct {
 
 typedef struct t5_heap_blk t5_heap_blk_t;
 
-typedef struct {
+typedef struct t5_tracker {
     t5_track_ent_t ent[T5_TRACK_MAX];
     int n;
     uint32_t dropped;               /* adds refused because the table was full */
@@ -39,6 +39,7 @@ typedef struct {
     uint32_t heap_limit_kb;         /* 0 = none */
     uint32_t heap_refused;
     uint32_t counts[T5_RES_KIND_COUNT];
+    void *arena;                    /* the allocator's own state for this app */
 } t5_tracker_t;
 
 void t5_tracker_init(t5_tracker_t *t, uint32_t heap_limit_kb);
@@ -67,10 +68,13 @@ bool t5_tracker_owns(const void *p);
 size_t t5_tracker_block_size(const void *p);
 void t5_tracker_free_all(t5_tracker_t *t);
 
-/* Allocator under the tracker (system malloc; tests can count calls). */
+/* Allocator under the tracker (system malloc; tests can count calls). With
+ * drop_all, the app's whole heap goes at once on exit, without walking
+ * block headers the app may have overwritten. */
 typedef struct {
-    void *(*malloc)(size_t);
-    void (*free)(void *);
+    void *(*malloc)(t5_tracker_t *t, size_t n);
+    void (*free)(t5_tracker_t *t, void *p);
+    bool (*drop_all)(t5_tracker_t *t);      /* optional; true if it did */
 } t5_tracker_alloc_t;
 void t5_tracker_set_allocator(const t5_tracker_alloc_t *a);
 

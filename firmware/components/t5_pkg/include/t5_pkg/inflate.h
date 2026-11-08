@@ -27,11 +27,11 @@ typedef t5_err_t (*t5_inflate_write_fn)(void *ctx, const uint8_t *data, size_t l
  * Errors: T5_ERR_INVALID_ARG malformed or truncated stream, T5_ERR_IO read
  * failure, T5_ERR_NO_MEM state allocation, or the sink's own error.
  * out_len (optional) receives the number of bytes produced. */
-t5_err_t t5_inflate_stream(t5_inflate_read_fn rd, void *rctx, t5_inflate_write_fn wr, void *wctx,
+T5_MUST_CHECK t5_err_t t5_inflate_stream(t5_inflate_read_fn rd, void *rctx, t5_inflate_write_fn wr, void *wctx,
                            size_t *out_len);
 
 /* Decode src into dst. T5_ERR_NO_MEM if the output does not fit in dst_cap. */
-t5_err_t t5_inflate_mem(const void *src, size_t src_len, void *dst, size_t dst_cap, size_t *out_len);
+T5_MUST_CHECK t5_err_t t5_inflate_mem(const void *src, size_t src_len, void *dst, size_t dst_cap, size_t *out_len);
 
 #ifdef __cplusplus
 }

@@ -41,3 +41,15 @@ const char *t5_caller_id(void)
 {
     return t5_app_ctx_id(t5_app_ctx_get());
 }
+
+static t5_perm_check_fn_t s_perm;
+
+void t5_core_set_perm_check(t5_perm_check_fn_t fn)
+{
+    s_perm = fn;
+}
+
+int t5_core_perm_check(uint32_t perm)
+{
+    return s_perm ? s_perm(perm) : 0;
+}

@@ -1,0 +1,9 @@
+id = "com.t5.test.netleak"
+name = "Net Leak"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+
+[permissions]
+net = true

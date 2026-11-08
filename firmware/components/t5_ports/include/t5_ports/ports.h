@@ -94,24 +94,24 @@ typedef struct {
 #define T5_PORT_WHY_LEN 64      /* enough for any error string */
 
 /* Open a port. cfg points to the struct for mode (or NULL for defaults). */
-t5_err_t t5_port_open(const char *name, t5_port_mode_t mode, const void *cfg, t5_port_t **out);
+T5_MUST_CHECK t5_err_t t5_port_open(const char *name, t5_port_mode_t mode, const void *cfg, t5_port_t **out);
 /* As t5_port_open, with flags and a reason on failure (why may be NULL). */
-t5_err_t t5_port_open_ex(const char *name, t5_port_mode_t mode, const void *cfg, uint32_t flags,
+T5_MUST_CHECK t5_err_t t5_port_open_ex(const char *name, t5_port_mode_t mode, const void *cfg, uint32_t flags,
                          t5_port_t **out, char *why, size_t whylen);
 /* Release the pins and the driver. NULL or an already closed handle is ignored. */
-t5_err_t t5_port_close(t5_port_t *p);
+T5_MUST_CHECK t5_err_t t5_port_close(t5_port_t *p);
 
 const char *t5_port_name(const t5_port_t *p);
 t5_port_mode_t t5_port_mode(const t5_port_t *p);
 
 /* ---- I2C (7-bit addresses) ---------------------------------------------- */
-t5_err_t t5_port_i2c_read_reg(t5_port_t *p, uint8_t addr, uint8_t reg, uint8_t *buf, size_t len);
-t5_err_t t5_port_i2c_write_reg(t5_port_t *p, uint8_t addr, uint8_t reg, const uint8_t *buf, size_t len);
+T5_MUST_CHECK t5_err_t t5_port_i2c_read_reg(t5_port_t *p, uint8_t addr, uint8_t reg, uint8_t *buf, size_t len);
+T5_MUST_CHECK t5_err_t t5_port_i2c_write_reg(t5_port_t *p, uint8_t addr, uint8_t reg, const uint8_t *buf, size_t len);
 /* Write tx then read rx with a repeated start. Either side may be empty. */
-t5_err_t t5_port_i2c_xfer(t5_port_t *p, uint8_t addr, const uint8_t *tx, size_t txlen, uint8_t *rx,
+T5_MUST_CHECK t5_err_t t5_port_i2c_xfer(t5_port_t *p, uint8_t addr, const uint8_t *tx, size_t txlen, uint8_t *rx,
                           size_t rxlen);
 /* T5_OK if something ACKs, T5_ERR_NACK if not. */
-t5_err_t t5_port_i2c_probe(t5_port_t *p, uint8_t addr);
+T5_MUST_CHECK t5_err_t t5_port_i2c_probe(t5_port_t *p, uint8_t addr);
 /* Probe 0x08..0x77 (reserved ones skipped on mbus.i2c). Returns the count found. */
 int t5_port_i2c_scan(t5_port_t *p, uint8_t *found, size_t max);
 
@@ -120,23 +120,23 @@ int t5_port_i2c_scan(t5_port_t *p, uint8_t *found, size_t max);
 int t5_port_uart_write(t5_port_t *p, const void *data, size_t n);
 int t5_port_uart_read(t5_port_t *p, void *data, size_t n, uint32_t timeout_ms);
 /* Drop anything received and not read yet. */
-t5_err_t t5_port_uart_flush(t5_port_t *p);
+T5_MUST_CHECK t5_err_t t5_port_uart_flush(t5_port_t *p);
 /* Wait until everything written has left the wire (RS-485: before turnaround). */
-t5_err_t t5_port_uart_wait_tx(t5_port_t *p, uint32_t timeout_ms);
+T5_MUST_CHECK t5_err_t t5_port_uart_wait_tx(t5_port_t *p, uint32_t timeout_ms);
 uint32_t t5_port_uart_baud(const t5_port_t *p);
 
 /* ---- SPI (full duplex; tx or rx may be NULL) ---------------------------- */
-t5_err_t t5_port_spi_transfer(t5_port_t *p, const void *tx, void *rx, size_t n);
+T5_MUST_CHECK t5_err_t t5_port_spi_transfer(t5_port_t *p, const void *tx, void *rx, size_t n);
 
 /* ---- GPIO --------------------------------------------------------------- */
-t5_err_t t5_port_gpio_set(t5_port_t *p, bool level);
-t5_err_t t5_port_gpio_get(t5_port_t *p, bool *level);
+T5_MUST_CHECK t5_err_t t5_port_gpio_set(t5_port_t *p, bool level);
+T5_MUST_CHECK t5_err_t t5_port_gpio_get(t5_port_t *p, bool *level);
 
 /* ---- PWM ---------------------------------------------------------------- */
-t5_err_t t5_port_pwm_set(t5_port_t *p, uint32_t duty_permille);
+T5_MUST_CHECK t5_err_t t5_port_pwm_set(t5_port_t *p, uint32_t duty_permille);
 
 /* ---- ADC (calibrated, 0..~3300 mV) -------------------------------------- */
-t5_err_t t5_port_adc_read_mv(t5_port_t *p, int *mv);
+T5_MUST_CHECK t5_err_t t5_port_adc_read_mv(t5_port_t *p, int *mv);
 
 /* ---- Enumeration (Port Inspector, console) ------------------------------ */
 #define T5_PORT_MAX_PINS 6
@@ -165,15 +165,15 @@ typedef struct {
 } t5_pin_info_t;
 
 /* Must run once at boot before any other task opens a port (idempotent). */
-t5_err_t t5_ports_init(void);
+T5_MUST_CHECK t5_err_t t5_ports_init(void);
 
 int t5_ports_count(void);
-t5_err_t t5_ports_info(int i, t5_port_info_t *out);
-t5_err_t t5_ports_find(const char *name, t5_port_info_t *out);
+T5_MUST_CHECK t5_err_t t5_ports_info(int i, t5_port_info_t *out);
+T5_MUST_CHECK t5_err_t t5_ports_find(const char *name, t5_port_info_t *out);
 /* Every GPIO used by any port, ascending. Returns the count (may exceed max). */
 int t5_ports_pins(uint8_t *gpio, int max);
 /* Owner, port, mode and level of one GPIO. T5_ERR_NOT_FOUND if no port uses it. */
-t5_err_t t5_ports_pin_info(uint8_t gpio, t5_pin_info_t *out);
+T5_MUST_CHECK t5_err_t t5_ports_pin_info(uint8_t gpio, t5_pin_info_t *out);
 
 const char *t5_port_mode_name(t5_port_mode_t mode);   /* "i2c", "uart"... */
 /* Parse a mode name; returns T5_MODE_COUNT if unknown. */

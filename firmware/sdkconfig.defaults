@@ -21,6 +21,20 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_SPIRAM_MEMTEST=y
+# Lets cold static buffers (EXT_RAM_BSS_ATTR: the dmesg ring, diag scratch,
+# port profiles; about 37 KB) live in PSRAM instead of L2MEM.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# Code and read-only data (fonts) run from PSRAM, copied there at boot: the
+# 200 MHz hex bus beats QIO flash, worth about 10% on the rendering gate.
+# Costs about 4 MB of PSRAM; flash writes no longer stall code fetches.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# With XIP, PSRAM is mapped before memory protection is set up, and IDF
+# then locks the whole PSRAM heap read/write, never executable: every app
+# (the ELF loader puts .text in the PSRAM heap) died with an instruction
+# access fault on its first instruction (2026-11-07). Without XIP the
+# protected range came out empty, so this is how PSRAM behaved before.
+# Internal RAM keeps its protection (PMP IDRAM split).
+# CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION is not set
 
 # Crash evidence survives reboot
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
@@ -36,7 +50,9 @@ CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 # behaviour the same from the first image.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# Size first (Phase 7 brought the image near the 4 MB slot); the rendering
+# and audio paths get -O2 back in CMakeLists.txt.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
 # Phase 1
 CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS=4
@@ -67,6 +83,19 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 CONFIG_LWIP_DHCP_RESTORE_LAST_IP=y
 CONFIG_LWIP_DHCP_DOES_NOT_CHECK_OFFERED_IP=y
 CONFIG_ESP_HOSTED_HOST_CP_RESET_SETTLE_MS=800
+# Wi-Fi transport buffers in PSRAM (the P4's SDMMC DMAs to it): a download
+# no longer eats internal RAM. Per-frame buffers too, see t5_net/hosted_compat.c.
+CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
+# App networking (t5_net/sock.h): room for app sockets next to the OS's own,
+# and TLS buffers (about 20 KB a connection) in PSRAM, not internal RAM.
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# Chains that end in a cross-signed root (Google's, among others) verify against the bundle.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+# MQTT (t5_net/mqtt.h): 3.1.1 and 5, client task stack and buffers in PSRAM.
+CONFIG_MQTT_PROTOCOL_5=y
+CONFIG_MQTT_BUFFERS_ON_EXTERNAL_MEMORY=y
+CONFIG_MQTT_TASK_STACK_ON_EXTERNAL_MEMORY=y
 # BLE (plan 3.6): NimBLE on the P4, controller on the C6 over hosted HCI.
 CONFIG_ESP_HOSTED_HOST_FEAT_BT=y
 CONFIG_BT_ENABLED=y
@@ -83,17 +112,25 @@ CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 
 # Phase 4: LVGL 9.6 (pinned for API level 1). The UI task owns LVGL and
-# locks it itself, so no LVGL OS layer. Allocation goes through malloc
-# (PSRAM above 4 KB), so app LVGL memory is counted with the rest of the heap.
+# locks it itself (t5_ui_lock).
+# No LVGL OS layer: two draw threads (one per core) were tried twice and
+# rendered slower (2026-11-06 with internal bands: transition 121 ms a frame
+# against 100; both threads on one core 158 ms, i.e. the per-task handoff).
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_OS_NONE=y
-CONFIG_LV_USE_CLIB_MALLOC=y
+# LVGL allocates from its own internal-RAM pool (t5_ui/lv_mem_t5.c): with
+# plain malloc it spilled into LP SRAM when L2MEM ran short and ran 6x slower.
+CONFIG_LV_USE_CUSTOM_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y
 CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_DPI_DEF=320
 CONFIG_LV_DRAW_BUF_ALIGN=64
+# PPA fills run alongside the band copies. They used to hang the PPA on
+# Unit A; components/esp_driver_ppa carries Espressif's SRM fix for that.
 CONFIG_LV_USE_PPA=y
+# Unscaled opaque images (the camera preview) are PPA blits too.
+CONFIG_LV_USE_PPA_IMG=y
 CONFIG_LV_DRAW_SW_ASM_NONE=y
 CONFIG_LV_DRAW_SW_CIRCLE_CACHE_SIZE=16
 CONFIG_LV_DRAW_SW_SHADOW_CACHE_SIZE=0
@@ -115,3 +152,34 @@ CONFIG_LV_THEME_DEFAULT_GROW=n
 CONFIG_LV_USE_THEME_SIMPLE=n
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
+
+# Phase 7: media and USB.
+# Camera: SC202CS (sold as SC2356) on MIPI CSI, ISP with the pipeline
+# controller (auto exposure and white balance from esp_ipa and the sensor's
+# tuning JSON). No DVP or SPI cameras on this board.
+CONFIG_CAMERA_SC202CS=y
+CONFIG_CAMERA_SC202CS_AUTO_DETECT_MIPI_INTERFACE_SENSOR=y
+CONFIG_CAMERA_SC202CS_MIPI_RAW8_1280X720_30FPS=y
+# The full-width 10-bit mode for photos (t5_camera_open_photo, switched at
+# run time); the 720p one stays the default (video, apps).
+CONFIG_CAMERA_SC202CS_MIPI_RAW10_1600X900_30FPS=y
+CONFIG_CAMERA_SC202CS_MIPI_DEFAULT_FMT_RAW8_1280X720_30FPS=y
+# Our own IPA tuning: Espressif's default without its lens-shading table,
+# which was made for a different module and turned the Tab5's corners
+# magenta (camera/sc202cs_tab5.json).
+CONFIG_CAMERA_SC202CS_CUSTOMIZED_IPA_JSON_CONFIGURATION_FILE=y
+CONFIG_CAMERA_SC202CS_CUSTOMIZED_IPA_JSON_CONFIGURATION_FILE_PATH="camera/sc202cs_tab5.json"
+CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE=y
+CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE=y
+CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y
+CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE=n
+CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE=n
+# USB-A host on the high-speed controller, through hubs.
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
+# USB-C mass storage (TinyUSB on the full-speed controller).
+CONFIG_TINYUSB_MSC_ENABLED=y
+# Never mount anything over /data (esp_tinyusb's default path); we keep its
+# app-side mounting off anyway.
+CONFIG_TINYUSB_MSC_MOUNT_PATH="/usbc"
+CONFIG_TINYUSB_CDC_ENABLED=n

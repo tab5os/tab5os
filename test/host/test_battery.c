@@ -322,6 +322,35 @@ static mock_i2c_dev_t *start_battery(uint16_t mv, int32_t ma10)
     return ina;
 }
 
+/* The INA226 answers at init, then every sample read fails. */
+static mock_i2c_read_hook_t s_ina_read;
+static bool ina_read_then_fail(mock_i2c_dev_t *d, uint32_t reg, uint8_t *out, size_t len)
+{
+    bool r = s_ina_read(d, reg, out, len);
+    if (reg == 0x00) {   /* init's config read-back is its last access */
+        d->fail_count = 1000;
+        d->fail_err = T5_ERR_IO;
+    }
+    return r;
+}
+
+static void test_service_init_needs_a_first_sample(void)
+{
+    /* Without a sample the gauge would boot at 0 mV, read as empty, and
+     * power the Tab5 off: init has to fail instead (coding standard rule 7). */
+    mock_expanders_start();
+    mock_rtc_start(0);
+    mock_i2c_dev_t *ina = mock_ina226_add();
+    mock_ina226_set(ina, 7680, 3500);
+    s_ina_read = ina->on_read;
+    ina->on_read = ina_read_then_fail;
+    TEST_ASSERT_NOT_EQUAL(T5_OK, t5_battery_init());
+    t5_battery_status_t b;
+    t5_battery_status(&b);
+    TEST_ASSERT_FALSE(b.ready);
+    TEST_ASSERT_EQUAL(0, mock_power.halted);   /* and nothing powered off */
+}
+
 static void test_service_drives_charger_and_events(void)
 {
     mock_i2c_dev_t *ina = start_battery(7680, 3500);
@@ -340,7 +369,7 @@ static void test_service_drives_charger_and_events(void)
     TEST_ASSERT_TRUE(b.usb);
     TEST_ASSERT_EQUAL(T5_CHG_CHARGING, b.charge);
     TEST_ASSERT_EQUAL(1, mock_events_count(T5_EV_USB_POWER));
-    t5_battery_set_fast_charge(true);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_battery_set_fast_charge(true));
     mock_time_advance_ms(1000);
     t5_battery_step();
     TEST_ASSERT_FALSE(t5_xpin_out_level(T5_XP_NCHG_QC_EN));
@@ -389,6 +418,7 @@ int main(void)
     RUN_TEST(test_discharge_voltage_floors);
     RUN_TEST(test_charge_policy);
     RUN_TEST(test_usb_guess);
+    RUN_TEST(test_service_init_needs_a_first_sample);
     RUN_TEST(test_service_drives_charger_and_events);
     RUN_TEST(test_service_low_battery_soft_off);
     return UNITY_END();

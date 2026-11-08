@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
  * i2c: scan, raw register access, stats, trace, recovery, stress (0.3, 1.2, 1.10)
  */
+#include "esp_attr.h"
 #include <stdio.h>
 #include <string.h>
 #include "esp_console.h"
@@ -83,7 +84,7 @@ static int i2c_trace(int argc, char **argv)
 {
     if (argc >= 3 && !strcmp(argv[2], "on")) { t5_i2c_trace_enable(true); return 0; }
     if (argc >= 3 && !strcmp(argv[2], "off")) { t5_i2c_trace_enable(false); return 0; }
-    static t5_i2c_trace_t t[T5_I2C_TRACE_LEN];
+    EXT_RAM_BSS_ATTR static t5_i2c_trace_t t[T5_I2C_TRACE_LEN];
     int n = t5_i2c_trace_read(t, T5_I2C_TRACE_LEN);
     for (int i = 0; i < n; i++) {
         printf("%8u ms  0x%02x  tx %3u [%02x..]  rx %3u  %s\n", (unsigned)t[i].t_ms, t[i].addr, t[i].txlen,

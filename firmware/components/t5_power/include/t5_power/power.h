@@ -83,7 +83,7 @@ void t5_power_profile_timeouts(t5_power_profile_t p, t5_power_timeouts_t *out);
 /* ---- service ------------------------------------------------------------ */
 /* Read the wake reason, load settings, start the state task. Needs storage,
  * time (RTC) and the expanders; call after them and after the display. */
-t5_err_t t5_power_init(void);
+T5_MUST_CHECK t5_err_t t5_power_init(void);
 t5_power_state_t t5_power_state(void);
 const char *t5_power_state_name(t5_power_state_t s);
 const char *t5_power_cause_name(t5_power_cause_t c);
@@ -101,10 +101,10 @@ void t5_power_request_active(void);
 /* Screen off and straight into Sleep (locks still apply). */
 void t5_power_request_sleep(void);
 
-t5_err_t t5_power_set_profile(t5_power_profile_t p);
+T5_MUST_CHECK t5_err_t t5_power_set_profile(t5_power_profile_t p);
 t5_power_profile_t t5_power_profile(void);
 /* Override one timer set; t5_power_set_profile() restores the profile's. */
-t5_err_t t5_power_set_timeouts(const t5_power_timeouts_t *t);
+T5_MUST_CHECK t5_err_t t5_power_set_timeouts(const t5_power_timeouts_t *t);
 void t5_power_get_timeouts(t5_power_timeouts_t *out);
 
 /* Low-power mode (battery 10%, or the user): shorter dim, capped
@@ -163,8 +163,8 @@ typedef struct {
 } t5_suspend_hook_t;
 
 #define T5_SUSPEND_MAX_HOOKS 24
-t5_err_t t5_power_register_hook(const t5_suspend_hook_t *hook);
-t5_err_t t5_power_unregister_hook(const char *name);
+T5_MUST_CHECK t5_err_t t5_power_register_hook(const t5_suspend_hook_t *hook);
+T5_MUST_CHECK t5_err_t t5_power_unregister_hook(const char *name);
 
 typedef struct {
     const char *name;
@@ -192,7 +192,7 @@ typedef enum {
  * for a scheduled wake, puts the panel to sleep and pulses PWROFF_PLUSE.
  * Shutdown handlers (charge mode) get a chance first unless emergency.
  * Returns an error only if power could not be cut. */
-t5_err_t t5_power_soft_off(t5_off_reason_t reason, bool emergency);
+T5_MUST_CHECK t5_err_t t5_power_soft_off(t5_off_reason_t reason, bool emergency);
 const char *t5_off_reason_name(t5_off_reason_t r);
 
 /* t5_battery registers one of these: return true to take over the shutdown
@@ -209,7 +209,7 @@ void t5_power_charge_mode_end(void);
 /* Wake at utc. From soft off this programs the RTC alarm (minute resolution,
  * rounded up); while running or asleep it wakes the CPU. flags: */
 #define T5_WAKE_FLAG_BACKGROUND 0x01   /* don't restore the session on that boot */
-t5_err_t t5_power_schedule_wake(time_t utc, uint32_t flags);
+T5_MUST_CHECK t5_err_t t5_power_schedule_wake(time_t utc, uint32_t flags);
 /* Arm a latched, active-low any-motion interrupt on the way into soft off,
  * so picking the device up turns it on (bench 0.7). Off by default; saved. */
 void t5_power_set_motion_wake(bool on);

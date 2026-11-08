@@ -35,6 +35,7 @@ function(t5_app name)
     target_compile_options(${name}.elf PRIVATE ${flags}
         -fPIC -O2 -g0 -ffunction-sections -fdata-sections -fvisibility=hidden
         -fno-common -fno-jump-tables -fno-tree-switch-conversion
+        -D__PICOLIBC_ERRNO_FUNCTION=t5_errno   # errno is thread-local: see t5_errno()
         -Wall -Wextra -Wno-unused-parameter)
     target_link_options(${name}.elf PRIVATE
         -nostdlib -nostartfiles -shared -fPIC -e t5_app_entry

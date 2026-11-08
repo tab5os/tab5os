@@ -1,0 +1,8 @@
+id = "com.t5.test.fspy"
+name = "File Scope Py"
+version = "1.0.0"
+api = 1
+runtime = "micropython"
+entry = "main.py"
+
+[permissions]

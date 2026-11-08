@@ -20,3 +20,12 @@ extern int t5_log_host_verbose;
 #define T5_LOGI(tag, fmt, ...) T5_LOG_HOST("I", tag, fmt, ##__VA_ARGS__)
 #define T5_LOGD(tag, fmt, ...) T5_LOG_HOST("D", tag, fmt, ##__VA_ARGS__)
 #endif
+
+/* Rule 7: for a T5_MUST_CHECK call whose failure the caller can't do more
+ * about than report. Logs the call and the error at E level. */
+#include "t5_core/err.h"
+#define T5_LOG_ON_ERR(tag, expr)                                                \
+    do {                                                                        \
+        t5_err_t _t5_e = (expr);                                                \
+        if (_t5_e != T5_OK) T5_LOGE(tag, "%s: %s", #expr, t5_err_str(_t5_e));   \
+    } while (0)

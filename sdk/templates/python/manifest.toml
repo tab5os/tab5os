@@ -1,0 +1,11 @@
+id = "com.example.hello"
+name = "Hello"
+version = "1.0.0"
+api = 1
+runtime = "micropython"
+entry = "main.py"
+orientation = "any"
+min_heap_kb = 1024
+
+[permissions]
+ports = ["grove"]

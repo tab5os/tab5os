@@ -89,6 +89,16 @@ dependencies:
     targets:
     - esp32p4
     version: 1.0.2
+  espressif/mqtt:
+    component_hash: fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.0
   idf:
     source:
       type: idf
@@ -107,7 +117,8 @@ direct_dependencies:
 - espressif/esp_hosted
 - espressif/esp_lcd_ili9881c
 - espressif/esp_lcd_st7123
+- espressif/mqtt
 - joltwallet/littlefs
-manifest_hash: fe433444c06c3d5a253946647ffd96c987ca90e0e5391b182e8900f2e022eaf1
+manifest_hash: 486a421eaa6b875c25fc9d801bff00ea1c14aaf2cacb30b4b5d2a86158eba273
 target: esp32p4
 version: 3.0.0

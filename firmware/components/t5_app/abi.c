@@ -39,8 +39,11 @@ const t5_abi_sym_t *t5_abi_find(const char *name)
 
 bool t5_abi_is_runtime_helper(const char *name)
 {
-    /* libgcc soft-float and 64-bit helpers, newlib reentrancy. */
-    return name && name[0] == '_' && name[1] == '_';
+    /* The libgcc helpers apps need are published in api_v1.sym like any
+     * other symbol, so install and load agree: an app that imports a helper
+     * the OS doesn't export is refused at install, not at launch. */
+    (void)name;
+    return false;
 }
 
 uintptr_t t5_abi_resolve(const char *name, uint32_t perms, bool *denied)

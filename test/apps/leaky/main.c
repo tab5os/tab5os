@@ -55,13 +55,14 @@ static void on_create(t5_app_t *app)
     static void *volatile keep;
     keep = calloc(10, 1000);
     keep = strdup("leaked string");
+    (void)keep;
 
     t5_port_t *grove = NULL;
     t5_port_i2c_cfg_t cfg = { .hz = 100000 };
     t5_err_t e = t5_port_open("grove", T5_MODE_I2C, &cfg, &grove);
     (void)t5_wakelock_acquire(T5_LOCK_CPU, "leaky");
     t5_rail_hold_t *hold = NULL;
-    (void)t5_rail_acquire(T5_RAIL_EXT5V, "leaky", 0, &hold);
+    T5_IGNORE(t5_rail_acquire(T5_RAIL_EXT5V, "leaky", 0, &hold));   /* leaked on purpose; GCC ignores (void) here */
 
     t5_task_create("leaky_spin", spin, app, 3072, 3, T5_CORE_ANY, NULL);
     xTaskCreatePinnedToCore(rogue, "leaky_rogue", 2048, NULL, 2, NULL, tskNO_AFFINITY);

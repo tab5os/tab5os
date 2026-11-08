@@ -1,0 +1,48 @@
+# Python bindings generated from the SDK (plan 8.3), by tools/py/genbind.py.
+#
+#   module   python_name      c_symbol
+#
+# Each C symbol must be in sdk/abi/api_v1.sym: its prototype comes from there,
+# and so do its permission (perm=) and tracking wrapper (wrap=). Only scalar
+# arguments and results are generated: bool, integers, floats, strings,
+# enums (passed and returned as lower-case names, "awake"), t5_err_t (raises
+# OSError) and t5_app_t * (the running app, filled in). Anything with handles,
+# buffers or structs is written by hand in mod_*.c.
+
+app      id               t5_app_id
+app      data_dir         t5_app_data_dir
+app      install_dir      t5_app_install_dir
+app      arg              t5_app_launch_arg
+app      restored         t5_app_restored
+app      exit             t5_app_exit
+app      schedule_alarm   t5_app_schedule_alarm
+
+power    state            t5_power_state
+power    wake_reason      t5_power_wake_reason
+power    battery_percent  t5_battery_percent
+
+time     now              t5_time_now
+time     valid            t5_time_valid
+time     tz               t5_time_tz
+time     tz_name          t5_time_tz_name
+time     us               t5_time_us
+
+audio    tone             t5_audio_tone
+audio    volume           t5_audio_volume
+audio    set_volume       t5_audio_set_volume
+audio    muted            t5_audio_muted
+audio    set_muted        t5_audio_set_muted
+audio    headphones       t5_audio_headphones
+audio    play             t5_audio_play_sound
+
+imu      status           t5_imu_status
+
+ui       toast            t5_shell_toast
+ui       fullscreen       t5_shell_set_fullscreen
+ui       low_power        t5_ui_low_power
+ui       rotation         t5_ui_rotation
+
+usb      keyboard_present t5_usb_keyboard_present
+usb      serial_present   t5_usb_serial_present
+usb      midi_present     t5_usb_midi_present
+usb      device_count     t5_usb_device_count

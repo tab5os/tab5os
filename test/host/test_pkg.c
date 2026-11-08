@@ -371,7 +371,7 @@ static void test_zip_fuzz(void)
         t5_zip_t *z;
         if (t5_zip_open(path, &z) != T5_OK) continue;
         for (int i = 0; i < t5_zip_count(z); i++) {
-            t5_zip_extract_cb(z, t5_zip_entry(z, i), null_write, NULL);
+            T5_IGNORE(t5_zip_extract_cb(z, t5_zip_entry(z, i), null_write, NULL));   /* fuzzed: may fail, mustn't crash */
         }
         t5_zip_close(z);
     }
@@ -528,6 +528,18 @@ static void test_manifest_other_fields(void)
     TEST_ASSERT_EQUAL(0, m.nports);
     TEST_ASSERT_FALSE(m.background);
     TEST_ASSERT_EQUAL(30, m.bg_max_seconds);
+}
+
+static void test_manifest_mbus_ports(void)
+{
+    const char *t = "id = \"org.example.bus\"\nname = \"Bus\"\nversion = \"1.0.0\"\napi = 1\n"
+                    "runtime = \"native\"\nentry = \"app.elf\"\n"
+                    "[permissions]\nports = [\"mbus.i2c\", \"mbus.g2\"]\n";
+    t5_manifest_t m;
+    char err[160];
+    TEST_ASSERT_EQUAL_MESSAGE(T5_OK, t5_manifest_parse(t, strlen(t), &m, err, sizeof err), err);
+    TEST_ASSERT_EQUAL(2, m.nports);
+    TEST_ASSERT_EQUAL_STRING("mbus.i2c", m.ports[0]);
 }
 
 static void expect_manifest_error(const char *base_edit_from, const char *base_edit_to, const char *needle)
@@ -746,6 +758,33 @@ static void test_failed_install_leaves_old(void)
     TEST_ASSERT_EQUAL_STRING("1.0.0", info.manifest.version);
 }
 
+static void test_remove_deep_data_dir(void)
+{
+    /* An app can nest its data as deep as paths allow; removing it must not
+     * recurse once per level (coding standard rule 1). */
+    t5_pkg_info_t info;
+    char err[160];
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_DATA, &info, err, sizeof err));
+    char p[512];
+    int n = snprintf(p, sizeof p, "%s", info.data_dir);
+    int levels = 0;
+    while (n + 3 < 400) {
+        n += snprintf(p + n, sizeof p - (size_t)n, "/d");
+        TEST_ASSERT_EQUAL(0, mkdir(p, 0755));
+        if (levels % 10 == 0) {
+            char f[520];
+            snprintf(f, sizeof f, "%s/f", p);
+            FILE *fp = fopen(f, "w");
+            TEST_ASSERT_NOT_NULL(fp);
+            fclose(fp);
+        }
+        levels++;
+    }
+    TEST_ASSERT_GREATER_THAN(100, levels);
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_remove("com.example.hello", false));
+    TEST_ASSERT_FALSE(exists("%s%s", info.data_dir, ""));
+}
+
 static void test_remove(void)
 {
     t5_pkg_info_t info;
@@ -900,6 +939,7 @@ int main(void)
     RUN_TEST(test_toml_errors);
     RUN_TEST(test_manifest_design_example);
     RUN_TEST(test_manifest_other_fields);
+    RUN_TEST(test_manifest_mbus_ports);
     RUN_TEST(test_manifest_errors);
     RUN_TEST(test_perm_names_and_versions);
     RUN_TEST(test_inspect);
@@ -907,6 +947,7 @@ int main(void)
     RUN_TEST(test_upgrade_keeps_data_and_refuses_downgrade);
     RUN_TEST(test_failed_install_leaves_old);
     RUN_TEST(test_remove);
+    RUN_TEST(test_remove_deep_data_dir);
     RUN_TEST(test_list_and_shadowing);
     RUN_TEST(test_recover_interrupted);
     RUN_TEST(test_grants);

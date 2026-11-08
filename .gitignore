@@ -13,6 +13,10 @@ test/device/sdkconfig.*
 !test/device/sdkconfig.defaults
 managed_components/
 
+# Recovery image, releases
+recovery/build/
+dist/
+
 # Host tests, simulator, SDK apps
 test/host/build/
 sim/build/

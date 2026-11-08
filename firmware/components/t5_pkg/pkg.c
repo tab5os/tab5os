@@ -103,7 +103,7 @@ static bool mkdir_p(const char *path)
     return (mkdir(tmp, 0755) == 0 || errno == EEXIST) && is_dir(tmp);
 }
 
-/* Recursive delete using one shared path buffer, so deep trees don't cost
+/* Delete a tree using one shared path buffer, so deep trees don't cost
  * stack. Restarts the directory scan after each removal rather than deleting
  * under an open readdir (FAT's VFS doesn't promise that is safe). */
 static bool rm_rf_buf(char *path, size_t cap)
@@ -111,8 +111,15 @@ static bool rm_rf_buf(char *path, size_t cap)
     struct stat st;
     if (stat(path, &st) != 0) return errno == ENOENT;
     if (!S_ISDIR(st.st_mode)) return unlink(path) == 0;
-    size_t len = strlen(path);
+    /* Depth-first without recursion (docs/coding-standard.md, rule 1): an
+     * app's data dir can nest as deep as the path buffer allows, which would
+     * be far more stack than any task has. path is always the directory
+     * being emptied: step into its first entry, or remove it once it's
+     * empty and step back out. Each pass removes an entry or goes one level
+     * down, so the walk ends. */
+    const size_t base = strlen(path);
     for (;;) {
+        size_t len = strlen(path);
         DIR *d = opendir(path);
         if (!d) return false;
         struct dirent *de;
@@ -129,12 +136,20 @@ static bool rm_rf_buf(char *path, size_t cap)
             break;
         }
         closedir(d);
-        if (!found) break;
-        bool ok = rm_rf_buf(path, cap);
-        path[len] = 0;
-        if (!ok) return false;
+        if (found) {
+            if (stat(path, &st) != 0) return false;
+            if (!S_ISDIR(st.st_mode)) {
+                if (unlink(path) != 0) return false;
+                path[len] = 0;
+            }
+            continue;   /* a directory: empty it on the next pass */
+        }
+        if (rmdir(path) != 0) return false;
+        if (len == base) return true;
+        char *slash = strrchr(path, '/');   /* back out to the parent */
+        T5_ASSERT(slash && (size_t)(slash - path) >= base);
+        *slash = 0;
     }
-    return rmdir(path) == 0;
 }
 
 static bool rm_rf(const char *path)
@@ -514,6 +529,11 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
     if (!path || dest > T5_PKG_DEST_DATA) return T5_ERR_INVALID_ARG;
     t5_zip_t *z;
     T5_RETURN_ON_ERR(open_pkg(path, &z, err, errlen));
+    /* The paths live on the heap: five PATH_BUFs would take this frame past
+     * the strict components' stack-usage limit (docs/coding-standard.md). */
+    struct {
+        char fin[PATH_BUF], stage[PATH_BUF], oldp[PATH_BUF], rec[PATH_BUF], data[PATH_BUF];
+    } *pb = NULL;
     t5_manifest_t m;
     t5_err_t e = inspect_zip(z, &m, err, errlen);
     if (e != T5_OK) goto done;
@@ -551,11 +571,16 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
         goto done;
     }
     const char *root = root_path(dest);
-    char fin[PATH_BUF], stage[PATH_BUF], oldp[PATH_BUF], rec[PATH_BUF];
-    if (!fmt_path(fin, sizeof fin, "%s/%s", root, id) ||
-        !fmt_path(stage, sizeof stage, "%s/%s%s", root, id, s_suffix[SUF_NEW]) ||
-        !fmt_path(oldp, sizeof oldp, "%s/%s%s", root, id, s_suffix[SUF_OLD]) ||
-        !fmt_path(rec, sizeof rec, "%s/" INSTALL_NAME, stage)) {
+    pb = malloc(sizeof *pb);
+    if (!pb) {
+        e = T5_ERR_NO_MEM;
+        goto done;
+    }
+    char *fin = pb->fin, *stage = pb->stage, *oldp = pb->oldp, *rec = pb->rec;
+    if (!fmt_path(fin, PATH_BUF, "%s/%s", root, id) ||
+        !fmt_path(stage, PATH_BUF, "%s/%s%s", root, id, s_suffix[SUF_NEW]) ||
+        !fmt_path(oldp, PATH_BUF, "%s/%s%s", root, id, s_suffix[SUF_OLD]) ||
+        !fmt_path(rec, PATH_BUF, "%s/" INSTALL_NAME, stage)) {
         seterr(err, errlen, "install path too long");
         e = T5_ERR_INVALID_ARG;
         goto done;
@@ -603,9 +628,8 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
     /* Moved between roots: drop the copy on the other one. */
     remove_dir_safely(root_path(dest == T5_PKG_DEST_SD ? T5_PKG_DEST_DATA : T5_PKG_DEST_SD), id);
 
-    char data[PATH_BUF];
-    if (fmt_path(data, sizeof data, "%s/%s", s_appdata, id) && !mkdir_p(data)) {
-        T5_LOGW(TAG, "%s: cannot create data dir %s", id, data);
+    if (fmt_path(pb->data, sizeof pb->data, "%s/%s", s_appdata, id) && !mkdir_p(pb->data)) {
+        T5_LOGW(TAG, "%s: cannot create data dir %s", id, pb->data);
     }
     T5_LOGI(TAG, "installed %s %s on %s (%" PRIu64 " bytes)%s", id, m.version, root_str(dest), total,
             have_old ? ", upgrade" : "");
@@ -614,6 +638,7 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
         if (e != T5_OK) seterr(err, errlen, "installed but unreadable");
     }
 done:
+    free(pb);
     t5_zip_close(z);
     return e;
 }

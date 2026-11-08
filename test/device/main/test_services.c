@@ -83,7 +83,11 @@ static void hammer(void *arg)
 {
     hammer_t *h = arg;
     t5_i2c_dev_t *d;
-    t5_i2c_open(h->addr, 400000, "hammer", &d);
+    if (t5_i2c_open(h->addr, 400000, "hammer", &d) != T5_OK) {
+        h->err++;   /* counted as a failure, and the test waits on done */
+        h->done = true;
+        vTaskDelete(NULL);
+    }
     uint8_t v;
     while (h->run) {
         if (t5_i2c_read_u8(d, 0x01, &v) == T5_OK) h->ok++; else h->err++;

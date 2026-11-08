@@ -27,7 +27,7 @@ static void test_16bit_registers(void)
     mock_i2c_dev_t *m = mock_i2c_add(0x55, true);
     m->regs[0x1234] = 0x77;
     t5_i2c_dev_t *d;
-    t5_i2c_open(0x55, 400000, "t", &d);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x55, 400000, "t", &d));
     uint8_t v = 0;
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read16(d, 0x1234, &v, 1));
     TEST_ASSERT_EQUAL_HEX8(0x77, v);
@@ -54,7 +54,7 @@ static void test_timeout_triggers_recovery_and_retry(void)
     mock_i2c_dev_t *m = mock_i2c_add(0x50, false);
     m->regs[0] = 0x42;
     t5_i2c_dev_t *d;
-    t5_i2c_open(0x50, 0, "x", &d);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x50, 0, "x", &d));
     mock_i2c_fail_next(0x50, 1, T5_ERR_TIMEOUT);
     uint8_t v = 0;
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read_u8(d, 0, &v));
@@ -67,7 +67,7 @@ static void test_nack_does_not_recover(void)
 {
     mock_i2c_add(0x50, false);
     t5_i2c_dev_t *d;
-    t5_i2c_open(0x50, 0, "x", &d);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x50, 0, "x", &d));
     mock_i2c_fail_next(0x50, 1, T5_ERR_NACK);
     uint8_t v;
     TEST_ASSERT_EQUAL(T5_ERR_NACK, t5_i2c_read_u8(d, 0, &v));
@@ -80,7 +80,7 @@ static void on_recover(void *arg) { (void)arg; s_recover_cb_hits++; }
 static void test_recover_callbacks(void)
 {
     s_recover_cb_hits = 0;
-    t5_i2c_on_recover(on_recover, NULL);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_on_recover(on_recover, NULL));
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_recover());
     TEST_ASSERT_EQUAL(1, s_recover_cb_hits);
 }
@@ -89,7 +89,7 @@ static void test_fault_isolation_and_recovery(void)
 {
     mock_i2c_add(0x50, false);
     t5_i2c_dev_t *d;
-    t5_i2c_open(0x50, 0, "flaky", &d);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x50, 0, "flaky", &d));
     uint8_t v;
     mock_i2c_fail_next(0x50, 1000, T5_ERR_NACK);
     for (int i = 0; i < T5_I2C_FAULT_THRESHOLD; i++) {
@@ -115,10 +115,10 @@ static void test_trace_ring_keeps_newest(void)
 {
     mock_i2c_add(0x50, false);
     t5_i2c_dev_t *d;
-    t5_i2c_open(0x50, 0, "x", &d);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x50, 0, "x", &d));
     t5_i2c_trace_enable(true);
     for (int i = 0; i < T5_I2C_TRACE_LEN + 10; i++) {
-        t5_i2c_write_u8(d, (uint8_t)i, 0);
+        TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_write_u8(d, (uint8_t)i, 0));
     }
     static t5_i2c_trace_t t[T5_I2C_TRACE_LEN];
     int n = t5_i2c_trace_read(t, T5_I2C_TRACE_LEN);
@@ -131,7 +131,7 @@ static void test_lock_nests_and_no_handoff_when_idle(void)
 {
     mock_i2c_add(0x50, false);
     t5_i2c_dev_t *d;
-    t5_i2c_open(0x50, 0, "x", &d);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x50, 0, "x", &d));
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock(10));
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock(10));            /* recursive */
     uint8_t v;

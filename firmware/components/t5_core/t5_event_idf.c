@@ -4,6 +4,9 @@
  */
 #include <string.h>
 #include "esp_event.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "t5_core/os.h"
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_event_priv.h"
@@ -39,6 +42,9 @@ t5_err_t t5_event_init(void)
     if (esp_event_handler_register_with(s_loop, T5_EVENT_BASE, ESP_EVENT_ANY_ID, on_event, NULL) != ESP_OK) {
         return T5_ERR_FAIL;
     }
+    /* Apps' event handlers run on this task (stack margin: see os.h). */
+    TaskHandle_t h = xTaskGetHandle("t5_events");
+    if (h) t5_task_guard_margin((t5_task_t)h);
     return T5_OK;
 }
 

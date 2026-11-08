@@ -50,6 +50,13 @@ t5_err_t t5_storage_sd_info(t5_sd_info_t *out);
 t5_err_t t5_storage_sd_eject(void);
 /* Leave EJECTED/FAILED and try to mount on the next poll. */
 t5_err_t t5_storage_sd_rescan(void);
+/* USB mass storage: unmount /sd and lend the raw card (an sdmmc_card_t *)
+ * to the USB stack; reclaim remounts it. */
+t5_err_t t5_storage_sd_lend(void **card);
+/* Erase the mounted SD card (a new FAT filesystem; slow on big cards: not
+ * on the UI task). */
+t5_err_t t5_storage_sd_format(void);
+t5_err_t t5_storage_sd_reclaim(void *card);
 
 /* Write a whole file so a reader sees the old or the new contents, never a
  * mix: write <path>.tmp, fsync, rename. Atomic on /data (LittleFS); on FAT

@@ -18,3 +18,4 @@ t5_err_t t5_i2c_hw_xfer(t5_i2c_hw_dev_t dev, const uint8_t *tx, size_t txlen, ui
 t5_err_t t5_i2c_hw_probe(uint8_t addr, uint32_t timeout_ms);
 /* Reset the controller and clear the bus. */
 t5_err_t t5_i2c_hw_recover(void);
+void *t5_i2c_hw_bus(void);

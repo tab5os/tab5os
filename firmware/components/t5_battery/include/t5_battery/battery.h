@@ -39,20 +39,20 @@ typedef struct {
 
 /* Start the INA226, restore the gauge, start the 1 Hz task, and register the
  * charge-mode shutdown handler with the power service. */
-t5_err_t t5_battery_init(void);
+T5_MUST_CHECK t5_err_t t5_battery_init(void);
 void t5_battery_status(t5_battery_status_t *out);
 int t5_battery_percent(void);
 
 /* Settings (saved). */
-t5_err_t t5_battery_set_charge_limit(bool on);   /* 80% stop, restart at 75% */
-t5_err_t t5_battery_set_fast_charge(bool on);
+T5_MUST_CHECK t5_err_t t5_battery_set_charge_limit(bool on);   /* 80% stop, restart at 75% */
+T5_MUST_CHECK t5_err_t t5_battery_set_fast_charge(bool on);
 bool t5_battery_charge_limit(void);
 bool t5_battery_fast_charge(void);
 
 /* Trace logging (plan: start on day one of Phase 2): one CSV line per sample.
  * path NULL: /sd/battery-<epoch>.csv if the card is mounted, else
  * /data/battery.csv (capped at 1 MB). */
-t5_err_t t5_battery_trace_start(const char *path);
+T5_MUST_CHECK t5_err_t t5_battery_trace_start(const char *path);
 void t5_battery_trace_stop(void);
 const char *t5_battery_trace_path(void);   /* NULL when not logging */
 

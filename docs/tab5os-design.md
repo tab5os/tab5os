@@ -290,7 +290,7 @@ Ship two runtimes on one API: native ELF for performance and MicroPython for eas
 
 | Runtime | Best for | Containment | Trade-off |
 | --- | --- | --- | --- |
-| Native ELF (C, C++, Rust later) | Camera, games, emulators, drivers | None: it shares the OS address space | A bad pointer can crash the device |
+| Native ELF (C, C++, Rust later) | Camera, games, emulators, drivers | None: it shares the OS address space | A bad pointer usually just closes the app; a stray write can corrupt the OS |
 | MicroPython | Sensor scripts, dashboards, learning, on-device edits | Enforced, if the OS exposes only `t5` bindings and no raw `machine` access | Slower, with more memory per app |
 | WebAssembly (later spike) | Untrusted third-party apps | Strong, in principle | Needs testing on this chip for speed and API overhead |
 
@@ -341,7 +341,7 @@ Export only versioned `t5_*` symbols and the OS's LVGL build. An app needing an 
 
 The OS tracks each app's heap, tasks, ports, rails, locks and LVGL objects, so exit always cleans up. Apps must create tasks through `t5_task_create` for that tracking to work.
 
-A native crash reboots the whole device, because there is no process isolation. The crash guard records the app that was running, returns to the launcher and blocks auto-launch after two crashes. The core dump stays available in the App Manager.
+There is no process isolation, but a native app's crash doesn't take the OS down: a CPU fault blamed on the app (its code is on the faulting call chain, or the task is one the app created) moves the faulting task to a recovery point instead of panicking, and the app is closed. Hangs on the UI task are stopped the same way, app heaps stay out of the OS's memory reserves, and a task that hogs a core is moved to the lowest priority (see sdk.md, "Crashes and hangs"). What can't be pinned on the app still reboots; the crash guard then records the app that was running, returns to the launcher and blocks auto-launch after two crashes. The core dump stays available in the App Manager.
 
 ### What an app looks like
 

@@ -8,6 +8,7 @@
 #include "t5_net/ble.h"
 #include "t5_net/netcfg.h"
 #include "c6img.h"
+#include "netproto.h"
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -192,6 +193,194 @@ static void test_ble_adv_name(void)
     TEST_ASSERT_EQUAL_STRING("Ta", tiny);
 }
 
+/* ---- netproto: URLs, HTTP heads, chunked bodies, WebSocket frames ---- */
+static void test_url_parse(void)
+{
+    t5np_url_t u;
+    TEST_ASSERT_EQUAL(0, t5np_url_parse("https://api.example.com/v1/x?a=1#f", &u));
+    TEST_ASSERT_TRUE(u.tls);
+    TEST_ASSERT_EQUAL_STRING("api.example.com", u.host);
+    TEST_ASSERT_EQUAL(443, u.port);
+    TEST_ASSERT_FALSE(u.port_given);
+    TEST_ASSERT_EQUAL_STRING("/v1/x?a=1#f", u.path);
+    TEST_ASSERT_EQUAL(0, t5np_url_parse("http://user:pw@10.0.0.2:8080", &u));
+    TEST_ASSERT_EQUAL(8080, u.port);
+    TEST_ASSERT_EQUAL_STRING("10.0.0.2", u.host);
+    TEST_ASSERT_EQUAL_STRING("", u.path);
+    TEST_ASSERT_EQUAL(7, (int)u.userinfo_len);
+    TEST_ASSERT_EQUAL(0, t5np_url_parse("ws://[fe80::1]:81/chat", &u));
+    TEST_ASSERT_EQUAL_STRING("fe80::1", u.host);
+    TEST_ASSERT_EQUAL(T5NP_WS, u.scheme);
+    TEST_ASSERT_EQUAL(81, u.port);
+    TEST_ASSERT_EQUAL(0, t5np_url_parse("WSS://h", &u));
+    TEST_ASSERT_EQUAL(443, u.port);
+    TEST_ASSERT_EQUAL(-1, t5np_url_parse("ftp://h/", &u));
+    TEST_ASSERT_EQUAL(-1, t5np_url_parse("http://h:0/", &u));
+    TEST_ASSERT_EQUAL(-1, t5np_url_parse("http://h:99999/", &u));
+    TEST_ASSERT_EQUAL(-1, t5np_url_parse("http:///x", &u));
+    TEST_ASSERT_EQUAL(-1, t5np_url_parse("http://h/a b", &u));
+    TEST_ASSERT_EQUAL(-1, t5np_url_parse("http://h/a\r\nX: y", &u));
+    TEST_ASSERT_EQUAL(-1, t5np_url_parse("http://[::1/", &u));
+}
+
+static void test_url_join(void)
+{
+    char out[128];
+    TEST_ASSERT_EQUAL(0, t5np_url_join("http://h/a/b?q", "c", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("http://h/a/c", out);
+    TEST_ASSERT_EQUAL(0, t5np_url_join("http://h:81/a/b", "/x", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("http://h:81/x", out);
+    TEST_ASSERT_EQUAL(0, t5np_url_join("https://h/a", "//o.org/p", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("https://o.org/p", out);
+    TEST_ASSERT_EQUAL(0, t5np_url_join("http://h/a", "https://z/", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("https://z/", out);
+    TEST_ASSERT_EQUAL(0, t5np_url_join("http://h/a?x", "?y", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("http://h/a?y", out);
+    TEST_ASSERT_EQUAL(0, t5np_url_join("http://h", "x", out, sizeof out));
+    TEST_ASSERT_EQUAL_STRING("http://h/x", out);
+    TEST_ASSERT_EQUAL(-1, t5np_url_join("http://h/", "/very/long/path", out, 12));
+}
+
+static void test_head_parse(void)
+{
+    char buf[] = "HTTP/1.1 200 OK\r\nContent-Type: text/plain \r\nX-A:1\r\n folded\r\nTransfer-Encoding: gzip, Chunked\r\n\r\nbody";
+    size_t end = t5np_head_end(buf, strlen(buf));
+    TEST_ASSERT_EQUAL(strlen(buf) - 4, end);
+    t5np_head_t h;
+    TEST_ASSERT_EQUAL(0, t5np_head_parse(buf, end, &h));
+    TEST_ASSERT_EQUAL(200, h.status);
+    TEST_ASSERT_EQUAL(1, h.minor);
+    TEST_ASSERT_EQUAL(3, h.n);
+    TEST_ASSERT_EQUAL_STRING("text/plain", t5np_head_get(&h, "content-type"));
+    TEST_ASSERT_EQUAL_STRING("1", t5np_head_get(&h, "X-A"));
+    TEST_ASSERT_NULL(t5np_head_get(&h, "missing"));
+    TEST_ASSERT_TRUE(t5np_has_token(t5np_head_get(&h, "Transfer-Encoding"), "chunked"));
+    TEST_ASSERT_FALSE(t5np_has_token("chunkedx", "chunked"));
+    char partial[] = "HTTP/1.1 200 OK\r\nA: b\r\n";
+    TEST_ASSERT_EQUAL(0, t5np_head_end(partial, strlen(partial)));
+    char bad[] = "HTTP/2 200 OK\r\n\r\n";
+    TEST_ASSERT_EQUAL(-1, t5np_head_parse(bad, strlen(bad), &h));
+    char bad2[] = "HTTP/1.1 200 OK\r\nNo colon\r\n\r\n";
+    TEST_ASSERT_EQUAL(-1, t5np_head_parse(bad2, strlen(bad2), &h));
+    char lf[] = "HTTP/1.0 404 Not Found\nServer: x\n\n";
+    end = t5np_head_end(lf, strlen(lf));
+    TEST_ASSERT_EQUAL(strlen(lf), end);
+    TEST_ASSERT_EQUAL(0, t5np_head_parse(lf, end, &h));
+    TEST_ASSERT_EQUAL(404, h.status);
+    TEST_ASSERT_EQUAL_STRING("x", t5np_head_get(&h, "server"));
+}
+
+static void test_req_parse(void)
+{
+    char buf[] = "POST /api/x?a=1 HTTP/1.1\r\nHost: tab5\r\nContent-Length: 4\r\n\r\nbody";
+    size_t end = t5np_head_end(buf, strlen(buf));
+    t5np_head_t h;
+    TEST_ASSERT_EQUAL(0, t5np_req_parse(buf, end, &h));
+    TEST_ASSERT_EQUAL_STRING("POST", h.method);
+    TEST_ASSERT_EQUAL_STRING("/api/x?a=1", h.target);
+    TEST_ASSERT_EQUAL(1, h.minor);
+    TEST_ASSERT_EQUAL_STRING("4", t5np_head_get(&h, "content-length"));
+    char bad[] = "get / HTTP/1.1\r\n\r\n";                       /* lower-case method */
+    TEST_ASSERT_EQUAL(-1, t5np_req_parse(bad, strlen(bad), &h));
+    char bad2[] = "GET /a b HTTP/1.1\r\n\r\n";
+    TEST_ASSERT_EQUAL(-1, t5np_req_parse(bad2, strlen(bad2), &h));
+    char bad3[] = "GET / SPDY/3\r\n\r\n";
+    TEST_ASSERT_EQUAL(-1, t5np_req_parse(bad3, strlen(bad3), &h));
+}
+
+static void test_chunked(void)
+{
+    const char *src = "4\r\nWiki\r\n5;ext=1\r\npedia\r\nE\r\n in\r\n\r\nchunks.\r\n0\r\nTrailer: x\r\n\r\nGARBAGE";
+    const char *want = "Wikipedia in\r\n\r\nchunks.";
+    /* Fed whole, and one byte at a time. */
+    for (int step = 0; step < 2; step++) {
+        t5np_chunk_t c;
+        t5np_chunk_init(&c);
+        char out[128] = { 0 };
+        size_t outn = 0, in = 0, n = strlen(src);
+        while (in < n && !c.done) {
+            uint8_t buf[128];
+            size_t take = step ? 1 : n - in;
+            memcpy(buf, src + in, take);
+            size_t used;
+            size_t got = t5np_chunk_decode(&c, buf, take, &used);
+            memcpy(out + outn, buf, got);
+            outn += got;
+            in += used;
+            TEST_ASSERT_FALSE(c.bad);
+        }
+        TEST_ASSERT_TRUE(c.done);
+        TEST_ASSERT_EQUAL_STRING(want, out);
+        TEST_ASSERT_EQUAL_STRING("GARBAGE", src + in);
+    }
+    t5np_chunk_t c;
+    t5np_chunk_init(&c);
+    uint8_t bad[] = "zz\r\n";
+    size_t used;
+    t5np_chunk_decode(&c, bad, 4, &used);
+    TEST_ASSERT_TRUE(c.bad);
+    t5np_chunk_init(&c);
+    uint8_t bad2[] = "2\r\nabX";
+    t5np_chunk_decode(&c, bad2, 6, &used);
+    TEST_ASSERT_TRUE(c.bad);
+}
+
+static void test_ws_frames(void)
+{
+    uint8_t h[14];
+    const uint8_t mask[4] = { 1, 2, 3, 4 };
+    TEST_ASSERT_EQUAL(6, t5np_ws_header(h, T5NP_WS_TEXT, true, 5, mask));
+    TEST_ASSERT_EQUAL_HEX8(0x81, h[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x85, h[1]);
+    TEST_ASSERT_EQUAL(4, t5np_ws_header(h, T5NP_WS_BINARY, true, 300, NULL));
+    TEST_ASSERT_EQUAL_HEX8(126, h[1]);
+    TEST_ASSERT_EQUAL(10, t5np_ws_header(h, T5NP_WS_BINARY, false, 70000, NULL));
+    t5np_ws_frame_t f;
+    TEST_ASSERT_EQUAL(1, t5np_ws_parse(h, 10, &f));
+    TEST_ASSERT_EQUAL(70000, (int)f.len);
+    TEST_ASSERT_FALSE(f.fin);
+    TEST_ASSERT_EQUAL(10, (int)f.hdr_len);
+    TEST_ASSERT_EQUAL(0, t5np_ws_parse(h, 5, &f));                 /* need more */
+    uint8_t m[] = { 0x89, 0x82, 9, 9, 9, 9, 'h' ^ 9, 'i' ^ 9 };      /* masked ping "hi" */
+    TEST_ASSERT_EQUAL(1, t5np_ws_parse(m, sizeof m, &f));
+    TEST_ASSERT_TRUE(f.masked);
+    TEST_ASSERT_EQUAL(T5NP_WS_PING, f.opcode);
+    t5np_ws_mask(m + 6, 2, f.mask, 0);
+    TEST_ASSERT_EQUAL_MEMORY("hi", m + 6, 2);
+    uint8_t frag_ctl[] = { 0x09, 0x00 };                             /* fragmented ping */
+    TEST_ASSERT_EQUAL(-1, t5np_ws_parse(frag_ctl, 2, &f));
+    uint8_t big_ctl[] = { 0x88, 126, 0, 200 };
+    TEST_ASSERT_EQUAL(-1, t5np_ws_parse(big_ctl, 4, &f));
+    uint8_t bad_op[] = { 0x83, 0 };
+    TEST_ASSERT_EQUAL(-1, t5np_ws_parse(bad_op, 2, &f));
+    uint8_t data[] = "abcdef";
+    t5np_ws_mask(data, 6, mask, 0);
+    t5np_ws_mask(data, 3, mask, 0);
+    t5np_ws_mask(data + 3, 3, mask, 3);                              /* chunked unmask */
+    TEST_ASSERT_EQUAL_MEMORY("abcdef", data, 6);
+}
+
+static void test_sha1_base64_accept(void)
+{
+    uint8_t d[20];
+    char hex[41];
+    t5np_sha1("abc", 3, d);
+    for (int i = 0; i < 20; i++) sprintf(hex + 2 * i, "%02x", d[i]);
+    TEST_ASSERT_EQUAL_STRING("a9993e364706816aba3e25717850c26c9cd0d89d", hex);
+    const char *two = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";   /* 56 bytes: two blocks */
+    t5np_sha1(two, strlen(two), d);
+    for (int i = 0; i < 20; i++) sprintf(hex + 2 * i, "%02x", d[i]);
+    TEST_ASSERT_EQUAL_STRING("84983e441c3bd26ebaae4aa1f95129e5e54670f1", hex);
+    char b[16];
+    t5np_base64((const uint8_t *)"Ma", 2, b);
+    TEST_ASSERT_EQUAL_STRING("TWE=", b);
+    t5np_base64((const uint8_t *)"Man", 3, b);
+    TEST_ASSERT_EQUAL_STRING("TWFu", b);
+    char acc[29];
+    t5np_ws_accept("dGhlIHNhbXBsZSBub25jZQ==", acc);                /* RFC 6455 section 1.3 */
+    TEST_ASSERT_EQUAL_STRING("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", acc);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -204,5 +393,12 @@ int main(void)
     RUN_TEST(test_c6img_rejects);
     RUN_TEST(test_ble_addr);
     RUN_TEST(test_ble_adv_name);
+    RUN_TEST(test_url_parse);
+    RUN_TEST(test_url_join);
+    RUN_TEST(test_head_parse);
+    RUN_TEST(test_req_parse);
+    RUN_TEST(test_chunked);
+    RUN_TEST(test_ws_frames);
+    RUN_TEST(test_sha1_base64_accept);
     return UNITY_END();
 }

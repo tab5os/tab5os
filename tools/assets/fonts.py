@@ -29,9 +29,11 @@ LV_FONT_CONV = "lv_font_conv@1.5.3"
 
 ROBOTO_COMMIT = "38062f4b4a0be4346d07a928408da21602545e9e"  # googlefonts/roboto main, v2.138 era
 ICONS_COMMIT = "10ecc14790612ca8fd164e3f4ffe9c16fc50d5b7"   # google/material-design-icons master
+MONO_COMMIT = "7bf0b33178844cc7d0c9915b746ece1be7f46bea"    # googlefonts/RobotoMono main
 
 _R = "https://raw.githubusercontent.com/googlefonts/roboto/" + ROBOTO_COMMIT
 _M = "https://raw.githubusercontent.com/google/material-design-icons/" + ICONS_COMMIT
+_RM = "https://raw.githubusercontent.com/googlefonts/RobotoMono/" + MONO_COMMIT
 
 SOURCES = {
     "Roboto-Regular.ttf": (_R + "/src/hinted/Roboto-Regular.ttf",
@@ -46,6 +48,10 @@ SOURCES = {
                                          "530f25bf7b2d71c8e1da9476d53f9a9bb6b7e187bff69bb7128bb679b8194894"),
     "MaterialIcons-LICENSE.txt": (_M + "/LICENSE",
                                   "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"),
+    "RobotoMono-Regular.ttf": (_RM + "/fonts/ttf/RobotoMono-Regular.ttf",
+                               "af0bff7599c3df3831755c16e39b3c496df74b8c8d8a1161b14dc8461be17cb4"),
+    "RobotoMono-OFL.txt": (_RM + "/OFL.txt",
+                           "50ab8dd54680d3473f649c9db86fece88434d097c7834475c1c72d2f8c429215"),
 }
 
 # ASCII, Latin-1, and • … – — ‘ ’ “ ” € (° and × are already in Latin-1).
@@ -61,6 +67,8 @@ TEXT_FONTS = [
     ("md_font_roboto_medium_28", "Roboto-Medium.ttf", 28, "Button (14 dp, uppercase)"),
     ("md_font_roboto_regular_24", "Roboto-Regular.ttf", 24, "Caption (12 dp)"),
     ("md_font_roboto_medium_24", "Roboto-Medium.ttf", 24, "Overline (12 dp, uppercase)"),
+    # Not an MD2 role: code and terminal text (Editor, Terminal, Python output).
+    ("md_font_roboto_mono_24", "RobotoMono-Regular.ttf", 24, "Code, terminal (12 dp)"),
 ]
 
 ICON_FONTS = [
@@ -102,6 +110,36 @@ ICONS = [
     # hardware / developer
     "memory", "developer_board", "terminal", "sensors", "keyboard", "language",
     "explore", "thermostat", "account_circle",
+    # shell and system apps (Phase 6)
+    "eject", "history", "bolt", "block", "keyboard_hide", "backspace",
+    "keyboard_return", "arrow_upward", "swap_horiz", "delete_forever",
+    "extension", "dashboard", "palette", "translate", "code", "android",
+    # media and USB (Phase 7)
+    "mouse", "piano", "photo_library", "video_library", "fiber_manual_record",
+    "cameraswitch", "photo_camera", "flash_on", "graphic_eq", "hub",
+    "videogame_asset", "usb_off",
+    # developer tools, updates and recovery (Phases 8 and 9)
+    "note_add", "developer_mode", "security", "restore", "update", "link",
+    "link_off", "folder_open", "healing", "verified_user", "keyboard_arrow_up",
+    "keyboard_arrow_down", "keyboard_tab", "format_indent_increase", "bug_report",
+    # weather (the Weather example app)
+    "wb_sunny", "nights_stay", "wb_cloudy", "foggy", "grain", "umbrella",
+    "water_drop", "ac_unit", "thunderstorm", "air", "wb_twilight", "speed",
+    "location_on",
+]
+
+# The 40 dp font is large (about 1.8 KB a glyph): only the icons the launcher
+# and the system apps draw at that size. md_icon_font(40) falls back to 24 dp
+# glyphs for anything else (see md_text.c).
+ICONS_LARGE = [
+    "apps", "settings", "folder", "extension", "battery_charging_full",
+    "developer_board", "camera_alt", "terminal", "videocam", "usb", "sensors",
+    "android", "dashboard", "photo_library", "image", "music_note", "mic",
+    "insert_drive_file", "sd_storage", "warning", "wifi", "bluetooth",
+    "memory", "cable", "keyboard", "mouse", "piano", "hub", "graphic_eq",
+    "code", "system_update",
+    "wb_sunny", "nights_stay", "wb_cloudy", "cloud", "foggy", "grain",
+    "umbrella", "ac_unit", "thunderstorm",
 ]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -209,6 +247,10 @@ def patch(text, name, opts_line, cap_cp, x_cp):
     guard = name.upper()
     text = text.replace("#ifndef %s\n#define %s 1\n#endif\n\n#if %s\n" % (guard, guard, guard), "", 1)
     text = text.replace("#endif /*#if %s*/\n" % guard, "", 1)
+    if name == "md_font_icons_80":
+        # Subset font: anything not in ICONS_LARGE draws from the 24 dp font.
+        text = text.replace("    .fallback = NULL,", "    .fallback = &md_font_icons_48,", 1)
+        text = text.replace('#include "lvgl.h"\n', '#include "lvgl.h"\n\nLV_FONT_DECLARE(md_font_icons_48)\n', 1)
     text = re.sub(r"\n{3,}", "\n\n", text).rstrip("\n") + "\n"
     return text
 
@@ -305,6 +347,7 @@ def write_licenses():
     os.makedirs(OUT_LIC, exist_ok=True)
     shutil.copyfile(os.path.join(CACHE, "Roboto-LICENSE.txt"), os.path.join(OUT_LIC, "Roboto-LICENSE.txt"))
     shutil.copyfile(os.path.join(CACHE, "MaterialIcons-LICENSE.txt"), os.path.join(OUT_LIC, "MaterialIcons-LICENSE.txt"))
+    shutil.copyfile(os.path.join(CACHE, "RobotoMono-OFL.txt"), os.path.join(OUT_LIC, "RobotoMono-OFL.txt"))
     write(os.path.join(OUT_LIC, "README.md"), """\
 # Third-party font licences
 
@@ -314,11 +357,12 @@ Generated by `tools/assets/fonts.py`. These notices ship with Tab5 OS (About scr
 | --- | --- | --- | --- | --- |
 | Roboto Regular, Roboto Medium (`md_font_roboto_*`) | [googlefonts/roboto](https://github.com/googlefonts/roboto) `src/hinted/` at commit `{rc}` | font version 2.001047 (repo release v2.138) | Apache License 2.0 | `Roboto-LICENSE.txt` |
 | Material Icons Regular (`md_font_icons_*`) | [google/material-design-icons](https://github.com/google/material-design-icons) `font/MaterialIcons-Regular.ttf` at commit `{ic}` | font version 1.017 | Apache License 2.0 | `MaterialIcons-LICENSE.txt` |
+| Roboto Mono Regular (`md_font_roboto_mono_24`) | [googlefonts/RobotoMono](https://github.com/googlefonts/RobotoMono) `fonts/ttf/RobotoMono-Regular.ttf` at commit `{mc}` | | SIL Open Font License 1.1 | `RobotoMono-OFL.txt` |
 
 The fonts are subset and converted to LVGL bitmap fonts with
 [lv_font_conv](https://github.com/lvgl/lv_font_conv) 1.5.3 (MIT). Roboto is a
 trademark of Google; Tab5 OS is not a Google product.
-""".format(rc=ROBOTO_COMMIT, ic=ICONS_COMMIT))
+""".format(rc=ROBOTO_COMMIT, ic=ICONS_COMMIT, mc=MONO_COMMIT))
 
 
 def main():
@@ -344,10 +388,14 @@ def main():
     for name, src, size, _ in TEXT_FONTS:
         out = build_font(name, src, size, TEXT_RANGES, TEXT_RANGES, cap_cp=ord("H"), x_cp=ord("x"))
         sizes.append((name, bitmap_bytes(out)))
-    icon_ranges = ",".join("0x%X" % c for c in sorted(cps[i] for i in ICONS))
+    bad = [i for i in ICONS_LARGE if i not in ICONS]
+    if bad:
+        sys.exit("ICONS_LARGE not in ICONS: " + ", ".join(bad))
     for name, size, _ in ICON_FONTS:
+        subset = ICONS_LARGE if size >= 80 else ICONS
+        icon_ranges = ",".join("0x%X" % c for c in sorted(cps[i] for i in subset))
         out = build_font(name, "MaterialIcons-Regular.ttf", size, icon_ranges,
-                         "<%d icons from md_icons.h>" % len(ICONS))
+                         "<%d icons from md_icons.h>" % len(subset))
         sizes.append((name, bitmap_bytes(out)))
 
     write_headers(cps)

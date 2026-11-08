@@ -162,7 +162,7 @@ static void test_sample_st712x_over_i2c(void)
 {
     mock_i2c_dev_t *tp = mock_i2c_add(0x55, true);
     t5_i2c_dev_t *d;
-    t5_i2c_open(0x55, 400000, "touch", &d);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x55, 400000, "touch", &d));
     t5_touch_setup_for_test(d, T5_PANEL_ST7123, 720, 1280, 2);
     tp->regs[0x0010] = 0x08;                     /* report has coordinates */
     const uint8_t rep[7] = { 0x80 | 0x01, 0x00, 0x02, 0x00, 9, 9, 0 };

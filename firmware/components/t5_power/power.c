@@ -324,7 +324,7 @@ static void enter_deeper(void)
         break;
     case T5_PWR_DIM:                            /* -> Screen off */
         if (s_backlight) {
-            t5_rail_release(s_backlight);
+            T5_LOG_ON_ERR(TAG, t5_rail_release(s_backlight));
             s_backlight = NULL;
         }
         s_state = T5_PWR_SCREEN_OFF;
@@ -360,7 +360,7 @@ static void exit_to_shallower(void)
     }
     case T5_PWR_SCREEN_OFF:                     /* -> Dim */
         if (!s_backlight) {
-            t5_rail_acquire(T5_RAIL_BACKLIGHT, "power", 0, &s_backlight);
+            T5_LOG_ON_ERR(TAG, t5_rail_acquire(T5_RAIL_BACKLIGHT, "power", 0, &s_backlight));
         }
         if (s_wake_trigger_us) {
             uint32_t ms = (uint32_t)((t5_time_us() - s_wake_trigger_us) / 1000);
@@ -448,14 +448,27 @@ void t5_power_tick(void)
                            : woken ? s_wake_cause : T5_PWR_CAUSE_LOCK;
     s_input_pending = false;
     account(now);
-    while (t5_power_depth(s_state) < t5_power_depth(target)) enter_deeper();
-    while (t5_power_depth(s_state) > t5_power_depth(target)) exit_to_shallower();
+    /* The steps only know Active..Sleep (soft off became Sleep above). Each
+     * one moves exactly one level, so at most SLEEP steps either way
+     * (docs/coding-standard.md, rules 2 and 5). */
+    T5_ASSERT(target <= T5_PWR_SLEEP && s_state <= T5_PWR_SLEEP);
+    for (int i = 0; i < T5_PWR_SLEEP && t5_power_depth(s_state) < t5_power_depth(target); i++) {
+        int d = t5_power_depth(s_state);
+        enter_deeper();
+        T5_ASSERT(t5_power_depth(s_state) == d + 1);
+    }
+    for (int i = 0; i < T5_PWR_SLEEP && t5_power_depth(s_state) > t5_power_depth(target); i++) {
+        int d = t5_power_depth(s_state);
+        exit_to_shallower();
+        T5_ASSERT(t5_power_depth(s_state) == d - 1);
+    }
+    T5_ASSERT(s_state == target);
     if (s_state == T5_PWR_ACTIVE) s_wake_trigger_us = 0;
     T5_LOGI(TAG, "%s -> %s (%s)", t5_power_state_name(from), t5_power_state_name(s_state), t5_power_cause_name(cause));
     t5_ev_power_t ev = { (uint8_t)from, (uint8_t)s_state, (uint8_t)cause };
     t5_event_post(T5_EV_POWER_STATE, &ev, sizeof ev);
     /* Every state change is a save point (plan 2.12). */
-    t5_autosave_now();
+    T5_LOG_ON_ERR(TAG, t5_autosave_now());
 }
 
 t5_power_state_t t5_power_state(void)
@@ -505,7 +518,7 @@ t5_err_t t5_power_soft_off(t5_off_reason_t reason, bool emergency)
     uint32_t ms = 0;
     int min_prio = emergency ? T5_SUSPEND_PRIO_SYSTEM : 0;
     t5_suspend_run(min_prio, &ms);
-    t5_autosave_now();
+    T5_LOG_ON_ERR(TAG, t5_autosave_now());
     t5_storage_sync();
 
     /* Charge mode takes over here when USB is attached. On the device it
@@ -661,7 +674,7 @@ t5_err_t t5_power_init(void)
     if (s_inited) return T5_OK;
     t5_power_read_wake_reason();
     load_settings();
-    t5_session_load();
+    T5_IGNORE(t5_session_load());   /* none saved (first boot) is normal */
     T5_RETURN_ON_ERR(t5_power_hw_init());
 
     s_last_input_ms = t5_time_ms();
@@ -674,9 +687,9 @@ t5_err_t t5_power_init(void)
         { .name = "rails", .prio = T5_SUSPEND_PRIO_RAILS, .budget_ms = 100, .suspend = rails_suspend, .resume = rails_resume },
     };
     for (size_t i = 0; i < sizeof hooks / sizeof hooks[0]; i++) {
-        t5_power_register_hook(&hooks[i]);
+        T5_LOG_ON_ERR(TAG, t5_power_register_hook(&hooks[i]));
     }
-    t5_autosave_register("power", save_settings, NULL);
+    T5_LOG_ON_ERR(TAG, t5_autosave_register("power", save_settings, NULL));
     t5_touch_set_activity_hook(on_touch, NULL);
     s_inited = true;
     T5_LOGI(TAG, "profile %s: dim %us, screen off %us, sleep +%us, soft off +%uh",

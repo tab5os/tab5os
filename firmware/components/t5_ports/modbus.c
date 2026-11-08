@@ -208,12 +208,13 @@ static t5_err_t transact(t5_modbus_t *mb, const uint8_t *req, size_t reqlen, uin
     if (mb->last_us && idle < (int64_t)t35) {
         t5_delay_ms((uint32_t)((t35 - idle + 999) / 1000));
     }
-    t5_port_uart_flush(mb->port);
+    T5_IGNORE(t5_port_uart_flush(mb->port));   /* best effort: stale bytes fail the CRC anyway */
     int w = t5_port_uart_write(mb->port, req, reqlen);
     if (w != (int)reqlen) {
         return w < 0 ? (t5_err_t)w : T5_ERR_IO;
     }
-    t5_port_uart_wait_tx(mb->port, 20 + (uint32_t)(reqlen * char_us / 1000));
+    /* Reading before the frame has left the wire would turn RS-485 around too early. */
+    T5_RETURN_ON_ERR(t5_port_uart_wait_tx(mb->port, 20 + (uint32_t)(reqlen * char_us / 1000)));
     mb->last_us = t5_time_us();
     if (req[0] == 0) {
         /* Broadcast: no reply. Give slaves the turnaround delay. */
@@ -294,7 +295,8 @@ static t5_err_t write_single(t5_modbus_t *mb, uint8_t fn, uint8_t slave, uint16_
     const uint8_t *d = NULL;
     size_t dl = 0;
     T5_RETURN_ON_ERR(transact(mb, req, n, rx, 8, &d, &dl));
-    if (slave != 0 && memcmp(d, req + 2, 4) != 0) {
+    /* The echo of address and value/count; a broadcast (slave 0) has no reply. */
+    if (slave != 0 && (!d || dl < 4 || memcmp(d, req + 2, 4) != 0)) {
         return T5_ERR_IO;
     }
     return T5_OK;
@@ -321,7 +323,8 @@ t5_err_t t5_modbus_write_registers(t5_modbus_t *mb, uint8_t slave, uint16_t addr
     const uint8_t *d = NULL;
     size_t dl = 0;
     T5_RETURN_ON_ERR(transact(mb, req, n, rx, 8, &d, &dl));
-    if (slave != 0 && memcmp(d, req + 2, 4) != 0) {
+    /* The echo of address and value/count; a broadcast (slave 0) has no reply. */
+    if (slave != 0 && (!d || dl < 4 || memcmp(d, req + 2, 4) != 0)) {
         return T5_ERR_IO;
     }
     return T5_OK;

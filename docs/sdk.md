@@ -1,22 +1,44 @@
 # Tab5 OS app SDK (API level 1)
 
-Nov 5, 2026 · Phase 5 of the [implementation plan](tab5os-implementation-plan.md)
+Nov 5, 2026, updated Nov 7 for Phase 8 · [implementation plan](tab5os-implementation-plan.md)
 
 Native apps are position-independent RISC-V ELFs that the OS loads into PSRAM from the SD card or `/data`. They link against nothing; every function they call is bound at load time by name against the published symbol list, [`sdk/abi/api_v1.sym`](../sdk/abi/api_v1.sym).
+
+Python apps: [python.md](python.md). Every function, with its permission: [api-reference.md](api-reference.md). Guides, recipes and an agent playbook: the [app developer wiki](wiki/Home.md).
 
 ## Build an app
 
 ```sh
 . tools/env.sh                       # ESP-IDF v6.1: the compiler
 t5 build                             # the firmware build supplies headers and LVGL config
-cp -r sdk/templates/c myapp && cd myapp
-cmake -B build -G Ninja -DT5_SDK=$PWD/../sdk && cmake --build build
-# -> build/hello.elf, build/hello.t5app
+t5 new "Hello"                       # sdk/templates/c (add --python for a Python app, see python.md)
+cd hello && t5 run                   # build, push, launch, stream the log
 ```
 
-Copy the `.t5app` to the SD card and run `app install /sd/hello.t5app` on the console (the Files app does this in Phase 6). `t5 apps` builds the test apps in `test/apps/`.
+`t5 run` uses Wi-Fi when a paired Tab5 in developer mode is reachable, and the USB-C console otherwise (or with `--usb`). On a Tab5 with a fresh firmware build, `t5 new` to the app on screen took 2.7 s over Wi-Fi (C) and the USB path moves about 20 KB/s.
 
-The build uses the firmware's own compile flags for its ABI table (`sdk/cmake/app_flags.py` reads them from `firmware/build-<rev>/compile_commands.json`), so an app sees exactly the headers and LVGL configuration the OS was built with. One `.t5app` runs on both chip revisions: nothing in it depends on `rev1` or `rev3`.
+To install by hand instead: copy the `.t5app` (from `t5 app-build`, in `build/`) to the SD card and tap it in Files, or run `app install /sd/hello.t5app` (or `app fetch <url>`) on the console. `t5 apps` builds the test apps in `test/apps/`, `t5 examples` the examples in `apps/examples/`.
+
+The build uses the firmware's own compile flags for its ABI table (`sdk/cmake/app_flags.py` reads them from `firmware/build-<rev>/compile_commands.json`), so an app sees exactly the headers and LVGL configuration the OS was built with.
+
+## Developer mode and the t5 CLI
+
+Developer mode (Settings > Developer mode) is off by default; while it's off nothing listens on the network. When it's on, the Tab5 serves a small HTTP API on port 8350 to computers you pair:
+
+```sh
+t5 pair 192.168.88.10                # the Tab5 shows a six-digit code; type it here
+t5 devices                           # paired Tab5s (tokens live in ~/.config/t5/devices.json)
+t5 run [DIR] | t5 push FILE.t5app | t5 launch ID | t5 stop | t5 rm ID | t5 ls
+t5 logs [--grep TEXT]                # the device log, live
+t5 py script.py | t5 py -c "import t5; print(t5.power.battery())"
+t5 screenshot out.png
+```
+
+Pairing gives the computer a random 256-bit token; the Tab5 keeps only its SHA-256 and refuses any other request without it. Three wrong codes or two minutes end a pairing. Settings lists the paired computers and forgets them. The endpoints are documented in `firmware/components/t5_dev/include/t5_dev/dev.h`.
+
+### Signed packages
+
+`t5 keygen me.pem` makes an ECDSA P-256 key; `t5 pack --sign me.pem` (or `t5 run --sign me.pem`) adds `signature.t5sig`, a signature over every other file's SHA-256. `python3 tools/t5/t5pack.py --inspect app.t5app` checks it. Unsigned apps install with the usual warning (design, "App trust"); a signature names the publisher by key fingerprint.
 
 ## What an app looks like
 
@@ -35,12 +57,102 @@ T5_APP(.on_create = on_create);
 | Header | What it gives you |
 | --- | --- |
 | `t5/app.h` | Lifecycle (`T5_APP`, `on_create`, `on_resume`, `on_suspend`, `on_destroy`, `on_rotate`, `on_alarm`), the app's screen and data directory, permissions, scheduled alarms, tasks and mutexes, events |
-| `t5/ui.h` | LVGL 9.6, the MD2 layer (`md_*`: theme, type, elevation, ripple, app bar, buttons, FAB, card, recycled list, dialog), `T5_DP()`, `t5_ui_lock`/`t5_ui_async` |
+| `t5/ui.h` | LVGL 9.6, the MD2 layer (`md_*`: theme, type, elevation, ripple, app bar, buttons, FAB, card, recycled list, dialog; and from Phase 6 text field, switch, slider, checkbox, chips, tabs, menu, static rows and pages, snackbar, navigation drawer), `T5_DP()`, `t5_ui_lock`/`t5_ui_async` |
+| `t5/shell.h` | Full screen (hide the status bar), snackbars from any task, quick settings, home, the on-screen keyboard |
 | `t5/port.h` | Named ports (`grove`, `mbus.*`, `ext`, `rs485`, `stamp`), Modbus RTU, rails |
 | `t5/power.h` | Wake locks, power state, battery (read-only) |
-| `t5/sys.h` | Time, IMU, network status, FreeRTOS |
+| `t5/sys.h` | Time (and local time with the zone from Settings), IMU, network status, FreeRTOS |
+| `t5/audio.h` | One output stream (any rate 8-48 kHz, mono or stereo), system sounds, volume; microphone input (`mic`) with optional echo cancellation; resampling and level helpers |
+| `t5/camera.h` | The built-in camera (`camera`): preview in an LVGL object, JPEG photos, H.264 video; hardware JPEG decoding (`t5_jpeg_decode`) |
+| `t5/usb.h` | USB-A devices: list, CDC serial, MIDI, UVC cameras (`usb`); a USB drive is mounted at `/usb` |
+| `t5/storage.h` | SD and `/data` state, atomic writes, safe eject (`storage`) |
+| `t5/system.h` | App list, launching, app info, per-app power, charge history (`system`) |
+| `t5/net.h` | Networking (`net`): DNS, TCP and TLS clients, TCP servers, UDP with broadcast and multicast, poll, an HTTP/1.1 client and a WebSocket client |
 
-Plus the C library functions listed in `api_v1.sym` (`malloc`, `snprintf`, `fopen`, `sinf`…) and lwIP sockets for apps with the `net` permission.
+Plus the C library functions listed in `api_v1.sym` (`malloc`, `snprintf`, `fopen`, `sinf`…) and BSD sockets (`<sys/socket.h>`, `select`, `fcntl`, `getaddrinfo`...: lwIP) for apps with the `net` permission. Sockets an app leaves open are closed when it exits, like everything else. `errno` works as usual: apps build with `-D__PICOLIBC_ERRNO_FUNCTION=t5_errno`, because picolibc keeps it thread-local and the app loader can't relocate that. lwIP reports a refused connect as `ECONNRESET`.
+
+## Networking
+
+Everything in `t5/net.h` needs the `net` permission. Every handle (socket, HTTP response, WebSocket, MQTT client, HTTP server and request) is closed when the app exits or crashes, and an app may hold at most 12 at once. Timeouts are in milliseconds: 0 doesn't wait, `T5_NET_FOREVER` waits until something happens. Calls that move bytes return a count, or a negative `t5_err_t` (`T5_ERR_TIMEOUT`, `T5_ERR_IO`, `T5_ERR_STATE` once closed). A receive that returns 0 means the peer closed. Closing a handle from another task ends a wait on it within about 50 ms.
+
+```c
+/* HTTP: any method, headers, a body; redirects followed; the body streamed. */
+t5_http_header_t hdr[] = { { "Authorization", "Bearer xyz" }, { "Content-Type", "application/json" } };
+t5_http_req_t req = { .method = "POST", .url = "https://api.example.com/v1/log",
+                      .headers = hdr, .n_headers = 2, .body = json, .body_len = strlen(json) };
+t5_http_t *h;
+if (t5_http_open(&req, &h) == T5_OK) {
+    printf("%d %s\n", t5_http_status(h), t5_http_header(h, "Content-Type"));
+    char buf[512];
+    for (int n; (n = t5_http_read(h, buf, sizeof buf, 10000)) > 0;) consume(buf, n);
+    T5_IGNORE(t5_http_close(h));
+}
+/* Or the whole body into a buffer: */
+int status, len = t5_http_fetch(&(t5_http_req_t){ .url = "http://10.0.0.5/state" }, buf, sizeof buf, &status);
+
+/* WebSocket: whole messages; pings are answered for you. */
+t5_ws_t *ws;
+t5_ws_connect("wss://stream.example.com/feed", &(t5_ws_cfg_t){ .subprotocols = "v1" }, &ws);
+t5_ws_send(ws, T5_WS_TEXT, "hello", 5, 5000);
+t5_ws_op_t op;
+int n = t5_ws_recv(ws, buf, sizeof buf, &op, 5000);   /* T5_WS_TEXT, T5_WS_BINARY, or T5_WS_CLOSE once */
+T5_IGNORE(t5_ws_close(ws, 1000));
+
+/* TCP (TLS with T5_TCP_TLS, checked against the built-in CA bundle), servers, UDP: */
+t5_sock_t *s, *srv, *u;
+t5_tcp_connect("example.com", 443, &(t5_tcp_cfg_t){ .flags = T5_TCP_TLS }, &s);
+t5_tcp_listen(8080, 4, &srv);                        /* t5_tcp_accept(srv, timeout, &client) */
+t5_udp_open(5000, T5_UDP_BROADCAST, &u);             /* t5_udp_sendto / t5_udp_recvfrom, t5_udp_join("239.1.2.3") */
+
+/* Wait on several at once: */
+t5_poll_t p[] = { { .handle = ws, .events = T5_POLL_IN }, { .handle = u, .events = T5_POLL_IN } };
+if (t5_net_poll(p, 2, 1000) > 0 && (p[1].revents & T5_POLL_IN)) { /* a datagram is waiting */ }
+```
+
+```c
+/* TLS on a connected socket: STARTTLS, or the server side of an accepted one. */
+t5_sock_start_tls(s, &(t5_tls_cfg_t){ .sni = "mail.example.com" });
+t5_sock_start_tls(client, &(t5_tls_cfg_t){ .flags = T5_TLS_SERVER, .cert_pem = cert, .key_pem = key });
+t5_sock_set_option(s, T5_SOCKOPT_KEEPALIVE, 30);    /* NODELAY, BROADCAST, REUSEADDR, RCVBUF, TTL, TOS */
+
+/* MQTT 3.1.1/5 (Espressif's esp-mqtt): mqtt://, mqtts://, ws://, wss://, QoS 0-2, last will, auto-reconnect.
+ * Events are taken on your task; no callbacks run behind your back. */
+t5_mqtt_t *m;
+t5_mqtt_connect(&(t5_mqtt_cfg_t){ .uri = "mqtts://broker.example.com", .username = "me", .password = "pw" }, &m);
+t5_mqtt_subscribe(m, "home/+/temp", 1);
+t5_mqtt_publish(m, "home/tab5/online", "1", 1, 1, true);
+t5_mqtt_event_t ev;
+if (t5_mqtt_next(m, &ev, buf, sizeof buf, 5000) == T5_OK && ev.type == T5_MQTT_EV_MESSAGE) use(ev.topic, ev.data, ev.len);
+
+/* HTTP(S) server: complete requests one at a time; respond, stream (chunked), or upgrade to a WebSocket. */
+t5_httpd_t *srv;
+t5_httpd_start(8080, NULL, &srv);                    /* .cert_pem/.key_pem for HTTPS */
+t5_httpd_req_t *req;
+if (t5_httpd_next(srv, 1000, &req) == T5_OK) {
+    if (!strcmp(t5_httpd_path(req), "/ws")) t5_httpd_websocket(req, NULL, 0, &ws);
+    else t5_httpd_respond(req, 200, "application/json", "{}", 2, NULL, 0);
+}
+```
+
+The CA bundle is Mozilla's full list, with cross-signed chains supported. `ca_pem` (in each config) trusts one PEM CA instead of the bundle, for a server with a private certificate. `T5_TCP_TLS_NO_VERIFY` / `T5_HTTP_TLS_NO_VERIFY` / `T5_MQTT_TLS_NO_VERIFY` skip the certificate check: use them for testing only. `cert_pem`/`key_pem` give a client certificate for mutual TLS. While any handle is open the OS holds a `T5_LOCK_NET` wake lock ("net.io"), so Sleep keeps Wi-Fi connected and transfers continue with the screen off; with none open, Sleep powers the radio down unless the app holds its own `T5_LOCK_NET` lock (`t5/power.h`). Plain BSD sockets don't count: take the lock yourself if you use them across Sleep. The `net handles` console command lists every open handle and its owner. `test/hil/net_stack.py` and `test/hil/net_compat.py` check the whole stack against servers on your computer (`--external` adds public ones), and `test/apps/netleak` checks that an app's handles are freed when it exits.
+
+## Session restore and launch arguments
+
+After a soft off the OS reopens the app that was in front (not after an alarm wake, a crash or a hang). Save what the person was doing in `on_suspend` with `t5_app_state_save()`; in `on_create`, `t5_app_restored()` says whether this launch is a restore, and `t5_app_state_load()` gets the state back (up to 8 KB, written atomically to the app's data directory). `t5_app_launch_arg()` is the argument another app or the shell launched it with (`t5_apps_launch_arg()`), for example a file path.
+
+## Media
+
+```c
+/* Play 16 kHz mono PCM: any rate and channel count is converted to 48 kHz stereo. */
+t5_audio_out_cfg_t cfg = { .rate = 16000, .channels = 1 };
+t5_audio_out_t *out;
+t5_audio_out_open(&cfg, &out);            /* holds an audio wake lock: plays with the screen off */
+t5_audio_out_write(out, pcm, bytes, 100);
+t5_audio_out_drain(out, 1000);
+t5_audio_out_close(out);
+```
+
+Microphone input (`t5_audio_in_open`) and the camera (`t5_camera_open`) need the permission declared in the manifest and asked for at run time: call `t5_app_request_permission(app, T5_PERM_MIC, cb, user)` first and open in the callback. While either is open the status bar shows an indicator. Close the camera in `on_suspend` (the OS closes it for you at sleep, and on exit). The camera and the hardware JPEG decoder run their interrupts on core 0, so call them from any task; the photo and record calls block and must not run on the UI task.
 
 ## Rules
 
@@ -49,6 +161,8 @@ Plus the C library functions listed in `api_v1.sym` (`malloc`, `snprintf`, `fope
 - **UI.** Build under `t5_app_screen()`. Objects on `lv_layer_top()` (dialogs) are tracked too. Other screens you create are not.
 - **LVGL timers** don't delete themselves when their repeat count runs out: they pause, and the OS deletes them on exit.
 - **Sizes** are in dp: `T5_DP(16)` is 32 px. The screen is 640 × 360 dp in landscape.
+- **Text input.** Tapping a text area shows the on-screen keyboard; with a USB keyboard attached, keys go to the focused text area instead. The keyboard pans the text area's container up if it would be covered.
+- **Full screen.** The status bar takes the top 24 dp of every app screen (as padding on `t5_app_screen()`); `t5_shell_set_fullscreen(true)` gives it back. Swiping up from the bottom edge goes home; swiping down from the top edge opens quick settings.
 - **Memory from `malloc` is yours.** Don't pass it to an OS function that frees it, and free memory from libc helpers (`strdup`) with `free()` as usual.
 
 ## Manifest
@@ -72,18 +186,54 @@ entry = "on_alarm"
 max_seconds = 30
 ```
 
-Permission groups: `camera`, `mic`, `net`, `ble`, `ports`, `usb`, `storage`, `background_wake`, `system`. Calling a function whose group the manifest doesn't declare gets a stub that returns `T5_ERR_DENIED` (or `NULL`, `false`, `0`). Camera and mic also ask the person on first use (`t5_app_request_permission()`). **These are consent and correctness checks, not a security boundary:** a native app shares the OS address space and can reach the hardware directly. The installer says so.
+Permission groups: `camera`, `mic`, `net`, `ble`, `ports`, `usb`, `storage`, `shared_read`, `shared_write`, `all_files`, `background_wake`, `system`. Calling a function whose group the manifest doesn't declare gets a stub that returns `T5_ERR_DENIED` (or `NULL`, `false`, `0`). Camera and mic also ask the person on first use (`t5_app_request_permission()`). **These are consent and correctness checks, not a security boundary:** a native app shares the OS address space and can reach the hardware directly. The installer says so.
 
 ## Stability
 
 - An app built for API level N runs on any OS with level ≥ N.
-- `api_v1.sym` stores each symbol's full prototype. The firmware build redeclares all of them, so a header that drifts from the published ABI fails the build. CI (`tools/abi/abi.py check --base <ref>`) fails if a symbol of a published level is removed or its prototype changes.
-- LVGL is pinned to 9.6.0 for level 1 (all 1,903 public LVGL functions in the OS build are exported).
+- `api_v1.sym` stores each symbol's full prototype. The firmware build redeclares all of them, so a header that drifts from the published ABI fails the build. Lock files record every symbol, struct layout and constant apps compile in, and CI fails if one changes: see [ABI stability](abi-stability.md).
+- LVGL is pinned to 9.6.0 for level 1 (all 1,903 public LVGL functions in the OS build are exported, plus `lv_image_cache_drop` for apps that redraw image buffers in place).
+- Phases 6 and 7 added 114 symbols to level 1 (the MD2 widgets, shell, audio, camera, USB, storage and system calls) without changing any published one.
 - At install the OS reads the ELF's imports and refuses the package if any isn't exported, naming the missing ones (`app abi <file.elf>` on the console does the same check).
+
+## Files
+
+Every app is isolated. It can read and write its own data folder (`t5_app_data_dir`, up to 1 MB) and read its install folder (`t5_app_install_dir`). Everything else is refused with an ordinary file error (`fopen` returns NULL, `errno` is `EACCES`), so check for it. Going past the quota gives `ENOSPC`. Paths must be absolute; `..` is refused.
+
+| To reach | Do this |
+| --- | --- |
+| One file the person chooses | `t5_file_pick()`. No permission needed. Open until the app exits; add `T5_FILE_PICK_WRITE` to change it too |
+| Shared folders: `/data/user` and `DCIM`, `Photos`, `Pictures`, `Music`, `Videos`, `Documents`, `Downloads` on the SD card | `shared_read = true` or `shared_write = true` in `[permissions]`; asked on first use |
+| All of the SD card and USB drives | `all_files = true`; asked on first use. For file managers |
+| OS files, another app's data | Never |
+
+Call `t5_app_request_permission()` before touching a shared folder. Called from the UI task without it, the file call shows the prompt and fails that once. People can change the answer in App Manager. The `storage` permission now only covers ejecting and formatting the SD card.
+
+`t5_file_pick()` shows a large modal over your app, on the UI task, one at a time:
+
+    static void picked(t5_app_t *app, const char *path, void *user)
+    {
+        if (!path) return;       /* backed out; your app carries on */
+        FILE *f = fopen(path, "r");
+    }
+    t5_file_pick(app, "Choose a photo", "jpg,png", 0, picked, NULL);
+
+`cb` gets `NULL` for Cancel, the close button, Back at the top level, a tap outside the box, or the swipe up from the bottom edge. Those close only the picker. If your app exits or crashes first, the picker closes and `cb` isn't called. The picker hides OS and app folders. Python apps follow the same folder rules but have no picker yet. These rules stop mistakes; they can't stop a native app written to get around them.
 
 ## Crashes and hangs
 
-A crashing native app reboots the device. The crash guard records which app was running (RTC memory survives the reset), returns to the launcher, saves the core dump to `/data/sys/dumps/<id>.elf`, and stops auto-launching the app (session restore, alarms) after two crashes in a row. If an app blocks the UI task for 2 s, the OS draws "App not responding" itself, outside LVGL: Wait, or Close app (a restart to the launcher, recorded as a hang).
+A misbehaving installed app is closed; the OS keeps running (`t5_app/isolate.h`, `t5_core/fault.h`):
+
+- **Crash.** A bad load or store, illegal instruction or jump to nowhere in your code, in an OS function your code called (`strlen(NULL)`, an LVGL call with a bad object), in a draw callback, or anywhere in a task your app created closes the app without a reboot. So does a stack overflow, in your own task or from recursion on the UI task. The app gets no `on_suspend` or `on_destroy`; the OS frees everything it tracks, shows a toast and records the crash. The log line gives the faulting address as `app+0x…`, an offset into your ELF. Apps are stripped, so map it with a linker map file ([how](wiki/Debugging-and-Testing.md#crashes)).
+- **Hang.** If your code blocks the UI task for 2 s, the OS draws "App not responding" itself, outside LVGL. Wait gives it 5 s more; Close app stops the UI task where it is and closes the app, also without a reboot (recorded as a hang). An event handler that doesn't return within 3 s is stopped and the app closed.
+- **Memory.** Your heap is PSRAM chunks of its own: an overrun damages only your memory, and exit gives all of it back at once. `lv_malloc` and draw buffers you create (`lv_draw_buf_create`, `lv_snapshot_take`...) are yours too and end with the app. `malloc` returns NULL rather than take the last 2 MB of PSRAM. Your tasks, queues, semaphores and mutexes are in PSRAM as well, so an app can't use up internal RAM directly. If PSRAM drops below 1 MB, or internal RAM below 16 KB, for 1.5 s, the app in front is closed; it does get its exit callbacks. Freeing a block twice, or a pointer that isn't a heap address, is logged and ignored.
+- **Limits.** 16 tasks per app at priority 2 or lower (a higher request is lowered), 8 raw sockets, and 256 tracked handles (open files, sockets, timers, queues...); over that, creation fails like running out of memory. Queued `t5_ui_async` calls are capped at 512 (`T5_ERR_BUSY`).
+- **CPU.** A task of yours that keeps a core busy for 3 s is moved to priority 1 and paused for 100 ms in every second, so OS services keep running. Sleep or block in loops.
+- **UI lock.** A task that takes `t5_ui_lock()` and never releases it stalls the UI like a hang: Close app ends that task.
+- **Queued calls.** `t5_ui_async`, `t5_ui_sync` and `lv_async_call` calls still waiting when your app exits are dropped.
+- **OS files.** Apps can't write, rename, delete or create anything under `/data/sys`, or use `..` in those calls.
+
+A crash still reboots the device when it can't be pinned on the app, or when leaving the code safely isn't possible: inside a critical section or an interrupt handler, while a finished frame is being handed to the panel, or a second fault with no app frame on the stack within 30 s. The crash guard then records which app was running (RTC memory survives the reset), returns to the launcher and saves the core dump to `/data/sys/dumps/<id>.elf`. Either way, an app that crashes or hangs twice in a row is no longer auto-launched (session restore, alarms). Native code shares the OS address space, so a stray write that corrupts OS memory without faulting can't be caught. Built-in apps and MicroPython apps are OS code and aren't covered.
 
 ## Tools
 
@@ -92,4 +242,5 @@ A crashing native app reboots the device. The crash guard records which app was 
 | `sdk/cmake/t5_app.cmake` | `t5_app(name SRCS … MANIFEST …)`: ELF and `.t5app` |
 | `tools/t5/t5pack.py` | Pack or inspect a `.t5app` |
 | `tools/abi/abi.py` | Generate the export table, update prototypes, add LVGL exports, check stability |
-| `t5 sim` | The SDL simulator with the same MD2 code |
+| `t5 sim` | The SDL simulator with the same MD2 code; `t5 sim --shell` runs the launcher, status bar and quick settings |
+| `t5 shot` | A screenshot of the device over the console (`tools/t5/t5shot.py`, `--cam` for the camera preview) |

@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "t5_net/ble.h"
 #include "t5_net/net.h"
+#include "t5_net/sock.h"
 #include "t5_power/power.h"
 #include "diag_priv.h"
 
@@ -132,6 +133,12 @@ static int cmd_net(int argc, char **argv)
     if (!strcmp(c, "ant") && argc >= 3) {
         return t5_radio_antenna_set(!strcmp(argv[2], "ext") ? T5_ANT_EXTERNAL : T5_ANT_INTERNAL) != T5_OK;
     }
+    if (!strcmp(c, "handles")) {
+        static char buf[2048];
+        int n = t5_net_handles_dump(buf, sizeof buf);
+        printf("%s%d open\n", buf, n);
+        return 0;
+    }
     if (!strcmp(c, "echo") && argc >= 3) {
         uint32_t port;
         if (!strcmp(argv[2], "stop")) { s_echo_port = 0; return 0; }
@@ -142,7 +149,7 @@ static int cmd_net(int argc, char **argv)
     }
 usage:
     printf("usage: net [on | off | scan | connect <ssid> [pass] [nosave] | disconnect | forget <ssid> | saved\n"
-           "           | reset | update [--force] | ant int|ext | echo <port>|stop]\n");
+           "           | reset | update [--force] | ant int|ext | echo <port>|stop | handles]\n");
     return 1;
 }
 

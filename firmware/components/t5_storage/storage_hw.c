@@ -2,6 +2,7 @@
  * /data on LittleFS, /sd on SDMMC slot 0 (IO MUX pins 39-44, 4-bit).
  * The SD I/O supply comes from on-chip LDO channel 4 (as in Espressif's BSP).
  */
+#include <stdlib.h>
 #include <string.h>
 #include "driver/sdmmc_host.h"
 #include "esp_littlefs.h"
@@ -132,4 +133,46 @@ int t5_storage_hw_sd_fat_info(int *fs_type, int *cluster_bytes)
     *fs_type = fs->fs_type;
     *cluster_bytes = fs->csize * 512;
     return 0;
+}
+
+t5_err_t t5_storage_hw_sd_format(void)
+{
+    if (!s_card) return T5_ERR_STATE;
+    return esp_vfs_fat_sdcard_format(T5_SD_PATH, s_card) == ESP_OK ? T5_OK : T5_ERR_IO;
+}
+
+/* Raw card for USB mass storage (t5_usb): no filesystem, our slot only (the
+ * C6 owns slot 1 of the same controller). */
+t5_err_t t5_storage_hw_sd_raw_open(void **card_out)
+{
+    if (!s_sd_pwr) {
+        sd_pwr_ctrl_ldo_config_t ldo = { .ldo_chan_id = SD_LDO_CHAN };
+        if (sd_pwr_ctrl_new_on_chip_ldo(&ldo, &s_sd_pwr) != ESP_OK) return T5_ERR_IO;
+    }
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot = SDMMC_HOST_SLOT_0;
+    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+    host.pwr_ctrl_handle = s_sd_pwr;
+    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot.width = 4;
+    esp_err_t e = sdmmc_host_init();
+    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return T5_ERR_IO;
+    if (sdmmc_host_init_slot(SDMMC_HOST_SLOT_0, &slot) != ESP_OK) return T5_ERR_IO;
+    sdmmc_card_t *card = calloc(1, sizeof *card);
+    if (!card) return T5_ERR_NO_MEM;
+    if (sdmmc_card_init(&host, card) != ESP_OK) {
+        free(card);
+        host.deinit_p(SDMMC_HOST_SLOT_0);
+        return T5_ERR_NOT_FOUND;
+    }
+    *card_out = card;
+    return T5_OK;
+}
+
+void t5_storage_hw_sd_raw_close(void *card)
+{
+    sdmmc_card_t *c = card;
+    if (!c) return;
+    if (c->host.deinit_p) c->host.deinit_p(c->host.slot);
+    free(c);
 }

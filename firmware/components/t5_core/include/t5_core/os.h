@@ -43,6 +43,15 @@ typedef struct t5_task *t5_task_t;
 t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
                         int prio, int core, t5_task_t *out);
 
+/* As t5_task_create, with the stack (and task block) in the 32 KB of LP RAM
+ * when there is room, else in internal RAM as usual. For mostly idle system
+ * service tasks: LP RAM is slower, but it is internal memory outside the
+ * cache, so these tasks may still write flash, and it leaves the L2 RAM that
+ * DMA can use (Wi-Fi, TLS, camera) to the things that need it. Not for tasks
+ * that use the P4's SIMD (esp-dsp and the like): LP RAM has no 128-bit access. */
+t5_err_t t5_task_create_lp(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
+                           int prio, int core, t5_task_t *out);
+
 /* Called for every task t5_task_create() makes, with the inherited context.
  * Phase 5's resource tracker uses this to record app tasks. */
 typedef void (*t5_task_hook_t)(t5_task_t task, void *app_ctx);
@@ -52,6 +61,16 @@ void t5_core_set_task_hook(t5_task_hook_t hook);
 void t5_core_set_task_exit_hook(t5_task_hook_t hook);
 
 /* The calling task (an opaque id, never NULL). */
+/* Keep this many bytes at the bottom of a task's stack out of use, so a
+ * stack overflow is caught before it reaches other memory. */
+#define T5_STACK_MARGIN 512u
+void t5_task_guard_margin(t5_task_t task);
+uint32_t t5_task_margin_of(t5_task_t task);
+/* Delete a task (NULL: the caller), however its stack was allocated. */
+void t5_task_delete(t5_task_t task);
+/* While on, tasks the calling task creates through plain FreeRTOS calls
+ * (third-party drivers) get PSRAM stacks. Those tasks must never be deleted. */
+void t5_task_stacks_in_psram(bool on);
 t5_task_t t5_task_self(void);
 
 #ifdef __cplusplus

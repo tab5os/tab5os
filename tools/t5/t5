@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tab5 OS developer CLI (Phase 0 subset: build, flash, monitor, chip).
-# Phase 8 grows this into new/build/run/sim/pack.
+# Tab5 OS CLI: the firmware (build, flash, monitor, tests) and, through
+# t5dev.py, apps (new, build, run, pack, pair, push, logs...; plan 8.6).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -25,11 +25,26 @@ usage: t5 [--rev rev1|rev3] [--port PORT] [--docker] <command>
   console CMD...   run bring-up console commands and print the replies
   sim [ARGS]       build and run the SDL simulator (sim/build/t5sim; --help for ARGS)
   sim-shots        render the simulator's screenshots and check them against sim/golden
-  lint             UI density lint (raw pixel values) and the ABI symbol file check
+  lint             UI density lint (raw pixel values), coding standard lint, ABI symbol file check
+  analyze          build with GCC's static analyzer on the strict components (build-analyze-<rev>/)
   apps             build the SDK test apps (test/apps/build/*.t5app) against build-<rev>
-  abi-check [REF]  check sdk/abi/api_v1.sym (and, with REF, that nothing published changed)
+  examples         build the example apps (apps/examples/build/*.t5app)
+  shot [OUT.png]   screenshot over the console (tools/t5/t5shot.py; --cam for the camera)
+  abi-check [REF]  check the app ABI against sdk/abi/*.lock: symbols and struct layouts (needs a firmware build)
+  recovery-build   build the recovery image (recovery/build/, plan 9.2)
+  recovery-flash   write it to the recovery partition (0x50000); the OS is untouched
   c6-build         build the ESP32-C6 radio firmware (c6/build/)
   c6-stage         write that image to the c6fw partition; then 'net update' on the device
+
+Apps (tools/t5/t5dev.py; Wi-Fi to a paired Tab5 in developer mode, USB-C fallback):
+  new NAME [--python]          app from the C or Python template
+  app-build [DIR]              build and pack an app (DIR/build/<id>.t5app)
+  pack [DIR] [--sign KEY]      pack an app, signed or unsigned
+  keygen KEY.pem               a signing key (ECDSA P-256)
+  run [DIR] [--usb]            build, push, launch, stream the log
+  pair HOST | devices          pair with a Tab5 / list paired ones
+  push FILE | launch ID | stop | rm ID | ls | logs | py FILE | screenshot OUT.png
+  ota-pack [--sign KEY] | ota [FILE.t5os]   OS updates (plan 9.1)
 
 Defaults: rev from \$T5_REV (rev1), port auto-detected (/dev/cu.usbmodem*).
 USAGE
@@ -83,6 +98,22 @@ case "$cmd" in
         "$IDF_PYTHON" "$ROOT/tools/t5/t5devtest.py" --port "$PORT" ;;
     console)
         "$IDF_PYTHON" "$ROOT/tools/t5/t5console.py" ${PORT:+--port "$PORT"} "$@" ;;
+    analyze)
+        # docs/coding-standard.md: -fanalyzer on the STRICT components only.
+        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+        (cd "$FW" && idf.py -B "build-analyze-$REV" -D T5_REV="$REV" -D T5_ANALYZE=ON build "$@") ;;
+    recovery-build)
+        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+        (cd "$ROOT/recovery" && { [ -f sdkconfig ] || idf.py -B build set-target esp32p4; } && idf.py -B build build "$@") ;;
+    recovery-flash)
+        detect_port
+        img="$ROOT/recovery/build/tab5recovery.bin"
+        [ -f "$img" ] || { echo "no $img; run 't5 recovery-build'" >&2; exit 1; }
+        size=$(stat -f %z "$img" 2>/dev/null || stat -c %s "$img")
+        # The last 4 KB of the partition is the boot-control record.
+        [ "$size" -le $((0x180000 - 0x1000)) ] || { echo "recovery image ($size bytes) too big" >&2; exit 1; }
+        # Only the app: the recovery project's own bootloader and partition table never go on the device.
+        esptool --port "$PORT" write-flash 0x50000 "$img" ;;
     c6-build)
         command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
         (cd "$ROOT/c6" && { [ -f sdkconfig ] || idf.py -B build set-target esp32c6; } && idf.py -B build build "$@") ;;
@@ -104,14 +135,27 @@ case "$cmd" in
         "$ROOT/sim/build/t5sim" --shots "$ROOT/sim/build/shots" --check "$ROOT/sim/golden" "$@" ;;
     lint)
         python3 "$ROOT/tools/lint_px.py"
+        python3 "$ROOT/tools/lint_std.py"
         python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" ;;
     apps)
         command -v riscv32-esp-elf-gcc >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
         cmake -S "$ROOT/test/apps" -B "$ROOT/test/apps/build" -G Ninja -DT5_FIRMWARE_BUILD="$FW/$BUILD" >/dev/null
         cmake --build "$ROOT/test/apps/build"
         ls "$ROOT"/test/apps/build/*.t5app ;;
+    examples)
+        command -v riscv32-esp-elf-gcc >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+        cmake -S "$ROOT/apps/examples" -B "$ROOT/apps/examples/build" -G Ninja -DT5_FIRMWARE_BUILD="$FW/$BUILD" >/dev/null
+        cmake --build "$ROOT/apps/examples/build"
+        ls "$ROOT"/apps/examples/build/*.t5app ;;
+    shot)
+        "$IDF_PYTHON" "$ROOT/tools/t5/t5shot.py" ${PORT:+--port "$PORT"} "${@:-shot.png}" ;;
     abi-check)
-        python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" ${1:+--base "$1"} ;;
+        python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" ${1:+--base "$1"}
+        "$IDF_PYTHON" "$ROOT/tools/abi/layout.py" check "$FW/$BUILD" ;;
+    new|run|pack|keygen|pair|devices|push|launch|stop|rm|ls|logs|py|screenshot|ota|ota-pack)
+        "$IDF_PYTHON" "$ROOT/tools/t5/t5dev.py" ${PORT:+--port "$PORT"} "$cmd" "$@" ;;
+    app-build)
+        "$IDF_PYTHON" "$ROOT/tools/t5/t5dev.py" build "$@" ;;
     host-test)
         cmake -S "$ROOT/test/host" -B "$ROOT/test/host/build" -G Ninja >/dev/null
         cmake --build "$ROOT/test/host/build"

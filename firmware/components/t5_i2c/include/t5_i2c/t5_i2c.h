@@ -32,47 +32,52 @@ extern "C" {
 
 typedef struct t5_i2c_dev t5_i2c_dev_t;
 
-t5_err_t t5_i2c_init(void);
+T5_MUST_CHECK t5_err_t t5_i2c_init(void);
 
 /* Open a handle. name is for diagnostics ("rtc", "touch"); must be static. */
-t5_err_t t5_i2c_open(uint8_t addr, uint32_t hz, const char *name, t5_i2c_dev_t **out);
+T5_MUST_CHECK t5_err_t t5_i2c_open(uint8_t addr, uint32_t hz, const char *name, t5_i2c_dev_t **out);
 void t5_i2c_close(t5_i2c_dev_t *dev);
 uint8_t t5_i2c_addr(const t5_i2c_dev_t *dev);
 
 /* Write tx then read rx with a repeated start. Either side may be empty. */
-t5_err_t t5_i2c_xfer(t5_i2c_dev_t *dev, const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxlen);
+T5_MUST_CHECK t5_err_t t5_i2c_xfer(t5_i2c_dev_t *dev, const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxlen);
 
 /* 8-bit register helpers. */
-t5_err_t t5_i2c_read(t5_i2c_dev_t *dev, uint8_t reg, uint8_t *buf, size_t len);
-t5_err_t t5_i2c_write(t5_i2c_dev_t *dev, uint8_t reg, const uint8_t *buf, size_t len);
-t5_err_t t5_i2c_read_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t *val);
-t5_err_t t5_i2c_write_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t val);
+T5_MUST_CHECK t5_err_t t5_i2c_read(t5_i2c_dev_t *dev, uint8_t reg, uint8_t *buf, size_t len);
+T5_MUST_CHECK t5_err_t t5_i2c_write(t5_i2c_dev_t *dev, uint8_t reg, const uint8_t *buf, size_t len);
+T5_MUST_CHECK t5_err_t t5_i2c_read_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t *val);
+T5_MUST_CHECK t5_err_t t5_i2c_write_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t val);
 /* Read-modify-write under the bus lock: reg = (reg & ~mask) | (val & mask). */
-t5_err_t t5_i2c_update_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t mask, uint8_t val);
+T5_MUST_CHECK t5_err_t t5_i2c_update_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t mask, uint8_t val);
 
 /* 16-bit big-endian register address (touch controllers). */
-t5_err_t t5_i2c_read16(t5_i2c_dev_t *dev, uint16_t reg, uint8_t *buf, size_t len);
-t5_err_t t5_i2c_write16(t5_i2c_dev_t *dev, uint16_t reg, const uint8_t *buf, size_t len);
+T5_MUST_CHECK t5_err_t t5_i2c_read16(t5_i2c_dev_t *dev, uint16_t reg, uint8_t *buf, size_t len);
+T5_MUST_CHECK t5_err_t t5_i2c_write16(t5_i2c_dev_t *dev, uint16_t reg, const uint8_t *buf, size_t len);
 
 /* Does anything ACK at addr? Doesn't need a handle. */
-t5_err_t t5_i2c_probe(uint8_t addr);
+T5_MUST_CHECK t5_err_t t5_i2c_probe(uint8_t addr);
 
 /* Hold the bus across several transfers (e.g. a multi-step init). Recursive. */
-t5_err_t t5_i2c_lock(uint32_t timeout_ms);
+T5_MUST_CHECK t5_err_t t5_i2c_lock(uint32_t timeout_ms);
 void t5_i2c_unlock(void);
 /* Times a releasing task stepped aside for a waiter (fairness counter). */
 uint32_t t5_i2c_handoffs(void);
 
 /* Force a bus recovery now (console, stress test). */
-t5_err_t t5_i2c_recover(void);
+T5_MUST_CHECK t5_err_t t5_i2c_recover(void);
 
 /* Called after every recovery, with the bus lock held, so state that a
  * glitch may have reset (expander outputs) can be re-applied. */
 typedef void (*t5_i2c_recover_cb_t)(void *arg);
-t5_err_t t5_i2c_on_recover(t5_i2c_recover_cb_t cb, void *arg);
+T5_MUST_CHECK t5_err_t t5_i2c_on_recover(t5_i2c_recover_cb_t cb, void *arg);
 
 /* Internal chips. Apps never get a handle to these on the system bus. */
 bool t5_i2c_addr_reserved(uint8_t addr);
+
+/* The ESP-IDF i2c_master bus handle, for drivers that only take one (the
+ * camera's SCCB in esp_video). Their transfers bypass the broker's lock and
+ * counters, but each is still atomic on the bus. Use t5_i2c_* otherwise. */
+void *t5_i2c_native_bus(void);
 
 /* ---- Diagnostics -------------------------------------------------------- */
 typedef struct {

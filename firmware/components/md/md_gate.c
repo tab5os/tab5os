@@ -10,6 +10,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "md/md.h"
 #include "md/md_icons.h"
 #include "md_priv.h"
@@ -24,6 +25,8 @@ typedef struct {
     md_gate_mode_t mode;
     bool on_alt;
 } gate_t;
+
+static void frame_done(lv_event_t *e);
 
 static const char *const s_icons[] = {
     MD_ICON_WIFI, MD_ICON_BLUETOOTH, MD_ICON_BATTERY_FULL, MD_ICON_FOLDER, MD_ICON_SENSORS,
@@ -149,6 +152,11 @@ lv_obj_t *md_gate_create(void)
 {
     gate_t *g = calloc(1, sizeof *g);
     if (!g) return NULL;
+    static bool s_hooked;
+    if (!s_hooked && lv_display_get_default()) {
+        lv_display_add_event_cb(lv_display_get_default(), frame_done, LV_EVENT_RENDER_READY, NULL);
+        s_hooked = true;
+    }
     lv_obj_t *scr = lv_obj_create(NULL);
     g->scr = scr;
     lv_obj_set_user_data(scr, g);
@@ -197,9 +205,49 @@ static void scroll_exec(void *var, int32_t v)
     lv_obj_scroll_to_y(g->list, v, LV_ANIM_OFF);
 }
 
+/* Frame rate while animating: the interval between consecutive frames that
+ * both had an animation running. Up to a step's first animated frame is
+ * start latency (set-up, snapshots, a frame showing a dialog's scrim,
+ * waiting for the framebuffers), reported separately, not frame rate. */
+static md_gate_anim_stats_t s_as;
+static uint32_t s_last_ms;
+static bool s_skip, s_counting;
+
+static bool s_prev_anim;
+static uint32_t s_step_ms;
+
+static void frame_done(lv_event_t *e)
+{
+    (void)e;
+    uint32_t now = lv_tick_get();
+    bool anim = lv_anim_count_running() > 0;
+    if (s_skip && anim) {
+        /* The step's first animated frame: everything before it (set-up,
+         * a frame that shows the scrim, waiting for the buffers) is start
+         * latency, not frame rate. */
+        uint32_t lat = now - s_step_ms;
+        if (lat > s_as.start_ms_max) s_as.start_ms_max = lat;
+        s_skip = false;
+    } else if (s_counting && !s_skip && anim && s_prev_anim) {
+        s_as.frames++;
+        s_as.ms += now - s_last_ms;
+    }
+    s_prev_anim = anim && !s_skip;
+    s_last_ms = now;
+}
+
+void md_gate_anim_stats(md_gate_anim_stats_t *out, bool reset)
+{
+    if (out) *out = s_as;
+    if (reset) memset(&s_as, 0, sizeof s_as);
+    s_counting = true;
+}
+
 static void transition_tick(lv_timer_t *t)
 {
     gate_t *g = lv_timer_get_user_data(t);
+    s_skip = true;
+    s_last_ms = s_step_ms = lv_tick_get();
     if (g->mode == MD_GATE_TRANSITION) {
         g->on_alt = !g->on_alt;
         lv_screen_load_anim(g->on_alt ? g->alt : g->scr, g->on_alt ? LV_SCREEN_LOAD_ANIM_MOVE_LEFT

@@ -60,6 +60,17 @@ typedef struct {
 
 #define T5_APP_CTX_MAGIC 0x54354150u   /* "T5AP" */
 
+/* Runtime permission check for services (camera, mic) without a
+ * dependency on t5_app: the app runtime installs the check; with none
+ * installed everything is allowed. Bits match T5_PERM_* in t5_pkg. */
+#define T5_CORE_PERM_CAMERA (1u << 0)
+#define T5_CORE_PERM_MIC (1u << 1)
+#define T5_CORE_PERM_USB (1u << 5)
+typedef int (*t5_perm_check_fn_t)(uint32_t perm);
+void t5_core_set_perm_check(t5_perm_check_fn_t fn);
+/* T5_OK, T5_ERR_DENIED, or T5_ERR_TIMEOUT if the person didn't answer. */
+int t5_core_perm_check(uint32_t perm);
+
 /* Owner name for the calling task: the app id, or "system". */
 const char *t5_app_ctx_id(void *ctx);
 const char *t5_caller_id(void);

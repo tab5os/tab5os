@@ -12,14 +12,24 @@ flags (comma-separated, may be empty):
     wrap=<symbol>  bind to this OS function instead (tracking wrappers)
     ext            the prototype is maintained by hand (libc, FreeRTOS,
                    lwIP): `update` leaves it alone
+    data           an object, not a function (its "prototype" is the extern
+                   declaration)
+    since=<N>      first API level that has it, when later than the file's
 Lines starting with '#' are comments.
+
+sdk/abi/api_v<N>.lock is the contract for level N (docs/abi-stability.md): what
+apps may already depend on. Its first line says "candidate" or "released". A
+locked symbol can't be removed or change prototype, kind or permission. Once
+released, a new symbol also needs since=<N+1>.
 
 Commands:
     gen SYM OUT              write abi_table.c for the firmware build
     update SYM HEADERDIR...  fill prototypes of non-ext symbols from headers
     add-lvgl SYM LIB HDRDIR  add every public lv_* function compiled into LIB
-    check SYM [--base REF]   well-formed, sorted, unique; with --base, no
-                             symbol of REF's file was removed or changed
+    check SYM [--base REF]   well-formed, sorted, unique, and true to the lock;
+                             with --base, also compare against REF's file
+    freeze SYM [--release]   write the lock from SYM; a released lock can only
+                             be rewritten with --force
 """
 import argparse
 import os
@@ -50,6 +60,14 @@ class Sym:
     def ext(self):
         return "ext" in self.flags
 
+    @property
+    def data(self):
+        return "data" in self.flags
+
+    @property
+    def since(self):
+        return int(self.flags["since"]) if "since" in self.flags else 0
+
     def format(self):
         f = []
         for k in ("perm", "wrap"):
@@ -57,6 +75,10 @@ class Sym:
                 f.append(f"{k}={self.flags[k]}")
         if self.ext:
             f.append("ext")
+        if self.data:
+            f.append("data")
+        if self.since:
+            f.append(f"since={self.since}")
         return f"{self.name} | {','.join(f)} | {self.proto}"
 
 
@@ -76,7 +98,7 @@ def parse_sym(path):
             flags = {}
             for f in filter(None, (x.strip() for x in fl.split(","))):
                 k, _, v = f.partition("=")
-                if k not in ("perm", "wrap", "ext"):
+                if k not in ("perm", "wrap", "ext", "data", "since"):
                     sys.exit(f"{path}:{i}: unknown flag {k}")
                 if k == "perm" and v not in PERMS:
                     sys.exit(f"{path}:{i}: unknown permission {v}")
@@ -150,7 +172,7 @@ def cmd_gen(a):
     for s in sorted(syms, key=lambda s: s.name.encode()):
         target = s.wrap or s.name
         perm = PERMS[s.perm] if s.perm else "0"
-        out.append(f'    {{ "{s.name}", (const void *)&{target}, {perm}, {ret_kind(s)}, {level} }},')
+        out.append(f'    {{ "{s.name}", (const void *)&{target}, {perm}, {ret_kind(s)}, {s.since or level} }},')
     out += ["};", f"const size_t t5_abi_count = {len(syms)};", ""]
     data = "\n".join(out)
     if os.path.exists(a.out) and open(a.out).read() == data:
@@ -163,6 +185,8 @@ def strip_c(text):
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
     text = re.sub(r"//[^\n]*", " ", text)
     text = re.sub(r"^\s*#.*?(?<!\\)$", " ", text, flags=re.M)
+    # Annotations that don't change the ABI (docs/coding-standard.md, rule 7).
+    text = re.sub(r"\bT5_MUST_CHECK\b", " ", text)
     return text
 
 
@@ -234,6 +258,63 @@ def git_show(ref, path):
     return r.stdout if r.returncode == 0 else None
 
 
+def lock_path(sym):
+    return re.sub(r"\.sym$", ".lock", sym)
+
+
+LOCK_HEADER = """# status: %s
+# The contract for this API level: do not edit (docs/abi-stability.md).
+# Written by tools/abi/abi.py freeze.
+"""
+
+
+def read_lock(path):
+    """(status, [Sym]), or (None, []) if there is no lock."""
+    if not os.path.exists(path):
+        return None, []
+    with open(path) as fh:
+        first = fh.readline()
+    m = re.match(r"# status: (candidate|released)\s*$", first)
+    if not m:
+        sys.exit(f"{path}: first line must be '# status: candidate' or '# status: released'")
+    return m.group(1), parse_sym(path)[1]
+
+
+def check_against(base, syms, what):
+    """Everything in base must still be there, unchanged. Returns the error count."""
+    errs = 0
+    now = {s.name: s for s in syms}
+    for b in base:
+        s = now.get(b.name)
+        if not s:
+            print(f"removed from {what}: {b.name}", file=sys.stderr)
+            errs += 1
+        elif s.data != b.data or norm(s.proto) != norm(b.proto):
+            print(f"changed in {what}: {b.name}\n  was: {b.proto}\n  now: {s.proto}", file=sys.stderr)
+            errs += 1
+        elif s.perm != b.perm:
+            print(f"permission changed in {what}: {b.name}: {b.perm} -> {s.perm}", file=sys.stderr)
+            errs += 1
+    return errs
+
+
+def cmd_freeze(a):
+    _, syms = parse_sym(a.sym)
+    path = lock_path(a.sym)
+    status, _ = read_lock(path)
+    if status == "released" and not a.force:
+        sys.exit(f"{path} is released: apps depend on it. Add symbols with since=<N+1> instead (--force overrides)")
+    new = "released" if a.release or status == "released" else "candidate"
+    with open(path, "w") as fh:
+        fh.write(LOCK_HEADER % new)
+        for s in sorted(syms, key=lambda s: s.name.encode()):
+            flags = [f"perm={s.perm}"] if s.perm else []
+            if s.data:
+                flags.append("data")
+            fh.write(f"{s.name} | {','.join(flags)} | {norm(s.proto) if not s.data else s.proto}\n")
+    print(f"{path}: {len(syms)} symbols, {new}")
+
+
 def cmd_check(a):
     _, syms = parse_sym(a.sym)
     errs = 0
@@ -245,9 +326,22 @@ def cmd_check(a):
         print(f"{a.sym}: duplicate symbols", file=sys.stderr)
         errs += 1
     for s in syms:
-        if not re.search(r"\b" + re.escape(s.name) + r"\s*\(", s.proto):
+        declares = re.search(r"\b" + re.escape(s.name) + (r"\b" if s.data else r"\s*\("), s.proto)
+        if not declares:
             print(f"{a.sym}:{s.line}: {s.name}: prototype doesn't declare it", file=sys.stderr)
             errs += 1
+    status, locked = read_lock(lock_path(a.sym))
+    if status:
+        errs += check_against(locked, syms, "the locked ABI")
+        known = {s.name for s in locked}
+        level = int(re.search(r"api_v(\d+)", os.path.basename(a.sym)).group(1))
+        added = [s for s in syms if s.name not in known]
+        if status == "released":
+            for s in added:
+                if s.since <= level:
+                    print(f"{s.name}: level {level} is released; a new symbol needs since={level + 1}", file=sys.stderr)
+                    errs += 1
+        print(f"{len(locked)} locked symbols checked ({status}), {len(added)} added since")
     if a.base:
         old = git_show(a.base, a.sym)
         if old is None:
@@ -259,18 +353,7 @@ def cmd_check(a):
                 _, base = parse_sym(tmp)
             finally:
                 os.remove(tmp)
-            now = {s.name: s for s in syms}
-            for b in base:
-                s = now.get(b.name)
-                if not s:
-                    print(f"removed from the published ABI: {b.name}", file=sys.stderr)
-                    errs += 1
-                elif norm(s.proto) != norm(b.proto):
-                    print(f"changed in the published ABI: {b.name}\n  was: {b.proto}\n  now: {s.proto}", file=sys.stderr)
-                    errs += 1
-                elif s.perm != b.perm:
-                    print(f"permission changed for {b.name}: {b.perm} -> {s.perm}", file=sys.stderr)
-                    errs += 1
+            errs += check_against(base, syms, a.base)
             print(f"{len(base)} published symbols checked against {a.base}, {len(syms) - len(base)} added")
     if errs:
         sys.exit(1)
@@ -285,6 +368,8 @@ def main():
     l = sub.add_parser("add-lvgl"); l.add_argument("sym"); l.add_argument("lib"); l.add_argument("headers")
     l.set_defaults(fn=cmd_add_lvgl)
     c = sub.add_parser("check"); c.add_argument("sym"); c.add_argument("--base"); c.set_defaults(fn=cmd_check)
+    f = sub.add_parser("freeze"); f.add_argument("sym"); f.add_argument("--release", action="store_true")
+    f.add_argument("--force", action="store_true"); f.set_defaults(fn=cmd_freeze)
     a = p.parse_args()
     a.fn(a)
 

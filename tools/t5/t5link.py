@@ -5,11 +5,12 @@
         print(t.cmd("sys"))
 """
 import glob
+import os
 import time
 
 import serial
 
-PROMPT = b"tab5> "
+PROMPT = os.environ.get("T5_PROMPT", "tab5> ").encode()  # "recovery> " in the recovery image
 
 
 def find_port():

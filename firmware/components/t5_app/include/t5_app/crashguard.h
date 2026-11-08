@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Crash guard (plan 5.11). Native apps share the OS address space, so a
- * crashing app reboots the device. Before running app code the OS writes
+ * Crash guard (plan 5.11). Native apps share the OS address space. Most
+ * app faults are now survived without a reboot (t5_app/isolate.h) and
+ * recorded here directly; for the rest, which still reboot the device,
+ * before running app code the OS writes
  * the app id into RTC no-init memory (survives a panic reset, not a power
  * loss); at boot, a crash-type wake with an id there means that app crashed.
  *
@@ -33,6 +35,7 @@ typedef enum {
     T5_CRASH_PANIC,       /* panic or watchdog reset while the app ran */
     T5_CRASH_ANR,         /* UI watchdog: the person chose to close the app */
     T5_CRASH_ALARM_OVERRUN, /* headless on_alarm ran past max_seconds */
+    T5_CRASH_OOM,         /* closed by the OS: memory critically low */
 } t5_crash_kind_t;
 
 typedef struct {
@@ -71,8 +74,8 @@ bool t5_crash_autolaunch_allowed(const t5_crash_db_t *db, const char *id);
 void t5_crash_forget(t5_crash_db_t *db, const char *id);
 const char *t5_crash_kind_name(t5_crash_kind_t k);
 
-t5_err_t t5_crash_db_load(t5_crash_db_t *db, const char *path);
-t5_err_t t5_crash_db_save(const t5_crash_db_t *db, const char *path);
+T5_MUST_CHECK t5_err_t t5_crash_db_load(t5_crash_db_t *db, const char *path);
+T5_MUST_CHECK t5_err_t t5_crash_db_save(const t5_crash_db_t *db, const char *path);
 
 #ifdef __cplusplus
 }

@@ -12,7 +12,7 @@ import time
 
 import serial
 
-PROMPT = b"tab5> "
+PROMPT = os.environ.get("T5_PROMPT", "tab5> ").encode()  # "recovery> " in the recovery image
 
 
 def read_until_prompt(ser, timeout):

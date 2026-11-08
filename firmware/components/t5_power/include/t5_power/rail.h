@@ -39,8 +39,8 @@ typedef enum {
 typedef struct t5_rail_hold t5_rail_hold_t;
 
 /* owner is copied (truncated to T5_RAIL_OWNER_LEN - 1). */
-t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out);
-t5_err_t t5_rail_release(t5_rail_hold_t *hold);
+T5_MUST_CHECK t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out);
+T5_MUST_CHECK t5_err_t t5_rail_release(t5_rail_hold_t *hold);
 
 const char *t5_rail_name(t5_rail_t rail);
 bool t5_rail_is_on(t5_rail_t rail);          /* what the hardware has now */
@@ -53,8 +53,8 @@ uint32_t t5_rail_errors(t5_rail_t rail);
 
 /* Power service only: drop or restore rails for Sleep. keep_all is true
  * while a T5_LOCK_RAIL wake lock is held. */
-t5_err_t t5_rail_suspend(bool keep_all);
-t5_err_t t5_rail_resume(void);
+T5_MUST_CHECK t5_err_t t5_rail_suspend(bool keep_all);
+T5_MUST_CHECK t5_err_t t5_rail_resume(void);
 
 #ifdef __cplusplus
 }

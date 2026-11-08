@@ -1,0 +1,6 @@
+id = "com.t5.test.nonet"
+name = "No Net"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"

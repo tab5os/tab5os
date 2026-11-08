@@ -43,5 +43,5 @@ t5_err_t t5_battery_hw_start_task(void (*step)(void), uint32_t period_ms)
 {
     s_step = step;
     s_period = period_ms;
-    return t5_task_create("t5_battery", task, NULL, 4096, 6, 0, NULL);
+    return t5_task_create_lp("t5_battery", task, NULL, 4096, 6, 0, NULL);
 }

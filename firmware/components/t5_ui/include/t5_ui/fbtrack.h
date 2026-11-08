@@ -43,6 +43,10 @@ uint32_t t5_fbt_pixels(const t5_fbt_t *t, int i);
  * already queued for the next frame (it may become scanout any moment).
  * Returns -1 only if scanout == queued is impossible to satisfy (n < 2). */
 int t5_fbt_pick(int nbufs, int scanout, int queued);
+/* The parts of rectangles a[] not covered by any of cut[]: what a back
+ * buffer still lacks after this frame redraws cut[]. Returns the count; if
+ * the pieces don't fit in max, a superset (never less than the answer). */
+int t5_fbt_subtract(const t5_rect_t *a, int na, const t5_rect_t *cut, int ncut, t5_rect_t *out, int max);
 
 #ifdef __cplusplus
 }

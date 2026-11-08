@@ -18,7 +18,7 @@ extern "C" {
  * fn returns false. Returns T5_ERR_INVALID_ARG for anything that isn't a
  * well-formed little-endian ELF32 RISC-V file. */
 typedef bool (*t5_elfsym_fn_t)(const char *name, bool weak, void *arg);
-t5_err_t t5_elfsym_undefined(const uint8_t *elf, size_t len, t5_elfsym_fn_t fn, void *arg);
+T5_MUST_CHECK t5_err_t t5_elfsym_undefined(const uint8_t *elf, size_t len, t5_elfsym_fn_t fn, void *arg);
 /* True if the ELF defines a global function symbol called name. */
 bool t5_elfsym_defines(const uint8_t *elf, size_t len, const char *name);
 

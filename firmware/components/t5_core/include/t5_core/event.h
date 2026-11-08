@@ -82,6 +82,14 @@ typedef enum {
     /* Ports (payload: t5_ev_port_t) */
     T5_EV_PORT_CLAIMED = 1100,
     T5_EV_PORT_RELEASED,
+
+    /* Media and USB (Phase 7). Mic and camera: t5_ev_media_t; USB: t5_ev_usb_t */
+    T5_EV_MIC_STATE = 1200,         /* an input stream opened or closed */
+    T5_EV_CAMERA_STATE,             /* the camera opened or closed */
+    T5_EV_USB_ATTACHED,             /* a device on USB-A */
+    T5_EV_USB_DETACHED,
+    T5_EV_USB_STORAGE,              /* /usb mounted or unmounted */
+    T5_EV_USBC_MODE,                /* USB-C console / mass storage changed */
 } t5_event_id_t;
 
 typedef struct {
@@ -125,6 +133,18 @@ typedef struct {
     char port[16];        /* port name */
     char owner[16];       /* owner id, truncated */
 } t5_ev_port_t;
+
+typedef struct {
+    uint8_t on;
+    char owner[16];       /* app id, truncated, "" for the system */
+} t5_ev_media_t;
+
+typedef struct {
+    uint8_t addr;         /* USB address */
+    uint8_t cls;          /* t5_usb_class_t */
+    uint16_t vid, pid;
+    uint8_t mounted;      /* T5_EV_USB_STORAGE, T5_EV_USBC_MODE: new state */
+} t5_ev_usb_t;
 
 #define T5_EVENT_MAX_DATA 32
 

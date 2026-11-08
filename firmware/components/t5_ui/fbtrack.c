@@ -109,3 +109,47 @@ int t5_fbt_pick(int nbufs, int scanout, int queued)
     }
     return -1;
 }
+
+/* a minus b: up to four pieces (above, below, left, right of the overlap). */
+static int rect_minus(t5_rect_t a, t5_rect_t b, t5_rect_t out[4])
+{
+    if (b.x2 < a.x1 || b.x1 > a.x2 || b.y2 < a.y1 || b.y1 > a.y2) {
+        out[0] = a;
+        return 1;
+    }
+    int n = 0;
+    if (b.y1 > a.y1) out[n++] = (t5_rect_t){ a.x1, a.y1, a.x2, b.y1 - 1 };
+    if (b.y2 < a.y2) out[n++] = (t5_rect_t){ a.x1, b.y2 + 1, a.x2, a.y2 };
+    int32_t y1 = b.y1 > a.y1 ? b.y1 : a.y1, y2 = b.y2 < a.y2 ? b.y2 : a.y2;
+    if (b.x1 > a.x1) out[n++] = (t5_rect_t){ a.x1, y1, b.x1 - 1, y2 };
+    if (b.x2 < a.x2) out[n++] = (t5_rect_t){ b.x2 + 1, y1, a.x2, y2 };
+    return n;
+}
+
+int t5_fbt_subtract(const t5_rect_t *a, int na, const t5_rect_t *cut, int ncut, t5_rect_t *out, int max)
+{
+    /* Work list in out[]; each cut splits every piece. If the pieces don't
+     * fit, the caller gets the uncut rectangles (copying a little more is
+     * always correct). */
+    if (na > max) na = max;
+    for (int i = 0; i < na; i++) out[i] = a[i];
+    int n = na;
+    for (int c = 0; c < ncut; c++) {
+        t5_rect_t next[64];
+        int m = 0;
+        bool overflow = false;
+        for (int i = 0; i < n && !overflow; i++) {
+            t5_rect_t parts[4];
+            int k = rect_minus(out[i], cut[c], parts);
+            if (m + k > max || m + k > 64) {
+                overflow = true;
+                break;
+            }
+            for (int j = 0; j < k; j++) next[m++] = parts[j];
+        }
+        if (overflow) return n;      /* keep what we have: a superset of the answer */
+        for (int i = 0; i < m; i++) out[i] = next[i];
+        n = m;
+    }
+    return n;
+}

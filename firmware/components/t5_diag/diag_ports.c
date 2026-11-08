@@ -38,7 +38,7 @@ static void list(void)
     printf("port         modes                         pins\n");
     for (int i = 0; i < t5_ports_count(); i++) {
         t5_port_info_t pi;
-        t5_ports_info(i, &pi);
+        if (t5_ports_info(i, &pi) != T5_OK) break;
         char modes[48] = "";
         for (int m = 0; m < T5_MODE_COUNT; m++) {
             if (pi.modes & (1u << m)) {
@@ -176,7 +176,7 @@ static int do_i2c(int argc, char **argv)
     } else {
         rc = -1;
     }
-    t5_port_close(tmp);
+    T5_IGNORE(t5_port_close(tmp));   /* opened just above */
     return rc;
 }
 
@@ -250,7 +250,7 @@ static int do_modbus(int argc, char **argv)
     }
     if (mb.exception) printf("exception 0x%02x: ", mb.exception);
     printf("%s\n", t5_err_str(e));
-    t5_port_close(tmp);
+    T5_IGNORE(t5_port_close(tmp));   /* opened just above */
     return e != T5_OK;
 }
 
@@ -269,7 +269,7 @@ static int cmd_port(int argc, char **argv)
         t5_port_t *p;
         while ((p = find(argv[2], -1)) != NULL) {
             forget(p);
-            t5_port_close(p);
+            T5_IGNORE(t5_port_close(p));   /* found open just above */
             n++;
         }
         printf("closed %d\n", n);
@@ -352,6 +352,6 @@ void diag_register_ports(void)
         .hint = "[open|close|i2c|gpio|pwm|adc|uart|scan|profiles|modbus]",
         .func = cmd_port,
     };
-    t5_ports_init();
+    ESP_ERROR_CHECK(t5_ports_init() == T5_OK ? ESP_OK : ESP_FAIL);
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }

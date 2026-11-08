@@ -1,0 +1,10 @@
+# Example apps (plan 7.9, 9.5). Build: tools/t5/t5 examples
+cmake_minimum_required(VERSION 3.22)
+set(T5_SDK ${CMAKE_CURRENT_LIST_DIR}/../../sdk)
+set(CMAKE_TOOLCHAIN_FILE ${T5_SDK}/cmake/toolchain-t5.cmake)
+project(t5_examples C)
+include(${T5_SDK}/cmake/t5_app.cmake)
+t5_app(uvc_monitor SRCS uvc_monitor/main.c MANIFEST uvc_monitor/manifest.toml)
+t5_app(logger SRCS logger/main.c MANIFEST logger/manifest.toml)
+t5_app(rs485_console SRCS rs485_console/main.c MANIFEST rs485_console/manifest.toml)
+t5_app(weather SRCS weather/main.c weather/wx.c weather/json.c MANIFEST weather/manifest.toml)

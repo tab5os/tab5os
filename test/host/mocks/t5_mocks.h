@@ -129,5 +129,5 @@ static inline void mock_reset_all(void)
     mock_tasks_reset();
     mock_time_set_us(1000000);
     t5_event_init();
-    t5_i2c_init();
+    T5_IGNORE(t5_i2c_init());   /* idempotent; the tests check what they need */
 }

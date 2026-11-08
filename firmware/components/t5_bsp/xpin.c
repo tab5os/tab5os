@@ -91,7 +91,7 @@ t5_err_t t5_xpin_init(void)
         T5_RETURN_ON_ERR(adopt(e));
         e->valid = true;
     }
-    t5_i2c_on_recover(on_bus_recovered, NULL);
+    T5_RETURN_ON_ERR(t5_i2c_on_recover(on_bus_recovered, NULL));
     s_inited = true;
     return T5_OK;
 }

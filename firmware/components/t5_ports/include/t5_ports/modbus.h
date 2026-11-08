@@ -55,14 +55,14 @@ typedef struct {
 void t5_modbus_init(t5_modbus_t *mb, t5_port_t *port);
 
 /* Registers come back in host order. */
-t5_err_t t5_modbus_read_holding(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t *out);
-t5_err_t t5_modbus_read_input(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t *out);
-t5_err_t t5_modbus_write_register(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t value);
-t5_err_t t5_modbus_write_registers(t5_modbus_t *mb, uint8_t slave, uint16_t addr, const uint16_t *vals,
+T5_MUST_CHECK t5_err_t t5_modbus_read_holding(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t *out);
+T5_MUST_CHECK t5_err_t t5_modbus_read_input(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t *out);
+T5_MUST_CHECK t5_err_t t5_modbus_write_register(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t value);
+T5_MUST_CHECK t5_err_t t5_modbus_write_registers(t5_modbus_t *mb, uint8_t slave, uint16_t addr, const uint16_t *vals,
                                    uint16_t count);
 /* Coils: bits packed LSB first, (count + 7) / 8 bytes. */
-t5_err_t t5_modbus_read_coils(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t count, uint8_t *bits);
-t5_err_t t5_modbus_write_coil(t5_modbus_t *mb, uint8_t slave, uint16_t addr, bool on);
+T5_MUST_CHECK t5_err_t t5_modbus_read_coils(t5_modbus_t *mb, uint8_t slave, uint16_t addr, uint16_t count, uint8_t *bits);
+T5_MUST_CHECK t5_err_t t5_modbus_write_coil(t5_modbus_t *mb, uint8_t slave, uint16_t addr, bool on);
 
 /* ---- framing (pure, exposed for tests and tools) ------------------------ */
 uint16_t t5_modbus_crc16(const uint8_t *data, size_t len);
@@ -76,9 +76,9 @@ size_t t5_modbus_reply_len(uint8_t fn, uint16_t count);
 /* Check a reply: slave, function, CRC, length. On an exception reply sets
  * *exception and returns its mapped error. data and dlen point at the payload
  * after the byte count (reads) or after the function code (writes). */
-t5_err_t t5_modbus_parse_reply(const uint8_t *rx, size_t n, uint8_t slave, uint8_t fn, uint8_t *exception,
+T5_MUST_CHECK t5_err_t t5_modbus_parse_reply(const uint8_t *rx, size_t n, uint8_t slave, uint8_t fn, uint8_t *exception,
                                const uint8_t **data, size_t *dlen);
-t5_err_t t5_modbus_exception_err(uint8_t code);
+T5_MUST_CHECK t5_err_t t5_modbus_exception_err(uint8_t code);
 /* 3.5 character times in microseconds (11-bit chars; fixed 1750 us above 19200 baud). */
 uint32_t t5_modbus_t35_us(uint32_t baud);
 

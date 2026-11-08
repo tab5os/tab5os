@@ -24,7 +24,7 @@ The design leaves a few things open that implementation can't skip. The plan use
 | LVGL threading rules for apps | All LVGL calls run on the UI task. App callbacks run there too. App-created tasks must use `t5_ui_async()` or `t5_ui_lock()`/`t5_ui_unlock()` |
 | How the OS tracks a native app's heap, timers and LVGL objects | The ELF symbol resolver binds `malloc`/`free`/`lv_timer_create`/`lv_anim_start`/`xTaskCreate` to tracking wrappers. All app UI sits under the app's root screen, so deleting that root frees every object |
 | Which app is "current" inside a service call | A FreeRTOS thread-local pointer holds the app context, inherited by `t5_task_create`. While an app is in the foreground the UI task carries its context the whole time, so timers and event handlers are charged to it too. System UI code on the UI task brackets its own acquisitions with `t5_sys_enter()`/`t5_sys_leave()` |
-| A native app that hangs the UI task | A UI-task watchdog (2 s) shows "App not responding". Native code can't be stopped safely, so the only choices are Wait or a restart to the launcher, which the crash guard records |
+| A native app that hangs the UI task | A UI-task watchdog (2 s) shows "App not responding": Wait, or Close app, which moves the UI task out of the app's code and closes the app (since 2026-11-08; a restart to the launcher only if the task can't be moved safely). The crash guard records it |
 | How the system talks to itself | One `esp_event` loop for system events (power, battery, net, ports, USB, rotation), plus direct mutex-protected calls into service APIs |
 | The camera's I2C address is missing from the reserved list | **Answered:** 0x36, once `CAM_RST` is released. Also reserved: 0x28, a second ST7123 address |
 | Where `PWROFF_PLUSE` is wired | **Answered from the schematic:** expander 0x44, P4. Confirming the pulse on battery is still to do |
@@ -274,6 +274,8 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 
 **Status (2026-11-05):** all items implemented (`t5_app`, `t5_pkg`, `t5_ports`, `sdk/`, `tools/abi/`, test apps in `test/apps/`, guide in [sdk.md](sdk.md)). Host tests cover the tracker, crash guard, ELF import scanner, ABI resolution, packages, manifests, the ports broker and Modbus framing. API level 1 exports 2,142 symbols (1,903 of them LVGL). **Complete: exit criteria met on Unit A** (bench-results, "Phase 5"): 500 open/close cycles back to baseline, the crash guard, and apps surviving firmware rebuilds. Only `rev1` (v1.x silicon) is targeted; `rev3` is not tested. Not yet run: real Grove, RS-485 and profile hardware for the ports broker.
 
+**Update (2026-11-08): app isolation.** Misbehaving installed apps no longer take the OS down (`t5_app/isolate.h`, `t5_core/fault.h`): CPU faults blamed on an app close it instead of rebooting, Close app on the ANR dialog no longer restarts, app heaps keep out of the OS's internal-RAM and PSRAM reserves, a PSRAM watchdog closes the app in front, and app tasks that hog a core are demoted. Verified on Unit A with `test/apps/crasher` (every mode) and `test/apps/hang` (both modes): no reboot, records written, launcher back; leaky stress still passes. See bench-results, "App isolation".
+
 **Exit criteria:** a test app that leaks memory, claims `grove`, holds a wake lock and creates tasks and timers is opened and closed 500 times, and heap, claims and locks return to baseline every time. A test app that crashes on purpose triggers the crash guard. An app built against API 1 still loads after unrelated firmware changes.
 
 ## Phase 6: shell and system apps
@@ -287,13 +289,17 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 | 6.3 | Launcher | Landscape-first app grid, status bar (time, battery, Wi-Fi, BLE, mic and camera indicators), app switching with transitions | M |
 | 6.4 | Quick settings | Pull-down panel: Wi-Fi, BLE, brightness, rotation lock, low-power mode, volume | M |
 | 6.5 | Settings | Wi-Fi, BLE, display, sound, power, time, updates, developer mode, about with licences (Roboto OFL, Material Icons Apache-2.0) | L |
-| 6.6 | Files | SD and `/data` browsing, `.t5app` install, safe eject | M |
+| 6.6 | Files | SD and `/data` browsing, `.t5app` install, safe eject (later also: a USB drive at `/usb`, delete, format) | M |
 | 6.7 | App Manager | Installed apps, permissions, storage use, crash reports and core dumps, removal | M |
 | 6.8 | Power app | Live voltage, current and watts, time remaining, charge history graph, per-app average draw, charge limit | M |
 | 6.9 | Port Inspector | Pin owner, mode and level; rail state and owners; I2C traffic; module scan | M |
 | 6.10 | Session restore | Last app and its saved state brought back after soft off, unless the wake came from an alarm | S |
 
 All system apps are built as normal apps against the public SDK, compiled into the image. That tests the API with real use.
+
+**Status (2026-11-06):** all items implemented (`md/md_controls.c`, `t5_shell`, `firmware/sysapps/`, per-app energy and session state in `t5_app`, charge history in `t5_battery`, time zones in `t5_time`), started against the plan's rule while the Phase 4 gate still fails. On Unit A every system app opens and draws (screenshots over the console with `t5 shot`), the launcher, status bar, quick settings, drawer and widget set also run in the simulator, whose screenshots CI now checks (`shell_*` goldens), and the Phase 5 stress test still passes with the shell in place. Not yet checked by a person: touch gestures, the keyboard on glass, joining a new network and setting the time by hand on the device (the console drove everything here), and per-app power (it is measured on battery only). See bench-results, "Phases 6 and 7".
+
+**Update (2026-11-07):** a person ran the no-PC path on Unit A: install from SD, permission prompt, run, gestures, App Manager, per-app power on battery (camera ~1.8 W). It found the on-screen keyboard never appearing and the Camera app's recording crashing; both are fixed, Wi-Fi was then rejoined by touch and the time zone set. Still to do by touch: setting the time by hand after the keyboard fix, and the "Sync with the network now" row. Frame rates: scrolling passes; full-screen transitions 26.7 fps while animating (target 30, limited by PSRAM bandwidth); dialogs ~6.6 fps. See bench-results, "Phases 6 and 7 follow-up".
 
 **Exit criteria:** a fresh device can join Wi-Fi, set the time, install an app from SD, grant permissions, run it, see its power cost and remove it, all without a PC. The shell meets the Phase 4 frame rate targets.
 
@@ -313,6 +319,10 @@ All system apps are built as normal apps against the public SDK, compiled into t
 | 7.8 | USB-C modes | Console by default, with mass storage or other device modes on request (bench check 6). Mass storage exposes SD only, never `/data` | M |
 | 7.9 | UVC monitor | Example app showing a USB capture dongle on screen | M |
 
+**Status (2026-11-06):** all items implemented (`t5_audio`, `t5_camera`, `t5_usb`, the Camera app, `apps/examples/uvc_monitor`). On Unit A: audio out and in with both codecs, echo cancellation, playback with the screen off, the camera with preview, JPEG and H.264 to SD. USB-A host runs (rail, hub support, all class drivers), but no USB device has been plugged in yet, and USB-C mass storage works (the SD card mounts on a Mac; the console comes back after the timeout). A USB drive on USB-A works too. Recording is 1280x720: the SC202CS has no 1080p mode (1600x1200 and 1600x900 are its 2 MP modes). See bench-results, "Phases 6 and 7".
+
+**Update (2026-11-07):** media through 100 sleep cycles passes (250 cycles, 0 failures, 0 underruns). Apps run again (an XIP/memory-protection change had broken every native app) and Wi-Fi no longer stalls (esp_hosted vs the factory C6 firmware). 10 minutes of 720p recording on Unit A's card: 14 frames dropped with adaptive bitrate (2,053 without); the card (FAT32, 512-byte clusters) stalls for seconds, so a reformat with 32 KB clusters is the remaining step. The exit criterion says 1080p; the sensor's top mode at 30 fps is 720p. 1 h playback with the screen off: see bench-results. Keyboard, flash drive and UVC dongle through a hub: not tried (no hub).
+
 **Exit criteria:** 1 hour of audio playback with the screen off and no underruns. 10 minutes of 1080p H.264 recording to SD with no dropped frames reported. Keyboard, flash drive and UVC dongle work through a hub. Media services suspend and resume through 100 sleep cycles.
 
 ## Phase 8: MicroPython and developer tools
@@ -331,6 +341,8 @@ All system apps are built as normal apps against the public SDK, compiled into t
 
 **Exit criteria:** `t5 new` → `t5 run` shows a C app on the device in under 30 s with logs streaming. A Python app using `grove` I2C runs from the on-device editor. A Python app can't reach any hardware except through `t5`.
 
+**Status (Nov 7):** built and run on Unit A. `t5 new` → `t5 run` in 2.7 s; the containment checks pass (`py test`, and a build-time module allowlist); the editor runs Grove I2C code (no sensor was attached). Deviation: `t5.ui` wraps the MD2 widget set by hand rather than generating it; the scalar API (power, time, audio, IMU, USB, app) is generated from `api_v1.sym`. See [bench-results](bench-results.md#phases-8-and-9--2026-11-07).
+
 ## Phase 9: updates, recovery and release
 
 **Goal:** nothing a user does needs a USB reflash to fix.
@@ -346,6 +358,8 @@ All system apps are built as normal apps against the public SDK, compiled into t
 | 9.7 | Release | Tagged firmware, SDK and CLI packages, a flashing guide, licence file | S |
 
 **Exit criteria:** power pulled at random points during an update always leaves a bootable device. The scheduled logger runs for a week on one charge, with its draw measured. 1.0 is tagged with API level 1 frozen.
+
+**Status (Nov 7):** 9.1–9.5 built and run on Unit A: signed A/B updates with a trial boot and rollback, the boot counter in a custom bootloader, safe mode, the recovery image, chip-bound credential sealing (NVS encryption proper would burn an eFuse key, so credentials are sealed before they reach NVS instead; [security.md](security.md)), and the RS-485 Console and Logger examples. 9.6 and 9.7 are tooling (`test/hil/ota_cycles.py`, `test/hil/soak.py`, `tools/release.sh`, [flashing.md](flashing.md)) with short runs only; the 7-day soak, 1,000 OTA cycles, real power cuts, the logger week and the 1.0 tag are still to do.
 
 ## Testing strategy
 

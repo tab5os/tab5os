@@ -12,6 +12,7 @@
 #include "md/md.h"
 #include "md/md_shadows.h"
 #include "md_priv.h"
+#include "md_zasset.h"
 
 /* Nine sub-images sharing the shadow's pixels. */
 typedef struct slices {
@@ -102,8 +103,11 @@ static const md_shadow_t *pick(lv_obj_t *obj, int dp)
     int32_t rad = lv_obj_get_style_radius(obj, 0);
     int32_t m = LV_MIN(lv_obj_get_width(obj), lv_obj_get_height(obj)) / 2;
     int rdp = (rad == LV_RADIUS_CIRCLE || rad >= m) ? 100 : (int)(rad / MD_PX_PER_DP);
+    md_assets_load();
     return md_shadow_get(dp, rdp);
 }
+
+static void draw_shadow(lv_layer_t *layer, lv_obj_t *obj, const md_shadow_t *sh);
 
 static void shadow_event(lv_event_t *e)
 {
@@ -125,13 +129,18 @@ static void shadow_event(lv_event_t *e)
         return;
     }
     if (code != LV_EVENT_DRAW_MAIN_BEGIN) return;
+    draw_shadow(lv_event_get_layer(e), obj, sh);
+}
+
+/* The nine-slice shadow of `sh` around obj's current coordinates. */
+static void draw_shadow(lv_layer_t *layer, lv_obj_t *obj, const md_shadow_t *sh)
+{
     lv_area_t co;
     lv_obj_get_coords(obj, &co);
     int32_t w = lv_area_get_width(&co), h = lv_area_get_height(&co);
     if (w < sh->box_min_w || h < sh->box_min_h) return;
     const slices_t *s = slices_for(sh);
     if (!s) return;
-    lv_layer_t *layer = lv_event_get_layer(e);
     int32_t W = (int32_t)sh->img->header.w + (w - sh->box_min_w);
     int32_t H = (int32_t)sh->img->header.h + (h - sh->box_min_h);
     int32_t X = co.x1 - sh->box_x, Y = co.y1 - sh->box_y;
@@ -148,6 +157,22 @@ static void shadow_event(lv_event_t *e)
     draw_part(layer, &s->part[7], xm1, ym2 + 1, xm2, Y + H - 1, true);
     draw_part(layer, &s->part[3], X, ym1, xm1 - 1, ym2, true);
     draw_part(layer, &s->part[5], xm2 + 1, ym1, X + W - 1, ym2, true);
+}
+
+void md_shadow_draw(lv_layer_t *layer, lv_obj_t *obj, int dp)
+{
+    const md_shadow_t *sh = dp > 0 ? pick(obj, dp) : NULL;
+    if (sh) draw_shadow(layer, obj, sh);
+}
+
+int md_shadow_dp(lv_obj_t *obj)
+{
+    uint32_t n = lv_obj_get_event_count(obj);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_event_dsc_t *d = lv_obj_get_event_dsc(obj, i);
+        if (lv_event_dsc_get_cb(d) == shadow_event) return ((shadow_ud_t *)lv_event_dsc_get_user_data(d))->dp;
+    }
+    return 0;
 }
 
 void md_shadow_attach(lv_obj_t *obj, int dp)

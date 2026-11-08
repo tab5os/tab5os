@@ -30,6 +30,8 @@
 #include "t5_net/ble.h"
 #include "t5_net/net.h"
 #include "t5_net/netcfg.h"
+#include "t5_net/sock.h"
+#include "t5_storage/secret.h"
 #include "t5_pins/pins.h"
 #include "t5_power/power.h"
 #include "t5_power/rail.h"
@@ -152,26 +154,62 @@ static t5_err_t send(const msg_t *m)
     return xQueueSend(s_q, m, pdMS_TO_TICKS(100)) == pdTRUE ? T5_OK : T5_ERR_BUSY;
 }
 
-/* ---- saved config (NVS) --------------------------------------------------- */
+/* ---- saved config (NVS) ---------------------------------------------------
+ * Sealed with a key bound to this chip (plan 9.4, t5_storage/secret.h).
+ * A plaintext blob from before is read once and saved sealed. */
+
+static void cfg_save(void);
 
 static void cfg_load(void)
 {
     nvs_handle_t h;
-    size_t len = sizeof s_cfg;
     t5_netcfg_init(&s_cfg);
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
-    if (nvs_get_blob(h, NVS_KEY, &s_cfg, &len) != ESP_OK || len != sizeof s_cfg || !t5_netcfg_valid(&s_cfg)) {
-        t5_netcfg_init(&s_cfg);
-    }
+    size_t len = 0;
+    uint8_t *blob = NULL;
+    if (nvs_get_blob(h, NVS_KEY, NULL, &len) == ESP_OK && len) blob = malloc(len);
+    if (blob && nvs_get_blob(h, NVS_KEY, blob, &len) != ESP_OK) len = 0;
     nvs_close(h);
+    if (!blob) return;
+    bool migrate = false;
+    size_t n = 0;
+    if (t5_secret_is_sealed(blob, len)) {
+        if (t5_secret_open(blob, len, &s_cfg, sizeof s_cfg, &n) != T5_OK || n != sizeof s_cfg) {
+            T5_LOGW(TAG, "saved networks don't open (sealed on another chip?): starting with none");
+            t5_netcfg_init(&s_cfg);
+        }
+    } else if (len == sizeof s_cfg) {
+        memcpy(&s_cfg, blob, sizeof s_cfg);
+        migrate = true;
+    }
+    free(blob);
+    if (!t5_netcfg_valid(&s_cfg)) {
+        t5_netcfg_init(&s_cfg);
+        return;
+    }
+    if (migrate) {
+        T5_LOGI(TAG, "sealing the saved networks with this chip's key");
+        cfg_save();
+    }
 }
 
 static void cfg_save(void)
 {
+    size_t cap = sizeof s_cfg + T5_SECRET_OVERHEAD, n = 0;
+    uint8_t *sealed = malloc(cap);
+    if (!sealed) return;
+    if (t5_secret_seal(&s_cfg, sizeof s_cfg, sealed, cap, &n) != T5_OK) {
+        T5_LOGE(TAG, "can't seal the saved networks: not saving");
+        free(sealed);
+        return;
+    }
     nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    if (nvs_set_blob(h, NVS_KEY, &s_cfg, sizeof s_cfg) == ESP_OK) nvs_commit(h);
-    nvs_close(h);
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_set_blob(h, NVS_KEY, sealed, n) == ESP_OK) nvs_commit(h);
+        nvs_close(h);
+    }
+    memset(sealed, 0, cap);
+    free(sealed);
 }
 
 /* ---- IDF event plumbing --------------------------------------------------- */
@@ -263,7 +301,7 @@ static void power_down(void)
         s_hosted_up = false;
     }
     if (s_rail) {
-        t5_rail_release(s_rail);
+        T5_LOG_ON_ERR(TAG, t5_rail_release(s_rail));
         s_rail = NULL;
     }
     bool was = s_st.state != T5_NET_OFF && s_st.state != T5_NET_FAILED;
@@ -632,12 +670,16 @@ static t5_err_t c6_update(bool force)
 static void suspend(void)
 {
     if (t5_wakelock_count(T5_LOCK_NET) > 0 && s_wifi_up) {
-        esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+        /* With connections open (a download, a socket an app is using),
+         * the light power save: MAX_MODEM sleeps through DTIM intervals
+         * and cuts throughput to a trickle. */
+        bool busy = t5_net_handles_open() > 0;
+        esp_wifi_set_ps(busy ? WIFI_PS_MIN_MODEM : WIFI_PS_MAX_MODEM);
         s_ps = true;
         t5_mutex_lock(s_mtx);
         s_st.power_save = true;
         t5_mutex_unlock(s_mtx);
-        T5_LOGI(TAG, "sleep: Wi-Fi kept in power save (net lock held)");
+        T5_LOGI(TAG, "sleep: Wi-Fi kept up (%s)", busy ? "connections open" : "net lock held, power save");
     } else if (s_st.state != T5_NET_OFF) {
         s_suspended_off = true;
         power_down();
@@ -868,12 +910,12 @@ t5_err_t t5_net_init(void)
 
     const t5_suspend_hook_t hook = { .name = "net", .prio = T5_SUSPEND_PRIO_NET, .budget_ms = SUSPEND_BUDGET_MS,
                                      .suspend = hook_suspend, .resume = hook_resume };
-    t5_power_register_hook(&hook);
+    T5_LOG_ON_ERR(TAG, t5_power_register_hook(&hook));
     s_inited = true;
     T5_LOGI(TAG, "%d saved network(s), radio %s, antenna %s, c6fw image %s", s_cfg.n,
             s_st.enabled ? "on" : "off", s_cfg.antenna == T5_ANT_EXTERNAL ? "external" : "internal",
             s_st.c6_image[0] ? s_st.c6_image : "none");
-    return t5_task_create("t5_net", net_task, NULL, 6144, 7, 0, NULL);
+    return t5_task_create_lp("t5_net", net_task, NULL, 6144, 7, 0, NULL);
 }
 
 void t5_net_status(t5_net_status_t *out)
@@ -942,6 +984,19 @@ int t5_net_saved_list(char (*ssids)[T5_NET_SSID_LEN], int max)
     int n = s_cfg.n < max ? s_cfg.n : max;
     for (int i = 0; ssids && i < n; i++) memcpy(ssids[i], s_cfg.e[i].ssid, T5_NET_SSID_LEN);
     return s_cfg.n;
+}
+
+t5_err_t t5_net_sync_time(void)
+{
+    if (!s_got_ip) return T5_ERR_STATE;
+    if (!s_sntp_started) {
+        esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+        sc.sync_cb = on_sntp;
+        if (esp_netif_sntp_init(&sc) != ESP_OK) return T5_ERR_IO;
+        s_sntp_started = true;
+        return T5_OK;
+    }
+    return esp_netif_sntp_start() == ESP_OK ? T5_OK : T5_ERR_IO;   /* restarts: asks again now */
 }
 
 t5_err_t t5_net_c6_reset(void)

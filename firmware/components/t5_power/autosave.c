@@ -116,7 +116,7 @@ void t5_autosave_poll(uint32_t now_ms)
         return;
     }
     if (now_ms - s_last_ms >= T5_AUTOSAVE_PERIOD_MS) {
-        t5_autosave_now();
+        T5_LOG_ON_ERR(TAG, t5_autosave_now());
     }
 }
 

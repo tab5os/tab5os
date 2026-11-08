@@ -6,12 +6,12 @@ set(ABI_TABLE "${CMAKE_CURRENT_BINARY_DIR}/abi_table.c")
 
 idf_component_register(
     SRCS "tracker.c" "crashguard.c" "elfsym.c" "abi.c" "lifecycle.c" "wrappers.c" "perm.c" "anr.c"
-         "launcher.c" "apps_hw.c" "${ABI_TABLE}"
+         "launcher.c" "energy.c" "isolate.c" "apps_hw.c" "fspolicy.c" "picker.c" "${ABI_TABLE}"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core t5_ports lvgl__lvgl freertos
-    PRIV_REQUIRES md t5_ui t5_pkg t5_power t5_storage t5_time t5_battery t5_imu t5_net lwip
-                  espressif__elf_loader espcoredump spi_flash esp_system heap
+    PRIV_REQUIRES md t5_ui t5_pkg t5_power t5_storage t5_time t5_battery t5_imu t5_net t5_audio t5_camera t5_usb t5_shell lwip
+                  espressif__elf_loader espcoredump spi_flash esp_system heap esp_timer
 )
 
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)

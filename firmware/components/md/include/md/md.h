@@ -34,6 +34,8 @@ static inline lv_color_t md_color(md_rgb_t c) { return lv_color_hex(c); }
 const lv_font_t *md_font(md_type_role_t role);
 /* Material Icons font: 18, 24 (default) or 40 dp. */
 const lv_font_t *md_icon_font(int size_dp);
+/* Roboto Mono, 12 dp: code and terminal text. Not an MD2 role. */
+const lv_font_t *md_font_mono(void);
 /* Font, line height, tracking and colour for a text role at an emphasis
  * (scheme->on_surface.high / medium / disabled). Uppercase roles need their
  * text set with md_label_set_text(). */
@@ -93,6 +95,8 @@ typedef void (*md_list_click_cb_t)(uint32_t index, void *user_data);
 lv_obj_t *md_list_create(lv_obj_t *parent, uint32_t count, int row_dp, md_list_bind_cb_t bind,
                          md_list_click_cb_t click, void *user_data);
 void md_list_set_count(lv_obj_t *list, uint32_t count);
+/* Called with the row's index on a long press (no click follows). */
+void md_list_set_long_press(lv_obj_t *list, md_list_click_cb_t cb);
 void md_list_refresh(lv_obj_t *list);
 uint32_t md_list_rows_alive(lv_obj_t *list);   /* recycled row objects */
 
@@ -102,6 +106,130 @@ typedef void (*md_dialog_cb_t)(int button, void *user_data);
 lv_obj_t *md_dialog_show(const char *title, const char *text, const char *btn_confirm,
                          const char *btn_dismiss, md_dialog_cb_t cb, void *user_data);
 void md_dialog_close(lv_obj_t *dialog);
+
+/* ---- snapshot compositing (md_freeze.c) -------------------------------------- */
+/* A frozen screen is rendered once into a PSRAM snapshot and hidden; the
+ * display's bottom layer draws the snapshot where the screen is, at its
+ * opacity, until it is thawed. Screen load animations do this to both
+ * screens for their duration (on the device every lv_screen_load_anim()
+ * call does), and dialogs to the screen behind them while they're open
+ * (the scrim and shadow drawn into the snapshot: md_freeze_draw_into). */
+bool md_freeze_screen(lv_obj_t *scr);
+void md_thaw_screen(lv_obj_t *scr);
+void md_thaw_screens(void);
+bool md_screens_frozen(void);
+void md_screen_load_anim(lv_obj_t *scr, lv_screen_load_anim_t anim, uint32_t time, uint32_t delay, bool auto_del);
+/* Off: animations redraw the live widgets every frame (for comparison). */
+void md_freeze_set_enabled(bool on);
+bool md_freeze_enabled(void);
+/* Which animations use snapshots (all by default). */
+#define MD_FREEZE_TRANSITIONS 1u
+#define MD_FREEZE_DIALOG_BACKDROP 2u
+#define MD_FREEZE_DIALOG_BOX 4u
+#define MD_FREEZE_ALL 7u
+void md_freeze_set_mode(uint32_t mask);
+uint32_t md_freeze_mode(void);
+/* Show a frozen screen under a scrim of `color` at `opa` (0 = none). */
+void md_freeze_dim(lv_obj_t *scr, lv_color_t color, lv_opa_t opa);
+/* Draw into a frozen screen's snapshot once (a scrim, a shadow), so every
+ * frame draws the snapshot as an opaque image, a PPA blit, instead of
+ * redrawing those on top. Drawn by LVGL, so translucent fills and images go
+ * to the PPA. False if the screen isn't frozen. */
+typedef void (*md_freeze_draw_fn_t)(lv_layer_t *layer, void *arg);
+bool md_freeze_draw_into(lv_obj_t *scr, md_freeze_draw_fn_t fn, void *arg);
+/* Called when scr goes live again, by whatever thaws it (a transition
+ * thaws every frozen screen). Cleared by the thaw. */
+typedef void (*md_freeze_thaw_cb_t)(lv_obj_t *scr, void *arg);
+void md_freeze_set_thaw_cb(lv_obj_t *scr, md_freeze_thaw_cb_t cb, void *arg);
+/* The frozen screen's snapshot (RGB565, the screen's size), or NULL. */
+const lv_draw_buf_t *md_freeze_snapshot(const lv_obj_t *scr);
+typedef struct {
+    uint32_t transitions, fallbacks, snapshots, failed;
+    uint32_t snap_ms_last, snap_ms_max;
+    uint32_t bake_ms_last;          /* md_freeze_bake_dim */
+    uint32_t dialog_prep_ms_last;   /* a dialog's snapshots, bake and compose */
+    uint32_t box_snap_ms_last, compose_ms_last;
+} md_freeze_stats_t;
+void md_freeze_note_dialog(uint32_t prep_ms, uint32_t box_snap_ms, uint32_t compose_ms);
+void md_freeze_stats(md_freeze_stats_t *out);
+void md_freeze_print(void);   /* the frozen screens, to the log */
+/* A scrim over a frozen backdrop. bake: into the snapshot (md_freeze_draw_into),
+ * everywhere but over the top-layer objects below the scrim (the status bar);
+ * !bake: live, over just those objects (from the scrim's DRAW_MAIN_END). */
+void md_scrim_draw(lv_layer_t *layer, lv_obj_t *scrim, lv_opa_t opa, bool bake);
+/* The display's "settled" probe: true when a full-screen change has been
+ * copied into every framebuffer. Dialogs start their fade after it, so the
+ * fade's frames don't also carry those copies. NULL = always settled. */
+void md_freeze_set_settled_probe(md_perf_probe_t probe);
+bool md_freeze_settled(void);
+
+/* ---- the rest of the widget set (plan 6.1, 6.2) ------------------------------ */
+typedef void (*md_action_cb_t)(void *user_data);
+
+lv_obj_t *md_divider_create(lv_obj_t *parent);
+
+/* Filled text field (56 dp) with a floating label and optional helper or
+ * error text. Returns the field; md_textfield_ta() is the lv_textarea in it
+ * (focus it to type; the shell shows the on-screen keyboard). */
+lv_obj_t *md_textfield_create(lv_obj_t *parent, const char *label, bool password);
+lv_obj_t *md_textfield_ta(lv_obj_t *field);
+const char *md_textfield_text(lv_obj_t *field);
+void md_textfield_set_text(lv_obj_t *field, const char *text);
+void md_textfield_set_helper(lv_obj_t *field, const char *text, bool error);
+
+/* Selection controls, sized to the spec with 48 dp touch targets.
+ * LV_EVENT_VALUE_CHANGED as for the plain LVGL widgets. */
+lv_obj_t *md_switch_create(lv_obj_t *parent, bool on);
+lv_obj_t *md_slider_create(lv_obj_t *parent, int32_t min, int32_t max, int32_t value);
+lv_obj_t *md_checkbox_create(lv_obj_t *parent, const char *text, bool checked);
+
+/* Chips (32 dp). Filter chips toggle and show a check; choice chips are
+ * exclusive among their siblings. LV_EVENT_VALUE_CHANGED on change,
+ * LV_EVENT_CLICKED always. */
+typedef enum { MD_CHIP_ACTION, MD_CHIP_FILTER, MD_CHIP_CHOICE } md_chip_kind_t;
+lv_obj_t *md_chip_create(lv_obj_t *parent, const char *text, const char *icon, md_chip_kind_t kind);
+bool md_chip_selected(lv_obj_t *chip);
+void md_chip_set_selected(lv_obj_t *chip, bool on);
+
+/* Tabs (48 dp bar) over swipeable pages. md_tabs_add returns the page. */
+lv_obj_t *md_tabs_create(lv_obj_t *parent);
+lv_obj_t *md_tabs_add(lv_obj_t *tabs, const char *name);
+
+/* Static list rows for settings-style pages (48 dp, or 64 dp with a
+ * secondary line). Not recycled: use md_list for long lists. */
+lv_obj_t *md_row_create(lv_obj_t *parent, const char *icon, const char *primary, const char *secondary);
+void md_row_set_clickable(lv_obj_t *row, lv_event_cb_t cb, void *user_data);
+void md_row_set_text(lv_obj_t *row, const char *primary);
+void md_row_set_secondary(lv_obj_t *row, const char *text);
+void md_row_set_icon(lv_obj_t *row, const char *icon);
+lv_obj_t *md_row_switch(lv_obj_t *row, bool on);               /* trailing switch */
+lv_obj_t *md_row_trailing_text(lv_obj_t *row, const char *text);
+lv_obj_t *md_section_create(lv_obj_t *parent, const char *title);   /* overline header */
+
+/* A full-size page: app bar (back arrow when back_cb is set) over a
+ * scrolling column, md_page_body(). */
+lv_obj_t *md_page_create(lv_obj_t *parent, const char *title, lv_event_cb_t back_cb, void *user_data,
+                         lv_obj_t **bar_out);
+lv_obj_t *md_page_body(lv_obj_t *page);
+
+/* Menu (elevation 8) under an anchor, kept on screen. cb gets the item
+ * index, or -1 when dismissed by tapping outside. */
+typedef void (*md_menu_cb_t)(int item, void *user_data);
+lv_obj_t *md_menu_show(lv_obj_t *anchor, const char *const *items, int n, md_menu_cb_t cb, void *user_data);
+void md_menu_close(lv_obj_t *menu);
+
+/* Snackbar: one at a time at the bottom, 4 s (10 s with an action). */
+lv_obj_t *md_snackbar_show(const char *text, const char *action, md_action_cb_t cb, void *user_data);
+void md_snackbar_dismiss(void);
+
+/* Navigation drawer (256 dp, elevation 16) sliding in from the left over a
+ * scrim. Add items, or put anything in md_drawer_panel(). Tapping an item or
+ * the scrim closes it. */
+lv_obj_t *md_drawer_open(const char *title, const char *subtitle);
+lv_obj_t *md_drawer_panel(lv_obj_t *drawer);
+lv_obj_t *md_drawer_add_item(lv_obj_t *drawer, const char *icon, const char *text, bool selected, md_action_cb_t cb,
+                             void *user_data);
+void md_drawer_close(lv_obj_t *drawer);
 
 /* ---- rendering gate (plan 4.8) ---------------------------------------------- */
 /* The test screen from the design: app bar, 100-row list, card grid, FAB and
@@ -115,6 +243,14 @@ lv_obj_t *md_gate_create(void);
 typedef enum { MD_GATE_IDLE, MD_GATE_SCROLL, MD_GATE_TRANSITION, MD_GATE_DIALOG } md_gate_mode_t;
 void md_gate_run(lv_obj_t *gate, md_gate_mode_t mode);
 const char *md_gate_mode_name(md_gate_mode_t m);
+/* Frame rate while the gate animates (transition and dialog modes): frames
+ * and milliseconds counted between consecutive frames with an animation
+ * running, leaving out each step's first frame, whose delay (set-up such as
+ * snapshots) is start_ms_max. The first call starts counting. */
+typedef struct {
+    uint32_t frames, ms, start_ms_max;
+} md_gate_anim_stats_t;
+void md_gate_anim_stats(md_gate_anim_stats_t *out, bool reset);
 
 #ifdef __cplusplus
 }

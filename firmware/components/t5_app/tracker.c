@@ -17,13 +17,13 @@ struct t5_heap_blk {
 #define BLK_MAGIC 0x7A5EB10Cu
 _Static_assert(sizeof(t5_heap_blk_t) % 8 == 0, "header keeps 8-byte alignment");
 
-static void *sys_malloc(size_t n) { return malloc(n); }
-static void sys_free(void *p) { free(p); }
-static t5_tracker_alloc_t s_alloc = { sys_malloc, sys_free };
+static void *sys_malloc(t5_tracker_t *t, size_t n) { (void)t; return malloc(n); }
+static void sys_free(t5_tracker_t *t, void *p) { (void)t; free(p); }
+static t5_tracker_alloc_t s_alloc = { sys_malloc, sys_free, NULL };
 
 void t5_tracker_set_allocator(const t5_tracker_alloc_t *a)
 {
-    s_alloc = a ? *a : (t5_tracker_alloc_t){ sys_malloc, sys_free };
+    s_alloc = a ? *a : (t5_tracker_alloc_t){ sys_malloc, sys_free, NULL };
 }
 
 void t5_tracker_init(t5_tracker_t *t, uint32_t heap_limit_kb)
@@ -174,7 +174,7 @@ void *t5_tracker_malloc(t5_tracker_t *t, size_t n)
         t->heap_refused++;
         return NULL;
     }
-    t5_heap_blk_t *b = s_alloc.malloc(sizeof *b + (n ? n : 1));
+    t5_heap_blk_t *b = s_alloc.malloc(t, sizeof *b + (n ? n : 1));
     if (!b) return NULL;
     link_blk(t, b, n);
     return b + 1;
@@ -214,15 +214,21 @@ bool t5_tracker_free(t5_tracker_t *t, void *p)
     t5_tracker_t *owner = b->owner;
     (void)t;
     unlink_blk(owner, b);
-    s_alloc.free(b);
+    s_alloc.free(owner, b);
     return true;
 }
 
 void t5_tracker_free_all(t5_tracker_t *t)
 {
+    if (s_alloc.drop_all && s_alloc.drop_all(t)) {
+        t->blocks = NULL;
+        t->heap_bytes = 0;
+        t->heap_blocks = 0;
+        return;
+    }
     while (t->blocks) {
         t5_heap_blk_t *b = t->blocks;
         unlink_blk(t, b);
-        s_alloc.free(b);
+        s_alloc.free(t, b);
     }
 }

@@ -56,21 +56,21 @@ void t5_pkg_set_roots(const char *sd_apps, const char *data_apps, const char *da
 
 /* Validate a .t5app without installing: manifest.toml at the root, valid,
  * entry (and icon, if named) present in the zip. */
-t5_err_t t5_pkg_inspect(const char *path, t5_manifest_t *out, char *err, size_t errlen);
+T5_MUST_CHECK t5_err_t t5_pkg_inspect(const char *path, t5_manifest_t *out, char *err, size_t errlen);
 
 /* Install or upgrade. Reinstalling the same version is allowed; an older
  * version is refused with T5_ERR_DENIED unless T5_PKG_ALLOW_DOWNGRADE.
  * If the app was on the other root it moves (the old copy is removed). */
-t5_err_t t5_pkg_install(const char *path, t5_pkg_dest_t dest, t5_pkg_info_t *out, char *err, size_t errlen);
-t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags, t5_pkg_info_t *out,
+T5_MUST_CHECK t5_err_t t5_pkg_install(const char *path, t5_pkg_dest_t dest, t5_pkg_info_t *out, char *err, size_t errlen);
+T5_MUST_CHECK t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags, t5_pkg_info_t *out,
                            char *err, size_t errlen);
 
 /* Remove from every root. T5_ERR_NOT_FOUND if it was not installed (data is
  * still removed when keep_data is false). */
-t5_err_t t5_pkg_remove(const char *id, bool keep_data);
+T5_MUST_CHECK t5_err_t t5_pkg_remove(const char *id, bool keep_data);
 
 /* SD first, then DATA. */
-t5_err_t t5_pkg_find(const char *id, t5_pkg_info_t *out);
+T5_MUST_CHECK t5_err_t t5_pkg_find(const char *id, t5_pkg_info_t *out);
 /* Fill up to max entries (SD first); returns how many were stored. */
 int t5_pkg_list(t5_pkg_info_t *out, int max);
 
@@ -79,8 +79,8 @@ int t5_pkg_list(t5_pkg_info_t *out, int max);
 int t5_pkg_recover(void);
 
 /* Permission grants. Missing file: T5_ERR_NOT_FOUND with both outputs 0. */
-t5_err_t t5_pkg_grants_load(const char *id, uint32_t *granted, uint32_t *denied);
-t5_err_t t5_pkg_grants_save(const char *id, uint32_t granted, uint32_t denied);
+T5_MUST_CHECK t5_err_t t5_pkg_grants_load(const char *id, uint32_t *granted, uint32_t *denied);
+T5_MUST_CHECK t5_err_t t5_pkg_grants_save(const char *id, uint32_t granted, uint32_t denied);
 
 #ifdef __cplusplus
 }

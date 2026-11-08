@@ -82,6 +82,9 @@ int t5_net_saved_list(char (*ssids)[T5_NET_SSID_LEN], int max);
 
 /* Power-cycle the C6 and bring everything back (health recovery uses it too). */
 t5_err_t t5_net_c6_reset(void);
+/* Ask the network for the time now (SNTP); T5_ERR_STATE without Wi-Fi.
+ * The answer arrives asynchronously, as a time.set event. */
+t5_err_t t5_net_sync_time(void);
 /* Update the C6 from the c6fw partition if its version differs (or force).
  * Runs on the service task; T5_EV_NET_C6_UPDATE reports the result. */
 t5_err_t t5_net_c6_update(bool force);

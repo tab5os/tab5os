@@ -74,7 +74,7 @@ t5_err_t t5_ports_init(void)
 
 void t5_ports_reset_for_test(void)
 {
-    t5_ports_init();
+    T5_IGNORE(t5_ports_init());   /* idempotent; tests only */
     memset(s_handles, 0, sizeof s_handles);
     broker_reset();
 }
@@ -124,7 +124,7 @@ static void post(t5_event_id_t id, const t5_port_t *p)
 
 static void res_release(void *handle)
 {
-    t5_port_close(handle);
+    T5_IGNORE(t5_port_close(handle));   /* already closed is fine here */
 }
 
 /* Which pins a mode needs. Returns T5_OK and fills pins, or an error and why. */
@@ -457,7 +457,7 @@ t5_err_t t5_port_i2c_xfer(t5_port_t *p, uint8_t addr, const uint8_t *tx, size_t 
         return T5_ERR_INVALID_ARG;
     }
     if (p->def->shared) {
-        t5_i2c_dev_t *dev;
+        t5_i2c_dev_t *dev = NULL;
         T5_RETURN_ON_ERR(shared_dev(p, addr, &dev));
         return t5_i2c_xfer(dev, tx, txlen, rx, rxlen);
     }

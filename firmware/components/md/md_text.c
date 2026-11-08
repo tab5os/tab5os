@@ -7,9 +7,11 @@
 #include "md/md.h"
 #include "md/md_fonts.h"
 #include "md_priv.h"
+#include "md_zasset.h"
 
 const lv_font_t *md_font(md_type_role_t role)
 {
+    md_assets_load();
     switch (role) {
     case MD_TYPE_HEADLINE4: return &md_font_roboto_regular_68;
     case MD_TYPE_HEADLINE5: return &md_font_roboto_regular_48;
@@ -26,9 +28,16 @@ const lv_font_t *md_font(md_type_role_t role)
 
 const lv_font_t *md_icon_font(int size_dp)
 {
+    md_assets_load();
     if (size_dp <= 18) return &md_font_icons_36;
     if (size_dp >= 40) return &md_font_icons_80;
     return &md_font_icons_48;
+}
+
+const lv_font_t *md_font_mono(void)
+{
+    md_assets_load();
+    return &md_font_roboto_mono_24;
 }
 
 void md_text_style(lv_obj_t *label, md_type_role_t role, lv_opa_t emphasis)

@@ -25,6 +25,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <time.h>
 #include "t5_core/err.h"
 
@@ -74,6 +75,18 @@ void *t5_app_get_user(t5_app_t *app);
 /* The running app of the calling task, or NULL for system code. */
 t5_app_t *t5_app_self(void);
 
+/* The argument the app was launched with (t5_apps_launch_arg), "" if none. */
+const char *t5_app_launch_arg(t5_app_t *app);
+
+/* Session restore (plan 6.10): after a soft off the OS reopens the last app
+ * (not after an alarm wake, a crash or a hang). Save what the person was
+ * doing in on_suspend; on_create can check t5_app_restored() and load it.
+ * The state lives in the app's data dir and is written atomically. */
+#define T5_APP_STATE_MAX 8192
+bool t5_app_restored(t5_app_t *app);
+T5_MUST_CHECK t5_err_t t5_app_state_save(t5_app_t *app, const void *data, size_t len);
+T5_MUST_CHECK t5_err_t t5_app_state_load(t5_app_t *app, void *buf, size_t cap, size_t *len);
+
 /* Ask to exit. Runs on_suspend, on_destroy and the cleanup after the
  * current callback returns. */
 void t5_app_exit(t5_app_t *app);
@@ -84,12 +97,23 @@ bool t5_app_running(t5_app_t *app);
  * camera and mic, which also ask the person the first time they are used.
  * request() shows that prompt (UI task, non-blocking); cb gets the answer. */
 typedef void (*t5_perm_cb_t)(t5_app_t *app, uint32_t perm, bool granted, void *user);
-t5_err_t t5_app_request_permission(t5_app_t *app, uint32_t perm, t5_perm_cb_t cb, void *user);
+T5_MUST_CHECK t5_err_t t5_app_request_permission(t5_app_t *app, uint32_t perm, t5_perm_cb_t cb, void *user);
 bool t5_app_has_permission(t5_app_t *app, uint32_t perm);
+
+/* Files. An app can always use its data dir (t5_app_data_dir, up to 1 MB) and
+ * read its install dir. A file the person chooses here is open to the app
+ * until it exits, with no permission needed. The picker is a large modal
+ * over the app: cb gets the path, or NULL if the person backed out. It
+ * isn't called if the app exits first. UI task; one picker at a time.
+ * exts: "jpg,png", or NULL for any file. */
+#define T5_FILE_PICK_WRITE 1u    /* the app may also change the chosen file */
+typedef void (*t5_file_pick_cb_t)(t5_app_t *app, const char *path, void *user);
+T5_MUST_CHECK t5_err_t t5_file_pick(t5_app_t *app, const char *title, const char *exts, uint32_t flags,
+                                    t5_file_pick_cb_t cb, void *user);
 
 /* Wake the device from soft off at utc and run on_alarm headless, then go
  * back to soft off (needs [background] and background_wake). */
-t5_err_t t5_app_schedule_alarm(t5_app_t *app, time_t utc);
+T5_MUST_CHECK t5_err_t t5_app_schedule_alarm(t5_app_t *app, time_t utc);
 
 #ifdef __cplusplus
 }

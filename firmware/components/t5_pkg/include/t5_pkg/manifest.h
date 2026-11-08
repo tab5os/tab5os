@@ -28,8 +28,11 @@ enum { /* permission groups, bit flags */
     T5_PERM_STORAGE = 1u << 6,
     T5_PERM_BACKGROUND_WAKE = 1u << 7,
     T5_PERM_SYSTEM = 1u << 8,
+    T5_PERM_SHARED_READ = 1u << 9,      /* the shared folders, asked at first use */
+    T5_PERM_SHARED_WRITE = 1u << 10,    /* ...and changing them */
+    T5_PERM_ALL_FILES = 1u << 11,       /* all of /sd and /usb, never OS or other apps' files */
 };
-#define T5_PERM_ALL 0x1ffu
+#define T5_PERM_ALL 0xfffu
 
 #define T5_MANIFEST_MAX_PORTS 8
 #define T5_MANIFEST_MAX_HEAP_KB (32u * 1024u)
@@ -56,7 +59,7 @@ typedef struct {
 
 /* Parse and validate. On failure err holds a human-readable reason
  * ("line 3: ..." for syntax errors, "id: ..." for validation). */
-t5_err_t t5_manifest_parse(const char *text, size_t len, t5_manifest_t *out, char *err, size_t errlen);
+T5_MUST_CHECK t5_err_t t5_manifest_parse(const char *text, size_t len, t5_manifest_t *out, char *err, size_t errlen);
 
 const char *t5_perm_name(uint32_t perm_bit);       /* "camera", ...; NULL if not a single known bit */
 uint32_t t5_perm_from_name(const char *name);      /* 0 if unknown */

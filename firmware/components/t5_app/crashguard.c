@@ -11,6 +11,7 @@ const char *t5_crash_kind_name(t5_crash_kind_t k)
     case T5_CRASH_PANIC: return "crash";
     case T5_CRASH_ANR: return "not responding";
     case T5_CRASH_ALARM_OVERRUN: return "alarm overrun";
+    case T5_CRASH_OOM: return "out of memory";
     default: return "none";
     }
 }

@@ -105,6 +105,8 @@ t5_err_t t5_i2c_lock(uint32_t timeout_ms)
 
 void t5_i2c_unlock(void)
 {
+    /* Unbalanced or foreign unlocks would corrupt the depth count. */
+    T5_ASSERT(s_owner == t5_task_self() && s_depth > 0);
     if (--s_depth > 0) {
         return;
     }
@@ -412,4 +414,9 @@ void t5_i2c_reset_for_test(void)
     s_depth = 0;
     s_waiting = 0;
     s_handoffs = 0;
+}
+
+void *t5_i2c_native_bus(void)
+{
+    return t5_i2c_hw_bus();
 }

@@ -2,17 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build or inspect a Tab5 OS app package (.t5app).
 
-  t5pack.py <app_dir> [-o out.t5app]   validate the manifest and write the zip
-  t5pack.py --inspect file.t5app        list and validate a package
+  t5pack.py <app_dir> [-o out.t5app] [--sign key.pem]
+                                        validate the manifest and write the zip
+  t5pack.py --inspect file.t5app        list and validate a package (and its signature)
+
+Signed packages (plan 8.6) carry signature.t5sig: an ECDSA P-256 signature,
+made with the openssl command, over a sorted list of every other entry's
+SHA-256. Make a key with `t5 keygen`. The design allows unsigned apps (with a
+warning at install); the signature names the publisher.
 
 Stdlib only (Python 3.11+ for tomllib). The checks mirror the firmware's
 manifest validator (firmware/components/t5_pkg/manifest.c), including the
 TOML subset it understands, so a package that packs here installs there.
 """
 import argparse
+import base64
+import hashlib
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import tomllib
 import zipfile
 
@@ -22,13 +32,14 @@ MAX_PORTS = 8
 MAX_HEAP_KB = 32 * 1024
 TOP_KEYS = {"id", "name", "version", "api", "runtime", "entry", "icon", "min_heap_mb", "min_heap_kb",
             "orientation", "description", "author", "homepage", "license"}
-PERM_BOOLS = {"camera", "mic", "net", "ble", "usb", "storage", "background_wake", "system"}
+PERM_BOOLS = {"camera", "mic", "net", "ble", "usb", "storage", "shared_read", "shared_write", "all_files", "background_wake", "system"}
 ID_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)+$")
 IDENT = r"[0-9A-Za-z-]+"
 VERSION_RE = re.compile(rf"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-{IDENT}(\.{IDENT})*)?(\+{IDENT}(\.{IDENT})*)?$")
-PORT_RE = re.compile(r"^[a-z0-9_]{1,15}$")
+PORT_RE = re.compile(r"^[a-z0-9_.]{1,15}$")
 FUNC_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,30}$")
-SKIP_NAMES = {".DS_Store", "Thumbs.db", "__pycache__", ".git", ".install"}
+SKIP_NAMES = {".DS_Store", "Thumbs.db", "__pycache__", ".git", ".install", "build", "signature.t5sig"}
+SIG_NAME = "signature.t5sig"
 
 
 class PackError(Exception):
@@ -200,7 +211,58 @@ def collect(app_dir, out_path):
     return files
 
 
-def pack(app_dir, out_path):
+def digest_text(entries):
+    """The text a package signature covers: one line per entry but the signature."""
+    lines = ["t5app-digest 1"]
+    for name, data in sorted(entries):
+        if name != SIG_NAME:
+            lines.append(f"{hashlib.sha256(data).hexdigest()} {name}")
+    return ("\n".join(lines) + "\n").encode()
+
+
+def openssl(args, data=None):
+    try:
+        r = subprocess.run(["openssl"] + args, input=data, capture_output=True, check=False)
+    except FileNotFoundError:
+        raise PackError("signing needs the openssl command") from None
+    if r.returncode != 0:
+        raise PackError("openssl " + " ".join(args[:2]) + ": " + r.stderr.decode(errors="replace").strip())
+    return r.stdout
+
+
+def sign_entries(entries, key_path):
+    pub = openssl(["pkey", "-in", key_path, "-pubout", "-outform", "DER"])
+    with tempfile.NamedTemporaryFile(delete=False) as t:
+        t.write(digest_text(entries))
+        tname = t.name
+    try:
+        sig = openssl(["dgst", "-sha256", "-sign", key_path, tname])
+    finally:
+        os.remove(tname)
+    fp = hashlib.sha256(pub).hexdigest()
+    text = (f"t5sig 1\nkey {fp}\npub {base64.b64encode(pub).decode()}\n"
+            f"sig {base64.b64encode(sig).decode()}\n")
+    return text.encode(), fp
+
+
+def verify_entries(entries):
+    """Returns the signer's key fingerprint, or raises."""
+    sig_text = dict(entries).get(SIG_NAME)
+    fields = dict(l.split(" ", 1) for l in sig_text.decode().splitlines() if " " in l)
+    pub = base64.b64decode(fields["pub"])
+    sig = base64.b64decode(fields["sig"])
+    if hashlib.sha256(pub).hexdigest() != fields.get("key"):
+        raise PackError("signature: key fingerprint doesn't match the key")
+    with tempfile.TemporaryDirectory() as d:
+        kp, sp, dp = (os.path.join(d, n) for n in ("pub.der", "sig.der", "digest"))
+        for path, data in ((kp, pub), (sp, sig), (dp, digest_text(entries))):
+            with open(path, "wb") as f:
+                f.write(data)
+        openssl(["dgst", "-sha256", "-verify", kp, "-keyform", "DER", "-signature", sp, dp])
+    return fields["key"]
+
+
+def pack(app_dir, out_path, key_path=None):
     mpath = os.path.join(app_dir, "manifest.toml")
     if not os.path.isfile(mpath):
         raise PackError(f"{app_dir}: no manifest.toml")
@@ -221,15 +283,22 @@ def pack(app_dir, out_path):
         raise PackError(f"icon '{m['icon']}' not found in {app_dir}")
     tmp = out_path + ".tmp"
     total = len(raw)
+    entries = [("manifest.toml", raw)]
+    for rel, full in files:
+        with open(full, "rb") as f:
+            entries.append((rel, f.read()))
+    signer = None
+    if key_path:
+        sig, signer = sign_entries(entries, key_path)
+        entries.append((SIG_NAME, sig))
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        z.writestr(zipfile.ZipInfo("manifest.toml", date_time=(2026, 1, 1, 0, 0, 0)), raw,
-                   compress_type=zipfile.ZIP_DEFLATED)
-        for rel, full in files:
-            z.write(full, rel)
-            total += os.path.getsize(full)
+        for name, data in entries:
+            z.writestr(zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0)), data,
+                       compress_type=zipfile.ZIP_DEFLATED)
+            total += len(data) if name != "manifest.toml" else 0
     os.replace(tmp, out_path)
-    print(f"{out_path}: {m['id']} {m['version']} ({m['runtime']}), {len(files) + 1} files, "
-          f"{total} bytes -> {os.path.getsize(out_path)} bytes")
+    print(f"{out_path}: {m['id']} {m['version']} ({m['runtime']}), {len(entries)} files, "
+          f"{total} bytes -> {os.path.getsize(out_path)} bytes" + (f", signed by {signer[:16]}" if signer else ", unsigned"))
     return out_path
 
 
@@ -265,6 +334,14 @@ def inspect(path):
         if bad:
             problems.append(f"CRC error in {bad}")
         names = {i.filename for i in infos}
+        if SIG_NAME in names and not problems:
+            try:
+                fp = verify_entries([(i.filename, z.read(i.filename)) for i in infos])
+                print(f"  signed by {fp}")
+            except (PackError, KeyError, ValueError) as e:
+                problems.append(f"bad signature: {e}")
+        elif not problems:
+            print("  unsigned")
         if "manifest.toml" not in names:
             problems.append("no manifest.toml at the root")
         else:
@@ -297,13 +374,14 @@ def main(argv=None):
     ap.add_argument("app_dir", nargs="?", help="app directory containing manifest.toml")
     ap.add_argument("-o", "--output", help="output .t5app (default <id>-<version>.t5app)")
     ap.add_argument("--inspect", metavar="FILE", help="list and validate a .t5app")
+    ap.add_argument("--sign", metavar="KEY", help="sign with an ECDSA P-256 private key (PEM)")
     args = ap.parse_args(argv)
     try:
         if args.inspect:
             return 0 if inspect(args.inspect) else 1
         if not args.app_dir:
             ap.error("app_dir or --inspect is required")
-        pack(args.app_dir, args.output)
+        pack(args.app_dir, args.output, args.sign)
         return 0
     except PackError as e:
         print(f"t5pack: {e}", file=sys.stderr)

@@ -1,0 +1,10 @@
+id = "com.t5.example.rs485"
+name = "RS-485 Console"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+orientation = "any"
+
+[permissions]
+ports = ["rs485"]

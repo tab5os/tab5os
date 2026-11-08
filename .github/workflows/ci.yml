@@ -24,6 +24,8 @@ jobs:
         rev: [rev1, rev3]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true          # third_party/micropython (not recursive)
       - name: Check IDF version matches idf_version.txt
         shell: bash
         run: |
@@ -37,12 +39,34 @@ jobs:
         run: |
           . "$IDF_PATH/export.sh"
           idf.py -B build-${{ matrix.rev }} -D T5_REV=${{ matrix.rev }} build
+      - name: ABI layouts against the lock (docs/abi-stability.md)
+        if: matrix.rev == 'rev1'
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          python tools/abi/layout.py check firmware/build-${{ matrix.rev }}
       - name: Build the SDK test apps against this firmware
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
           cmake -S test/apps -B test/apps/build-${{ matrix.rev }} -G Ninja -DT5_FIRMWARE_BUILD=$PWD/firmware/build-${{ matrix.rev }}
           cmake --build test/apps/build-${{ matrix.rev }}
+      - name: Build the example apps against this firmware
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cmake -S apps/examples -B apps/examples/build-${{ matrix.rev }} -G Ninja -DT5_FIRMWARE_BUILD=$PWD/firmware/build-${{ matrix.rev }}
+          cmake --build apps/examples/build-${{ matrix.rev }}
+      - name: Build the recovery image
+        shell: bash
+        working-directory: recovery
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -B build set-target esp32p4
+          idf.py -B build build
+          size=$(stat -c %s build/tab5recovery.bin)
+          echo "tab5recovery.bin: $size bytes, room $((0x180000 - 0x1000))"
+          [ "$size" -le $((0x180000 - 0x1000)) ]
       - name: Build device test app
         shell: bash
         working-directory: test/device
@@ -68,7 +92,32 @@ jobs:
             firmware/build-${{ matrix.rev }}/partition_table/partition-table.bin
             firmware/build-${{ matrix.rev }}/ota_data_initial.bin
             firmware/build-${{ matrix.rev }}/flasher_args.json
+            recovery/build/tab5recovery.bin
             test/apps/build-${{ matrix.rev }}/*.t5app
+
+  analyze:
+    # docs/coding-standard.md, rule 10: GCC's static analyzer on the strict
+    # components (STRICT in firmware/CMakeLists.txt). Findings fail the build.
+    needs: idf-version
+    runs-on: ubuntu-latest
+    container: espressif/idf:${{ needs.idf-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Firmware with -fanalyzer
+        shell: bash
+        working-directory: firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -B build-analyze -D T5_REV=rev1 -D T5_ANALYZE=ON build
+      - name: Recovery with -fanalyzer
+        shell: bash
+        working-directory: recovery
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -B build-analyze set-target esp32p4
+          idf.py -B build-analyze -D T5_ANALYZE=ON build
 
   c6:
     needs: idf-version
@@ -109,10 +158,14 @@ jobs:
           fetch-depth: 0
       - name: UI density lint (plan 4.3)
         run: python3 tools/lint_px.py
-      - name: ABI check (plan 5.6)
+      - name: Coding standard lint (docs/coding-standard.md)
+        run: python3 tools/lint_std.py
+      - name: API reference is up to date (plan 8.7)
         run: |
-          base=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
-          python3 tools/abi/abi.py check sdk/abi/api_v1.sym ${base:+--base $base}
+          python3 tools/abi/apidoc.py /tmp/api-reference.md
+          diff -u docs/api-reference.md /tmp/api-reference.md
+      - name: ABI symbols against the lock (docs/abi-stability.md)
+        run: python3 tools/abi/abi.py check sdk/abi/api_v1.sym
 
   sim:
     runs-on: ubuntu-latest

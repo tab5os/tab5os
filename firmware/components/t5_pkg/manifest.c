@@ -20,6 +20,9 @@ static const struct {
     {T5_PERM_PORTS, "ports"},
     {T5_PERM_USB, "usb"},
     {T5_PERM_STORAGE, "storage"},
+    {T5_PERM_SHARED_READ, "shared_read"},
+    {T5_PERM_SHARED_WRITE, "shared_write"},
+    {T5_PERM_ALL_FILES, "all_files"},
     {T5_PERM_BACKGROUND_WAKE, "background_wake"},
     {T5_PERM_SYSTEM, "system"},
 };
@@ -271,7 +274,8 @@ static bool port_name_ok(const char *p)
 {
     if (!*p) return false;
     for (; *p; p++) {
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_')) return false;
+        /* '.': the M5-Bus ports are "mbus.i2c", "mbus.g2"... */
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_' || *p == '.')) return false;
     }
     return true;
 }

@@ -9,6 +9,9 @@
 #include "md/md_icons.h"
 #include "t5_ui/t5_ui.h"
 #include "app_priv.h"
+#include "t5_core/log.h"
+
+static const char *TAG = "t5.launcher";
 
 #define MAX_LIST 48
 
@@ -35,7 +38,7 @@ static void bind(md_list_row_t *r, uint32_t i, void *ud)
 static void clicked(uint32_t i, void *ud)
 {
     (void)ud;
-    if ((int)i < s_n) t5_apps_launch(s_apps[i].id);
+    if ((int)i < s_n) T5_LOG_ON_ERR(TAG, t5_apps_launch(s_apps[i].id));
 }
 
 static void reload(void)

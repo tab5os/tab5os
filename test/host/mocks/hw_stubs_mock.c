@@ -25,6 +25,9 @@ t5_err_t t5_storage_hw_sd_mount(void)
 }
 bool t5_storage_hw_sd_alive(void) { return mock_sd.alive; }
 void t5_storage_hw_sd_unmount(void) { mock_sd.unmounts++; }
+t5_err_t t5_storage_hw_sd_format(void) { return T5_OK; }
+t5_err_t t5_storage_hw_sd_raw_open(void **card) { *card = NULL; return T5_OK; }
+void t5_storage_hw_sd_raw_close(void *card) { (void)card; }
 t5_err_t t5_storage_hw_sd_info(t5_sd_info_t *out) { memset(out, 0, sizeof *out); strcpy(out->name, "MOCK"); return T5_OK; }
 
 /* display */

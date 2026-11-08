@@ -15,12 +15,14 @@
 #include "esp_ota_ops.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_psram.h"
 #include "esp_timer.h"
 #include "esp_mac.h"
 #include "esp_private/esp_clk.h"
 #include "hal/efuse_hal.h"
 #include "sdkconfig.h"
+#include "t5_core/os.h"
 #include "diag_priv.h"
 
 static const char *reset_reason_str(esp_reset_reason_t r)
@@ -101,6 +103,12 @@ static int cmd_sys(int argc, char **argv)
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    /* "int" includes LP RAM and TCM, which DMA (Wi-Fi, TLS, camera) can't use. */
+    printf("heap dma   free %u  largest %u  min-ever %u\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+           (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+    printf("heap lp    free %u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_RTCRAM));
     printf("heap psram free %u  largest %u\n",
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
@@ -122,6 +130,66 @@ static int cmd_tasks(int argc, char **argv)
     vTaskGetRunTimeStats(buf);
     fputs(buf, stdout);
     free(buf);
+    return 0;
+}
+
+/* Per-task stacks: how big, how much was ever left, and in which memory.
+ * What sizes the stacks and shows who holds internal RAM. */
+static const char *stack_mem(const void *p)
+{
+    if (esp_ptr_external_ram(p)) return "psram";
+    if (esp_ptr_in_rtc_dram_fast(p) || heap_caps_get_allocated_size((void *)p) == 0) return "lp";
+    return esp_ptr_dma_capable(p) ? "L2" : "lp";
+}
+
+static int cmd_stacks(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    UBaseType_t cap = uxTaskGetNumberOfTasks() + 4;
+    TaskStatus_t *st = heap_caps_malloc(cap * sizeof *st, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!st) return 1;
+    UBaseType_t n = uxTaskGetSystemState(st, cap, NULL);
+    size_t l2 = 0, lp = 0, psram = 0;
+    printf("%-16s %-5s %4s %7s %7s %5s\n", "task", "mem", "prio", "stack", "unused", "used%");
+    for (UBaseType_t i = 0; i < n; i++) {
+        const void *base = st[i].pxStackBase;
+        if (base) base = (const uint8_t *)base - t5_task_margin_of((t5_task_t)st[i].xHandle);
+        size_t size = base ? heap_caps_get_allocated_size((void *)base) : 0;
+        size_t unused = st[i].usStackHighWaterMark;
+        const char *m = base ? stack_mem(base) : "?";
+        if (!strcmp(m, "L2")) l2 += size;
+        else if (!strcmp(m, "lp")) lp += size;
+        else if (!strcmp(m, "psram")) psram += size;
+        printf("%-16s %-5s %4u %7u %7u %4u%%\n", st[i].pcTaskName, m, (unsigned)st[i].uxCurrentPriority, (unsigned)size,
+               (unsigned)unused, size ? (unsigned)(100 - 100 * unused / size) : 0);
+    }
+    printf("%u tasks, stacks: L2 %u  lp %u  psram %u\n", (unsigned)n, (unsigned)l2, (unsigned)lp, (unsigned)psram);
+    heap_caps_free(st);
+    return 0;
+}
+
+/* l2eat KB | 0: hold internal RAM to test the low-memory path (isolate.h). */
+#define EAT_MAX 256
+static void *s_eat[EAT_MAX];
+
+static int cmd_l2eat(int argc, char **argv)
+{
+    uint32_t kb = 0;
+    if (argc != 2 || !diag_parse_u32(argv[1], 0, 1024, &kb)) {
+        printf("usage: l2eat KB (0 frees)\n");
+        return 1;
+    }
+    for (int i = 0; i < EAT_MAX; i++) {
+        heap_caps_free(s_eat[i]);
+        s_eat[i] = NULL;
+    }
+    uint32_t got = 0;
+    for (int i = 0; i < EAT_MAX && got < kb; i++) {
+        s_eat[i] = heap_caps_malloc(4096, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+        if (!s_eat[i]) break;
+        got += 4;
+    }
+    printf("holding %u KB; L2 free %u\n", (unsigned)got, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
     return 0;
 }
 
@@ -201,6 +269,8 @@ void diag_register_sys(void)
     const esp_console_cmd_t cmds[] = {
         { .command = "sys", .help = "Chip, clocks, memory, partition, reset reason", .func = cmd_sys },
         { .command = "tasks", .help = "FreeRTOS task list and CPU use", .func = cmd_tasks },
+        { .command = "l2eat", .help = "l2eat KB: hold internal RAM (low-memory test), 0 frees", .hint = "KB", .func = cmd_l2eat },
+        { .command = "stacks", .help = "Each task's stack: size, memory, high-water mark", .func = cmd_stacks },
         { .command = "psram", .help = "psram [MB]: pattern test and bandwidth", .hint = "[MB]", .func = cmd_psram },
         { .command = "reboot", .help = "Software reset", .func = cmd_reboot },
     };

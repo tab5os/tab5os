@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "ina226.c" "gauge.c" "policy.c" "battery.c" "battery_hw.c"
+    SRCS "ina226.c" "gauge.c" "policy.c" "history.c" "battery.c" "battery_hw.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core

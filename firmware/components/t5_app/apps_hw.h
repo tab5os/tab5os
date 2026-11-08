@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "t5_app/app.h"
 #include "t5_app/crashguard.h"
+#include "t5_app/tracker.h"
 #include "t5_core/err.h"
 
 typedef struct t5_app t5_app_t;
@@ -25,7 +26,30 @@ bool apps_hw_coredump_save(const char *path);
  * table with app's permissions; then call its entry for the descriptor. */
 t5_err_t apps_hw_elf_load(t5_app_t *app, const char *path, void **handle, const t5_app_desc_t **desc);
 void apps_hw_elf_unload(void *handle);
+/* The loaded app's code (.text), for telling app faults from OS ones. */
+void apps_hw_elf_text(void *handle, uintptr_t *lo, uintptr_t *hi);
 
+/* The allocator under app heaps (tracker.h): placement by isolate.h. */
+void apps_hw_heap_install(void);
+size_t apps_hw_free_psram(void);
+size_t apps_hw_free_l2(void);
+void apps_hw_reserve_take(void);
+void apps_hw_reserve_release(void);
+/* Does p lie in this app's heap (live block or not)? */
+bool apps_hw_heap_contains(const t5_tracker_t *t, const void *p);
+size_t apps_hw_heap_chunks_bytes(const t5_tracker_t *t);
+
+/* Run time of a task so far (us), for the CPU hog check. */
+uint64_t apps_hw_task_runtime_us(void *task);
+void apps_hw_task_set_prio(void *task, int prio);
+void apps_hw_task_pause(void *task, bool pause);
+
+/* app_held(task): how many of the app's own mutexes task holds, or -1.
+ * park: suspend task where it holds no OS mutex; false (and left running)
+ * if it holds one now. delete: stop it where it is and delete it (the exit
+ * parks every task first, lifecycle.c quiesce). */
+bool apps_hw_task_park(void *task, int (*app_held)(void *task));
 void apps_hw_task_delete(void *task);
 void apps_hw_restart(void);
+void apps_hw_periodic(void (*fn)(void), uint32_t period_ms);
 size_t apps_hw_free_heap(void);

@@ -20,8 +20,12 @@
 #include <unistd.h>
 #include "lvgl.h"
 #include "md/md.h"
+#include "md/md_icons.h"
 #include "sim.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_shell/shell.h"
+#include "shell_sys.h"
+#include "shell_priv.h"   /* launcher_drawer_open */
 
 /* ---- clock: real for the window, virtual (deterministic) for screenshots -- */
 static bool s_virtual;
@@ -58,20 +62,77 @@ static void run_virtual(uint32_t ms)
     }
 }
 
+typedef enum { SCENE_GATE, SCENE_GATE_DIALOG, SCENE_LAUNCHER, SCENE_QS, SCENE_WIDGETS, SCENE_DRAWER, SCENE_MENU, SCENE_APPS } scene_t;
+
 typedef struct {
     const char *name;
     t5_rotation_t rot;
-    bool dialog;
+    scene_t scene;
 } shot_t;
+
+/* ---- the stand-in app page: every Phase 6.1 widget ------------------------- */
+void sa_sim_fill(lv_obj_t *body)
+{
+    md_section_create(body, "Controls");
+    lv_obj_t *r = md_row_create(body, MD_ICON_WIFI, "Switch", "With a secondary line");
+    md_row_switch(r, true);
+    r = md_row_create(body, MD_ICON_BLUETOOTH, "Switch off", NULL);
+    md_row_switch(r, false);
+    lv_obj_t *box = lv_obj_create(body);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(box, T5_DP(16), 0);
+    lv_obj_set_style_pad_gap(box, T5_DP(12), 0);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_t *s = md_slider_create(box, 0, 100, 40);
+    lv_obj_set_width(s, LV_PCT(45));
+    md_checkbox_create(box, "Checkbox", true);
+    md_checkbox_create(box, "Unchecked", false);
+    lv_obj_t *tf = md_textfield_create(box, "Text field", false);
+    lv_obj_set_width(tf, LV_PCT(45));
+    md_textfield_set_text(tf, "Hello");
+    lv_obj_t *tf2 = md_textfield_create(box, "Empty field", false);
+    lv_obj_set_width(tf2, LV_PCT(45));
+    md_textfield_set_helper(tf2, "Helper text", false);
+    md_section_create(body, "Chips");
+    lv_obj_t *c = lv_obj_create(body);
+    lv_obj_remove_style_all(c);
+    lv_obj_set_size(c, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(c, T5_DP(16), 0);
+    lv_obj_set_style_pad_gap(c, T5_DP(8), 0);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_ROW_WRAP);
+    md_chip_set_selected(md_chip_create(c, "Filter on", NULL, MD_CHIP_FILTER), true);
+    md_chip_create(c, "Filter off", NULL, MD_CHIP_FILTER);
+    md_chip_set_selected(md_chip_create(c, "Choice", MD_ICON_PALETTE, MD_CHIP_CHOICE), true);
+    md_chip_create(c, "Action", MD_ICON_SHARE, MD_CHIP_ACTION);
+    lv_obj_t *br = lv_obj_create(body);
+    lv_obj_remove_style_all(br);
+    lv_obj_set_size(br, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(br, T5_DP(16), 0);
+    lv_obj_set_style_pad_gap(br, T5_DP(8), 0);
+    lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
+    md_button_create(br, "Contained", MD_BUTTON_CONTAINED);
+    md_button_create(br, "Outlined", MD_BUTTON_OUTLINED);
+    md_button_create(br, "Text", MD_BUTTON_TEXT);
+}
 
 static int shots(const char *dir, const char *check, const char *update)
 {
     static const shot_t list[] = {
-        { "gate_land", T5_ROT_90, false },
-        { "gate_land_dialog", T5_ROT_90, true },
-        { "gate_port", T5_ROT_0, false },
-        { "gate_port_dialog", T5_ROT_0, true },
+        { "gate_land", T5_ROT_90, SCENE_GATE },
+        { "gate_land_dialog", T5_ROT_90, SCENE_GATE_DIALOG },
+        { "gate_port", T5_ROT_0, SCENE_GATE },
+        { "gate_port_dialog", T5_ROT_0, SCENE_GATE_DIALOG },
+        { "shell_launcher_land", T5_ROT_90, SCENE_LAUNCHER },
+        { "shell_launcher_port", T5_ROT_0, SCENE_LAUNCHER },
+        { "shell_qs_land", T5_ROT_90, SCENE_QS },
+        { "shell_widgets_land", T5_ROT_90, SCENE_WIDGETS },
+        { "shell_drawer_land", T5_ROT_90, SCENE_DRAWER },
+        { "shell_menu_port", T5_ROT_0, SCENE_MENU },
+        { "shell_apps_land", T5_ROT_90, SCENE_APPS },
+        { "shell_apps_port", T5_ROT_0, SCENE_APPS },
     };
+    sim_fixed_time = true;
     s_virtual = true;
     int fails = 0;
     lv_init();
@@ -87,14 +148,44 @@ static int shots(const char *dir, const char *check, const char *update)
         lv_display_set_default(d);
         if (i == 0) sim_ui_attach(d, s->rot);
         md_init(d);
-        lv_obj_t *gate = md_gate_create();
-        lv_screen_load(gate);
-        run_virtual(500);
-        if (s->dialog) {
-            md_gate_run(gate, MD_GATE_DIALOG);   /* opens it on the first tick */
-            run_virtual(450);
-            md_gate_run(gate, MD_GATE_IDLE);
-            run_virtual(400);
+        if (s->scene == SCENE_GATE || s->scene == SCENE_GATE_DIALOG) {
+            lv_obj_t *gate = md_gate_create();
+            lv_screen_load(gate);
+            run_virtual(500);
+            if (s->scene == SCENE_GATE_DIALOG) {
+                md_gate_run(gate, MD_GATE_DIALOG);   /* opens it on the first tick */
+                run_virtual(450);
+                md_gate_run(gate, MD_GATE_IDLE);
+                run_virtual(400);
+            }
+        } else {
+            static lv_obj_t *home;
+            home = shell_home_screen();
+            lv_screen_load(home);
+            run_virtual(500);
+            if (s->scene == SCENE_QS) t5_shell_quick_settings(true);
+            if (s->scene == SCENE_WIDGETS) shell_sys_launch("com.t5.widgets", NULL);
+            if (s->scene == SCENE_APPS) {
+                shell_note_launch("com.t5.camera");
+                shell_note_launch("com.t5.files");
+                launcher_tick();
+                launcher_drawer_open();
+            }
+            if (s->scene == SCENE_MENU) {
+                static const char *items[] = { "Refresh", "Format this drive", "Delete this folder" };
+                lv_obj_t *anchor = lv_obj_create(lv_layer_top());
+                lv_obj_remove_style_all(anchor);
+                lv_obj_set_size(anchor, T5_DP(48), T5_DP(48));
+                lv_obj_align(anchor, LV_ALIGN_TOP_RIGHT, 0, T5_DP(24));
+                md_menu_show(anchor, items, 3, NULL, NULL);
+            }
+            if (s->scene == SCENE_DRAWER) {
+                lv_obj_t *d = md_drawer_open("Tab5 OS", "Material-inspired");
+                md_drawer_add_item(d, MD_ICON_HOME, "Home", true, NULL, NULL);
+                md_drawer_add_item(d, MD_ICON_SETTINGS, "Settings", false, NULL, NULL);
+                md_drawer_add_item(d, MD_ICON_FOLDER, "Files", false, NULL, NULL);
+            }
+            run_virtual(600);
         }
         lv_obj_invalidate(lv_screen_active());
         run_virtual(100);
@@ -119,6 +210,7 @@ static int shots(const char *dir, const char *check, const char *update)
             }
             if (f) fclose(f);
         }
+        if (s->scene >= SCENE_LAUNCHER) shell_sim_reset();
         lv_display_delete(d);
         free(s_fb);
     }
@@ -168,6 +260,7 @@ int main(int argc, char **argv)
 {
     t5_rotation_t rot = T5_ROT_90;
     const char *gate = NULL, *shot_dir = NULL, *check = NULL, *update = NULL;
+    bool shell = false;
     int seconds = 10;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rot") && i + 1 < argc) rot = parse_rot(argv[++i]);
@@ -176,8 +269,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--shots") && i + 1 < argc) shot_dir = argv[++i];
         else if (!strcmp(argv[i], "--check") && i + 1 < argc) check = argv[++i];
         else if (!strcmp(argv[i], "--update") && i + 1 < argc) update = argv[++i];
+        else if (!strcmp(argv[i], "--shell")) shell = true;
         else {
-            fprintf(stderr, "usage: t5sim [--rot deg] [--gate scroll|transition|dialog [--seconds N]]\n"
+            fprintf(stderr, "usage: t5sim [--rot deg] [--shell | --gate scroll|transition|dialog [--seconds N]]\n"
                             "       t5sim --shots DIR [--check DIR | --update DIR]\n");
             return 2;
         }
@@ -193,6 +287,16 @@ int main(int argc, char **argv)
     lv_sdl_mouse_create();
     sim_ui_attach(d, rot);
     md_init(d);
+    if (shell) {
+        lv_screen_load(shell_home_screen());
+        lv_obj_t *b = md_button_create(lv_layer_sys(), "Services", MD_BUTTON_OUTLINED);
+        lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, -T5_DP(8), -T5_DP(8));
+        lv_obj_add_event_cb(b, services, LV_EVENT_CLICKED, NULL);
+        for (;;) {
+            uint32_t next = lv_timer_handler();
+            usleep((next > 5 ? 5 : next) * 1000);
+        }
+    }
     s_gate = md_gate_create();
     lv_screen_load(s_gate);
     toolbar();

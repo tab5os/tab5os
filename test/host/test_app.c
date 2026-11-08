@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Phase 5 app runtime logic: resource tracker, crash guard, ELF imports,
- * ABI resolution and permission stubs.
+ * ABI resolution and permission stubs; app isolation decisions.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,7 +12,10 @@
 #include "t5_app/abi.h"
 #include "t5_app/crashguard.h"
 #include "t5_app/elfsym.h"
+#include "t5_app/isolate.h"
 #include "t5_app/tracker.h"
+#include "t5_app/fspolicy.h"
+#include "t5_pkg/manifest.h"
 #include "t5_pkg/manifest.h"
 
 /* A small ABI table standing in for the generated one (sorted by name). */
@@ -114,12 +117,12 @@ static void test_tracker_table_full(void)
 }
 
 static int s_allocs, s_frees;
-static void *count_malloc(size_t n) { s_allocs++; return malloc(n); }
-static void count_free(void *p) { s_frees++; free(p); }
+static void *count_malloc(t5_tracker_t *t, size_t n) { (void)t; s_allocs++; return malloc(n); }
+static void count_free(t5_tracker_t *t, void *p) { (void)t; s_frees++; free(p); }
 
 static void test_tracker_heap(void)
 {
-    t5_tracker_alloc_t a = { count_malloc, count_free };
+    t5_tracker_alloc_t a = { count_malloc, count_free, NULL };
     t5_tracker_set_allocator(&a);
     s_allocs = s_frees = 0;
     static t5_tracker_t t, other;
@@ -305,8 +308,221 @@ static void test_abi_resolve_and_stubs(void)
     TEST_ASSERT_NULL(((void *(*)(void))t5_abi_stub(T5_ABI_RET_PTR))());
     TEST_ASSERT_FALSE(((bool (*)(void))t5_abi_stub(T5_ABI_RET_BOOL))());
     TEST_ASSERT_EQUAL(0, t5_abi_resolve("esp_restart", ~0u, &denied));
-    TEST_ASSERT_TRUE(t5_abi_is_runtime_helper("__divdi3"));
+    /* libgcc helpers are published in api_v1.sym like any symbol: nothing
+     * is let through by name, so install and load agree. */
+    TEST_ASSERT_FALSE(t5_abi_is_runtime_helper("__divdi3"));
     TEST_ASSERT_FALSE(t5_abi_is_runtime_helper("_start"));
+}
+
+/* ---- isolation (isolate.h) ---------------------------------------------------- */
+#define TXT_LO 0x48100000u
+#define TXT_HI 0x48104000u
+
+static t5_iso_fault_t sys_fault(uint32_t pc, uint32_t ra)
+{
+    return (t5_iso_fault_t){ .text_lo = TXT_LO, .text_hi = TXT_HI, .has_point = true, .point_ok = true,
+                             .unwind_safe = true, .pc = pc, .ra = ra };
+}
+
+static void test_iso_blame_pc_and_ra(void)
+{
+    t5_iso_fault_t f = sys_fault(TXT_LO + 0x10, 0x40000000u);
+    TEST_ASSERT_EQUAL(T5_ISO_UNWIND, t5_iso_blame(&f));             /* store through NULL in app code */
+    f = sys_fault(0x4fc00000u, TXT_LO + 0x200);
+    TEST_ASSERT_EQUAL(T5_ISO_UNWIND, t5_iso_blame(&f));             /* strlen(NULL) called by the app */
+    f = sys_fault(TXT_HI, 0x40000000u);
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* one past the end isn't the app */
+    f = sys_fault(0x40001000u, 0x40002000u);
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* OS fault, app not on the stack */
+}
+
+static void test_iso_blame_stack_scan(void)
+{
+    uint32_t stack[6] = { 0, 0x3ff00000u, 0x40001234u, 0, 0, 0 };
+    t5_iso_fault_t f = sys_fault(0x40001000u, 0x40002000u);
+    f.stack = stack;
+    f.words = 6;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));
+    stack[4] = TXT_LO + 0x88;                                       /* app frame further up */
+    TEST_ASSERT_EQUAL(T5_ISO_UNWIND, t5_iso_blame(&f));
+    f.words = 4;                                                    /* above the recovery point: not ours */
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));
+}
+
+static void test_iso_blame_needs_point_and_safety(void)
+{
+    t5_iso_fault_t f = sys_fault(TXT_LO + 4, 0);
+    f.has_point = false;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* system task, nowhere to go back to */
+    f = sys_fault(TXT_LO + 4, 0);
+    f.point_ok = false;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* point belongs to another app */
+    f = sys_fault(TXT_LO + 4, 0);
+    f.unwind_safe = false;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* UI task mid-render */
+    f = sys_fault(TXT_LO + 4, 0);
+    f.text_lo = f.text_hi = 0;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* built-in app: OS code */
+}
+
+static void test_iso_blame_guess(void)
+{
+    t5_iso_fault_t f = sys_fault(0x40001000u, 0x40002000u);
+    f.working_for_app = f.data_fault = f.guess_ok = true;
+    TEST_ASSERT_EQUAL(T5_ISO_UNWIND_GUESS, t5_iso_blame(&f));       /* tail call into LVGL with a bad object */
+    f.guess_ok = false;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* a second one soon: OS bug, panic */
+    f.guess_ok = true;
+    f.data_fault = false;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* wild jump: not guessed */
+    f.data_fault = true;
+    f.working_for_app = false;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* system UI between apps */
+    f.working_for_app = true;
+    f.unwind_safe = false;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));               /* mid-render */
+}
+
+static void test_iso_blame_apps_task(void)
+{
+    t5_iso_fault_t f = { .text_lo = TXT_LO, .text_hi = TXT_HI, .apps_task = true, .pc = 0x40001000u };
+    TEST_ASSERT_EQUAL(T5_ISO_END_TASK, t5_iso_blame(&f));          /* anywhere, even in the OS */
+    f.text_lo = f.text_hi = 0;
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(&f));
+    TEST_ASSERT_EQUAL(T5_ISO_NONE, t5_iso_blame(NULL));
+}
+
+static t5_fs_verdict_t fs(const char *p, bool w, uint32_t *need)
+{
+    static t5_fs_pick_t picks[1] = { { "/sd/Other/song.mp3", false } };
+    t5_fs_scope_t s = { "/data/appdata/com.a", "/sd/apps/com.a", picks, 1 };
+    return t5_fs_check(&s, p, w, need);
+}
+
+static void test_fs_scope(void)
+{
+    uint32_t n = 0;
+    TEST_ASSERT_EQUAL(T5_FS_ALLOW, fs("/data/appdata/com.a/x", true, &n));
+    TEST_ASSERT_EQUAL(T5_FS_ALLOW, fs("/DATA/AppData/com.a/x", true, &n));         /* FAT ignores case */
+    TEST_ASSERT_EQUAL(T5_FS_ALLOW, fs("/sd/apps/com.a/app.elf", false, &n));
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/sd/apps/com.a/app.elf", true, &n));         /* install dir is read only */
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/appdata/com.ab/x", false, &n));        /* a neighbour, same prefix */
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/appdata/com.b/x", false, &n));
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/sys/crashes.bin", false, &n));
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/SD/APPS/com.b/x", false, &n));
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/other", false, &n));
+    TEST_ASSERT_EQUAL(T5_FS_ALLOW, fs("/sd/Other/song.mp3", false, &n));           /* picked */
+    TEST_ASSERT_EQUAL(T5_FS_NEEDS_PERM, fs("/sd/Other/song.mp3", true, &n));       /* picked read only */
+    TEST_ASSERT_EQUAL(T5_PERM_ALL_FILES, n);
+    TEST_ASSERT_EQUAL(T5_FS_NEEDS_PERM, fs("/sd/Music/a.mp3", false, &n));
+    TEST_ASSERT_EQUAL(T5_PERM_SHARED_READ | T5_PERM_SHARED_WRITE | T5_PERM_ALL_FILES, n);
+    TEST_ASSERT_EQUAL(T5_FS_NEEDS_PERM, fs("/sd/Music/a.mp3", true, &n));
+    TEST_ASSERT_EQUAL(T5_PERM_SHARED_WRITE | T5_PERM_ALL_FILES, n);
+    TEST_ASSERT_EQUAL(T5_FS_NEEDS_PERM, fs("/sd/random", false, &n));
+    TEST_ASSERT_EQUAL(T5_PERM_ALL_FILES, n);
+}
+
+static void test_fs_normalise(void)
+{
+    char o[64];
+    TEST_ASSERT_TRUE(t5_fs_normalise("//sd//./a/b/", o, sizeof o));
+    TEST_ASSERT_EQUAL_STRING("/sd/a/b", o);
+    TEST_ASSERT_FALSE(t5_fs_normalise("sd/a", o, sizeof o));                       /* relative */
+    TEST_ASSERT_FALSE(t5_fs_normalise("/sd/a/../../data/sys", o, sizeof o));
+    TEST_ASSERT_FALSE(t5_fs_normalise("/sd/apps./x", o, sizeof o));                /* FAT drops the dot */
+    TEST_ASSERT_FALSE(t5_fs_normalise("/sd/apps /x", o, sizeof o));
+    TEST_ASSERT_FALSE(t5_fs_normalise("/sd/APPDAT~1/x", o, sizeof o));             /* 8.3 alias */
+    char lng[100];
+    memset(lng, 'a', sizeof lng - 1);
+    lng[0] = '/';
+    lng[99] = 0;
+    TEST_ASSERT_FALSE(t5_fs_normalise(lng, o, sizeof o));
+    TEST_ASSERT_TRUE(t5_fs_quota_ok(T5_FS_QUOTA_BYTES - 10, 10));
+    TEST_ASSERT_FALSE(t5_fs_quota_ok(T5_FS_QUOTA_BYTES - 10, 11));
+    TEST_ASSERT_TRUE(t5_fs_ext_matches("a.JPG", "png,jpg"));
+    TEST_ASSERT_FALSE(t5_fs_ext_matches("a.jpeg", "png,jpg"));
+    TEST_ASSERT_FALSE(t5_fs_ext_matches("noext", "png"));
+    TEST_ASSERT_TRUE(t5_fs_ext_matches("noext", NULL));
+}
+
+static void test_iso_heap_room(void)
+{
+    const size_t MB = 1024 * 1024;
+    TEST_ASSERT_TRUE(t5_iso_heap_room(MB, T5_ISO_PSRAM_RESERVE + MB));
+    TEST_ASSERT_FALSE(t5_iso_heap_room(MB + 1, T5_ISO_PSRAM_RESERVE + MB));
+    TEST_ASSERT_FALSE(t5_iso_heap_room(1024, MB));                  /* under the reserve */
+    TEST_ASSERT_FALSE(t5_iso_heap_room((size_t)-1, 20 * MB));       /* no wrap */
+    TEST_ASSERT_EQUAL(T5_ISO_ARENA_FIRST, t5_iso_arena_next(0));
+    TEST_ASSERT_EQUAL(T5_ISO_ARENA_FIRST * 2, t5_iso_arena_next(T5_ISO_ARENA_FIRST));
+    TEST_ASSERT_EQUAL(T5_ISO_ARENA_MAX, t5_iso_arena_next(T5_ISO_ARENA_MAX));
+}
+
+static void test_iso_l2_reserve(void)
+{
+    t5_iso_l2_t s = {0};
+    TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, 80 * 1024, 0));
+    TEST_ASSERT_EQUAL(T5_ISO_L2_RELEASE, t5_iso_l2_check(&s, 10 * 1024, 100));          /* reserve goes first */
+    /* The reserve is back in the heap: 26 KB free is 10 KB really. */
+    TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, 26 * 1024, 600));
+    TEST_ASSERT_EQUAL(T5_ISO_L2_CLOSE_APP, t5_iso_l2_check(&s, 26 * 1024, 100 + T5_ISO_LOW_FOR_MS));
+    TEST_ASSERT_EQUAL(T5_ISO_L2_RETAKE, t5_iso_l2_check(&s, T5_ISO_L2_PLENTY, 5000));
+    TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, T5_ISO_L2_PLENTY, 5100));
+    /* Recovered in time: no close. */
+    TEST_ASSERT_EQUAL(T5_ISO_L2_RELEASE, t5_iso_l2_check(&s, 10 * 1024, 6000));
+    TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, 40 * 1024, 6500));
+    TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, 40 * 1024, 9000));
+}
+
+static bool s_dropped;
+static void *s_only_block;
+static bool drop_everything(t5_tracker_t *t) { (void)t; s_dropped = true; return true; }
+static void *keep_malloc(t5_tracker_t *t, size_t n) { (void)t; return s_only_block = malloc(n); }
+
+/* The blocks are gone without their headers being read: the app may have
+ * overwritten them. */
+static void test_tracker_drop_all(void)
+{
+    static t5_tracker_t t;
+    t5_tracker_init(&t, 0);
+    t5_tracker_alloc_t a = { keep_malloc, count_free, drop_everything };
+    t5_tracker_set_allocator(&a);
+    s_dropped = false;
+    s_frees = 0;
+    uint8_t *p = t5_tracker_malloc(&t, 64);
+    TEST_ASSERT_NOT_NULL(p);
+    t5_tracker_free_all(&t);
+    TEST_ASSERT_TRUE(s_dropped);
+    TEST_ASSERT_EQUAL(0, s_frees);
+    TEST_ASSERT_EQUAL(0, t.heap_bytes);
+    TEST_ASSERT_NULL(t.blocks);
+    t5_tracker_set_allocator(NULL);
+    free(s_only_block);
+}
+
+static void test_iso_mem_check(void)
+{
+    t5_iso_mem_t m = { 0 };
+    const size_t low = T5_ISO_PSRAM_CRITICAL - 1;
+    TEST_ASSERT_FALSE(t5_iso_mem_check(&m, 8u << 20, 0));
+    TEST_ASSERT_FALSE(t5_iso_mem_check(&m, low, 1000));
+    TEST_ASSERT_FALSE(t5_iso_mem_check(&m, low, 1000 + T5_ISO_LOW_FOR_MS - 1));
+    TEST_ASSERT_TRUE(t5_iso_mem_check(&m, low, 1000 + T5_ISO_LOW_FOR_MS));
+    TEST_ASSERT_FALSE(t5_iso_mem_check(&m, low, 1000 + T5_ISO_LOW_FOR_MS + 10));    /* starts over */
+    TEST_ASSERT_FALSE(t5_iso_mem_check(&m, 8u << 20, 5000));                         /* a blip resets */
+    TEST_ASSERT_FALSE(t5_iso_mem_check(&m, low, 5100));
+    TEST_ASSERT_FALSE(t5_iso_mem_check(&m, low, 5100 + T5_ISO_LOW_FOR_MS - 1));
+}
+
+static void test_iso_hog(void)
+{
+    uint8_t st = 0;
+    TEST_ASSERT_FALSE(t5_iso_hog(&st, 950000, 1000000));
+    TEST_ASSERT_FALSE(t5_iso_hog(&st, 950000, 1000000));
+    TEST_ASSERT_FALSE(t5_iso_hog(&st, 500000, 1000000));            /* breathed: start over */
+    TEST_ASSERT_FALSE(t5_iso_hog(&st, 1000000, 1000000));
+    TEST_ASSERT_FALSE(t5_iso_hog(&st, 1000000, 1000000));
+    TEST_ASSERT_TRUE(t5_iso_hog(&st, 1000000, 1000000));
+    TEST_ASSERT_FALSE(t5_iso_hog(&st, 0, 0));
 }
 
 int main(void)
@@ -323,5 +539,17 @@ int main(void)
     RUN_TEST(test_elfsym_real_app);
     RUN_TEST(test_elfsym_rejects_garbage);
     RUN_TEST(test_abi_resolve_and_stubs);
+    RUN_TEST(test_iso_blame_pc_and_ra);
+    RUN_TEST(test_iso_blame_stack_scan);
+    RUN_TEST(test_iso_blame_needs_point_and_safety);
+    RUN_TEST(test_iso_blame_guess);
+    RUN_TEST(test_iso_blame_apps_task);
+    RUN_TEST(test_iso_heap_room);
+    RUN_TEST(test_fs_scope);
+    RUN_TEST(test_fs_normalise);
+    RUN_TEST(test_iso_l2_reserve);
+    RUN_TEST(test_tracker_drop_all);
+    RUN_TEST(test_iso_mem_check);
+    RUN_TEST(test_iso_hog);
     return UNITY_END();
 }

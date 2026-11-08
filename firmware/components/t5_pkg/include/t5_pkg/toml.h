@@ -55,7 +55,7 @@ typedef struct {
 
 /* Parse text (need not be NUL-terminated). On failure err holds
  * "line N: reason" and doc is left empty. Always call t5_toml_free(). */
-t5_err_t t5_toml_parse(const char *text, size_t len, t5_toml_doc_t *doc, char *err, size_t errlen);
+T5_MUST_CHECK t5_err_t t5_toml_parse(const char *text, size_t len, t5_toml_doc_t *doc, char *err, size_t errlen);
 void t5_toml_free(t5_toml_doc_t *doc);
 
 const t5_toml_value_t *t5_toml_get(const t5_toml_doc_t *doc, const char *path);

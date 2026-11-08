@@ -1,0 +1,29 @@
+# Modules Python code may import (plan 8.2). tools/py/check_modules.py fails
+# the build if the firmware registers any other. Adding one here is a
+# containment decision: it must not reach memory, registers or peripherals
+# except through t5's permission-checked calls.
+__main__
+builtins
+micropython
+sys
+gc
+io
+os            # fs.c: sandboxed to the app's folders
+t5            # mod_*.c: permission-checked access to everything else
+array
+binascii
+collections
+errno
+hashlib
+heapq
+json
+math
+platform
+random
+re
+struct
+time
+select        # extmod's poll: waits on stream objects (t5 sockets), nothing else
+socket        # mod_socket.c: the standard API on permission-checked t5 sockets (check_modules.py checks it's ours)
+_asyncio      # asyncio's C core
+deflate       # gzip/zlib decompression of streams

@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "t5_core/log.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 #include "t5_ports/profiles.h"
 
 static const char *TAG = "t5.profiles";
@@ -40,7 +45,8 @@ static const t5_profile_t s_builtin[] = {
 #define N_BUILTIN ((int)(sizeof s_builtin / sizeof s_builtin[0]))
 #define N_LOADED_MAX (T5_PROFILE_MAX - N_BUILTIN)
 
-static t5_profile_t s_loaded[N_LOADED_MAX];
+/* PSRAM: read when a port is plugged in, not on any hot path. */
+EXT_RAM_BSS_ATTR static t5_profile_t s_loaded[N_LOADED_MAX];
 static int s_nloaded;
 
 /* ---- JSON reader ---------------------------------------------------------- */
@@ -355,7 +361,7 @@ int t5_profiles_load_dir(const char *dir)
             continue;
         }
         char path[160];
-        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (snprintf(path, sizeof path, "%.100s/%.58s", dir, e->d_name) >= (int)sizeof path) continue;
         int n = load_file(path);
         if (n > 0) {
             added += n;
@@ -380,7 +386,7 @@ int t5_profiles_scan(const char *port, uint8_t *found, int max)
         return err;
     }
     int n = t5_port_i2c_scan(p, found, max > 0 ? (size_t)max : 0);
-    t5_port_close(p);
+    T5_IGNORE(t5_port_close(p));   /* we opened it just above */
     return n;
 }
 
@@ -413,7 +419,7 @@ int t5_profiles_suggest(const char *port, const uint8_t *found, int nfound, t5_p
     }
     for (int i = 0; i < t5_profiles_count() && n < T5_PROFILE_MAX; i++) {
         const t5_profile_t *p = t5_profiles_get(i);
-        if (p->bus != T5_MODE_I2C || !p->naddrs) continue;
+        if (!p || p->bus != T5_MODE_I2C || !p->naddrs) continue;
         int m = 0;
         for (int a = 0; a < p->naddrs; a++) {
             for (int f = 0; f < nfound; f++) {

@@ -84,3 +84,8 @@ t5_err_t t5_i2c_hw_recover(void)
     /* Controller FSM reset, then hardware bus clear: 9 SCL pulses and a STOP. */
     return map_err(i2c_master_bus_reset(s_bus));
 }
+
+void *t5_i2c_hw_bus(void)
+{
+    return s_bus;
+}

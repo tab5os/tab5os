@@ -28,11 +28,15 @@ target_compile_options(lvgl PRIVATE -w)
 
 set(FW ${CMAKE_CURRENT_LIST_DIR}/../firmware/components)
 file(GLOB MD_ASSETS ${FW}/md/assets/fonts/*.c ${FW}/md/assets/shadows/*.c)
+set(SHELL ${FW}/t5_shell)
 add_executable(t5sim
-    main.c sim_ui.c sim_services.c png.c
+    main.c sim_ui.c sim_services.c sim_shell_sys.c png.c
+    ${SHELL}/shell.c ${SHELL}/statusbar.c ${SHELL}/qs.c ${SHELL}/keyboard.c ${SHELL}/gesture.c ${SHELL}/launcher.c
     ${FW}/md/md_tokens.c ${FW}/md/md_theme.c ${FW}/md/md_text.c ${FW}/md/md_ripple.c
-    ${FW}/md/md_shadow.c ${FW}/md/md_widgets.c ${FW}/md/md_gate.c ${MD_ASSETS}
+    ${FW}/md/md_shadow.c ${FW}/md/md_widgets.c ${FW}/md/md_controls.c ${FW}/md/md_gate.c ${FW}/md/md_freeze.c ${FW}/md/md_zasset.c ${MD_ASSETS}
     ${FW}/t5_ui/rotation.c ${FW}/t5_ui/orient.c ${FW}/t5_ui/fbtrack.c)
-target_include_directories(t5sim PRIVATE ${FW}/md ${FW}/md/include ${FW}/t5_ui/include ${FW}/t5_core/include)
+target_include_directories(t5sim PRIVATE ${FW}/md ${FW}/md/include ${FW}/t5_ui/include ${FW}/t5_core/include
+    ${SHELL} ${SHELL}/include
+    ${LVGL_DIR}/src)  # LVGL private headers (md_freeze.c), as on the device
 target_compile_options(t5sim PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations)
 target_link_libraries(t5sim PRIVATE lvgl)

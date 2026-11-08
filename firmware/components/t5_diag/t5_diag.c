@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include "esp_console.h"
 #include "esp_check.h"
+#include "t5_core/os.h"
 #include "diag_priv.h"
 #include "t5_diag/t5_diag.h"
 
@@ -31,8 +32,10 @@ esp_err_t t5_diag_start(void)
 
     esp_console_dev_usb_serial_jtag_config_t dev_cfg =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
-    ESP_RETURN_ON_ERROR(esp_console_new_repl_usb_serial_jtag(&dev_cfg, &repl_cfg, &repl),
-                        TAG, "repl");
+    t5_task_stacks_in_psram(true);   /* 12 KB, mostly unused, for the life of the OS */
+    esp_err_t repl_err = esp_console_new_repl_usb_serial_jtag(&dev_cfg, &repl_cfg, &repl);
+    t5_task_stacks_in_psram(false);
+    ESP_RETURN_ON_ERROR(repl_err, TAG, "repl");
 
     diag_print_boot_banner();
     ESP_RETURN_ON_ERROR(esp_console_register_help_command(), TAG, "help");
@@ -48,6 +51,9 @@ esp_err_t t5_diag_start(void)
     diag_register_ports();
     diag_register_ui();
     diag_register_app();
+    diag_register_media();
+    diag_register_prof();
+    diag_register_py();
 
     return esp_console_start_repl(repl);
 }

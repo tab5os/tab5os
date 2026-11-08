@@ -76,7 +76,7 @@ static t5_err_t apply(t5_rail_t r)
 
 static void release_hold(void *h)
 {
-    t5_rail_release(h);
+    T5_LOG_ON_ERR(TAG, t5_rail_release(h));
 }
 
 t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out)
@@ -103,9 +103,9 @@ t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_r
         h->used = false;
         h = NULL;
     }
+    if (h) t5_res_add(T5_RES_RAIL, h, release_hold);   /* under the lock: see t5_wakelock_acquire */
     unlock();
     *out = h;
-    if (h) t5_res_add(T5_RES_RAIL, h, release_hold);
     return err;
 }
 
@@ -116,11 +116,11 @@ t5_err_t t5_rail_release(t5_rail_hold_t *h)
     }
     lock();
     t5_rail_t r = (t5_rail_t)h->rail;
-    void *app = h->app;
+    T5_ASSERT(r < T5_RAIL_COUNT);   /* checked at acquire; indexes s_on[] in apply() */
+    t5_res_remove_app(h->app, h);                      /* before the slot is free */
     h->used = false;
     t5_err_t err = apply(r);
     unlock();
-    t5_res_remove_app(app, h);
     return err;
 }
 

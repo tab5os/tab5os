@@ -113,7 +113,7 @@ t5_err_t t5_storage_init(void)
     }
     /* First SD attempt inline so /sd is ready by the time the shell starts. */
     t5_storage_sd_poll(t5_time_ms());
-    t5_err_t terr = t5_task_create("t5_sd", poll_task, NULL, 4096, 3, 0, NULL);
+    t5_err_t terr = t5_task_create_lp("t5_sd", poll_task, NULL, 4096, 3, 0, NULL);
     return err != T5_OK ? err : terr;
 }
 
@@ -301,4 +301,35 @@ void t5_storage_reset_for_test(void)
     s_dead = 0;
     s_data_ok = false;
     memset(s_hooks, 0, sizeof s_hooks);
+}
+
+/* USB mass storage (plan 7.8): unmount /sd and hand the raw card over.
+ * The poller leaves an ejected card alone until t5_storage_sd_reclaim(). */
+t5_err_t t5_storage_sd_lend(void **card)
+{
+    if (!card) return T5_ERR_INVALID_ARG;
+    if (s_sd == T5_SD_MOUNTED) T5_RETURN_ON_ERR(t5_storage_sd_eject());
+    lock();
+    s_sd = T5_SD_EJECTED;
+    t5_err_t e = t5_storage_hw_sd_raw_open(card);
+    unlock();
+    return e;
+}
+
+t5_err_t t5_storage_sd_reclaim(void *card)
+{
+    lock();
+    t5_storage_hw_sd_raw_close(card);
+    unlock();
+    return t5_storage_sd_rescan();
+}
+
+/* Erase the SD card: a new FAT filesystem, mounted again at /sd. */
+t5_err_t t5_storage_sd_format(void)
+{
+    lock();
+    t5_err_t e = s_sd == T5_SD_MOUNTED ? t5_storage_hw_sd_format() : T5_ERR_STATE;
+    unlock();
+    if (e == T5_OK) T5_LOGW(TAG, "SD card formatted");
+    return e;
 }

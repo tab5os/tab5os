@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "t5_battery/battery.h"
@@ -13,6 +14,7 @@
 #include "t5_imu/t5_imu.h"
 #include "t5_pins/pins.h"
 #include "t5_power/autosave.h"
+#include "t5_battery/history.h"
 #include "t5_power/power.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_time/t5_time.h"
@@ -49,6 +51,11 @@ static FILE *s_trace;
 static char s_trace_path[96];
 static uint32_t s_trace_lines;
 static bool s_inited;
+static t5_bat_hist_t *s_hist;           /* 2.9 KB */
+void battery_history_init(void);
+static int64_t s_hist_acc_ma10;
+static uint32_t s_hist_acc_n, s_hist_last_ms;
+static bool s_hist_dirty;
 
 /* ---- persistence --------------------------------------------------------- */
 
@@ -238,6 +245,25 @@ void t5_battery_step(void)
     apply_charge(&co);
     uint32_t act = t5_discharge_step(&s_dis, s_st.percent, plausible ? smp.mv : 0, smp.ma10, usb);
     s_st.low_power = s_dis.low_power;
+    if (s_hist) {
+        s_hist_acc_ma10 += smp.ma10;
+        s_hist_acc_n++;
+        if (!s_hist_last_ms) s_hist_last_ms = now;
+        if (now - s_hist_last_ms >= T5_BAT_HIST_PERIOD_S * 1000u) {
+            t5_bat_hist_pt_t p = {
+                .t = t5_time_valid() ? (uint32_t)t5_time_now() : 0,
+                .pct = (int8_t)s_st.percent,
+                .flags = (uint8_t)((s_st.charge == T5_CHG_CHARGING ? T5_BAT_HIST_CHARGING : 0) | (usb ? T5_BAT_HIST_USB : 0)),
+                .mv = s_st.mv,
+                .ma = (int16_t)(s_hist_acc_ma10 / (int64_t)s_hist_acc_n / 10),
+            };
+            t5_bat_hist_add(s_hist, &p);
+            s_hist_dirty = true;
+            s_hist_acc_ma10 = 0;
+            s_hist_acc_n = 0;
+            s_hist_last_ms = now;
+        }
+    }
     t5_mutex_unlock(s_lock);
 
     t5_power_set_usb_power(usb);
@@ -259,7 +285,7 @@ void t5_battery_step(void)
         T5_LOGE(TAG, "%s at %u mV, %d%%: soft off", emergency ? "critical" : "empty", smp.mv, s_st.percent);
         post(T5_EV_BATTERY_CRITICAL);
         t5_battery_trace_stop();
-        t5_power_soft_off(emergency ? T5_OFF_BATTERY_CRITICAL : T5_OFF_BATTERY, emergency);
+        T5_LOG_ON_ERR(TAG, t5_power_soft_off(emergency ? T5_OFF_BATTERY_CRITICAL : T5_OFF_BATTERY, emergency));
     }
 }
 
@@ -357,6 +383,19 @@ static bool shutdown_handler(t5_off_reason_t reason, void *arg)
     return true;   /* host only: the device is asleep */
 }
 
+/* The first sample after boot seeds the gauge and the charge-mode check, so
+ * it gets a few tries (bounded: rule 2) before giving up on the chip. */
+static t5_err_t read_boot_sample(t5_ina226_sample_t *smp)
+{
+    t5_err_t e = T5_ERR_FAIL;
+    for (int i = 0; i < 3; i++) {
+        e = t5_ina226_read(smp);
+        if (e == T5_OK) break;
+        t5_delay_ms(5);
+    }
+    return e;
+}
+
 void t5_battery_charge_mode_resume(void)
 {
     if (t5_ina226_init() != T5_OK) {
@@ -366,7 +405,13 @@ void t5_battery_charge_mode_resume(void)
     }
     t5_delay_ms(80);   /* one averaged conversion (16 x 2 x 1.1 ms) */
     t5_ina226_sample_t smp = {0};
-    t5_ina226_read(&smp);
+    t5_err_t re = read_boot_sample(&smp);
+    if (re != T5_OK) {
+        /* A zero sample would read as "unplugged" and power off: boot instead. */
+        T5_LOGE(TAG, "charge mode: INA226 read: %s, booting", t5_err_str(re));
+        t5_power_charge_mode_end();
+        return;
+    }
     int16_t c10 = T5_CHG_TEMP_UNKNOWN;
     t5_battery_hw_chip_temp(&c10);
     bool usb = t5_usb_power_guess(smp.ma10, smp.mv, t5_battery_hw_usb_host());
@@ -374,7 +419,7 @@ void t5_battery_charge_mode_resume(void)
             (long)((smp.ma10 < 0 ? -smp.ma10 : smp.ma10) % 10), c10 / 10, (c10 < 0 ? -c10 : c10) % 10, usb);
     if (!usb) {
         t5_power_charge_mode_end();
-        t5_power_soft_off(T5_OFF_CHARGE_UNPLUG, true);
+        T5_LOG_ON_ERR(TAG, t5_power_soft_off(T5_OFF_CHARGE_UNPLUG, true));
         return;   /* power wasn't cut: boot normally */
     }
     /* Only the die temperature is available this early. Just out of deep
@@ -406,7 +451,12 @@ t5_err_t t5_battery_init(void)
     t5_gauge_saved_t rec;
     bool have = load_state(&rec);
     t5_ina226_sample_t smp = {0};
-    t5_ina226_read(&smp);
+    err = read_boot_sample(&smp);
+    if (err != T5_OK) {
+        /* A zero sample would boot the gauge at 0 mV, which reads as empty. */
+        T5_LOGE(TAG, "INA226 read: %s", t5_err_str(err));
+        return err;
+    }
     int64_t elapsed = -1;
     if (have && rec.saved_utc && t5_time_valid()) {
         elapsed = (int64_t)t5_time_now() - rec.saved_utc;
@@ -424,7 +474,8 @@ t5_err_t t5_battery_init(void)
     T5_LOGI(TAG, "%u mV, %ld mA, %d%% of %ld mAh%s%s", smp.mv, (long)(smp.ma10 / 10), s_st.percent,
             (long)s_g.capacity_mah, have ? "" : " (no saved state)", s_g.swapped ? ", pack swapped" : "");
     if (s_g.swapped) post(T5_EV_BATTERY_SWAPPED);
-    t5_autosave_register("battery", save_state, NULL);
+    T5_LOG_ON_ERR(TAG, t5_autosave_register("battery", save_state, NULL));
+    battery_history_init();
     t5_power_set_shutdown_handler(shutdown_handler, NULL);
     s_inited = true;
     t5_battery_step();
@@ -449,4 +500,44 @@ void t5_battery_reset_for_test(void)
     s_temp_tick = 0;
     s_applied = false;
     s_inited = false;
+}
+
+/* ---- charge history (plan 6.8) ------------------------------------------------- */
+#define HIST_FILE "bathist.bin"
+
+static t5_err_t hist_save(void *arg)
+{
+    (void)arg;
+    if (!s_hist || !s_hist_dirty) return T5_OK;
+    char p[96];
+    path(p, sizeof p, HIST_FILE);
+    t5_mutex_lock(s_lock);
+    s_hist_dirty = false;
+    t5_err_t e = t5_storage_blob_write(p, T5_BAT_HIST_VERSION, s_hist, sizeof *s_hist);
+    if (e != T5_OK) s_hist_dirty = true;
+    t5_mutex_unlock(s_lock);
+    return e;
+}
+
+void battery_history_init(void)
+{
+    s_hist = calloc(1, sizeof *s_hist);
+    if (!s_hist) return;
+    char p[96];
+    path(p, sizeof p, HIST_FILE);
+    size_t len = 0;
+    if (t5_storage_blob_read(p, T5_BAT_HIST_VERSION, s_hist, sizeof *s_hist, &len) != T5_OK || len != sizeof *s_hist ||
+        !t5_bat_hist_valid(s_hist)) {
+        t5_bat_hist_init(s_hist);
+    }
+    T5_LOG_ON_ERR(TAG, t5_autosave_register("bathist", hist_save, NULL));
+}
+
+int t5_battery_history(t5_bat_hist_pt_t *out, int max)
+{
+    if (!s_hist || !s_lock) return 0;
+    t5_mutex_lock(s_lock);
+    int n = t5_bat_hist_read(s_hist, out, max);
+    t5_mutex_unlock(s_lock);
+    return n;
 }

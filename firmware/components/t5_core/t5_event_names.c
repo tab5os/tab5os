@@ -49,6 +49,12 @@ const char *t5_event_name(t5_event_id_t id)
     case T5_EV_APP_REMOVED: return "app.removed";
     case T5_EV_PORT_CLAIMED: return "port.claimed";
     case T5_EV_PORT_RELEASED: return "port.released";
+    case T5_EV_MIC_STATE: return "media.mic";
+    case T5_EV_CAMERA_STATE: return "media.camera";
+    case T5_EV_USB_ATTACHED: return "usb.attached";
+    case T5_EV_USB_DETACHED: return "usb.detached";
+    case T5_EV_USB_STORAGE: return "usb.storage";
+    case T5_EV_USBC_MODE: return "usbc.mode";
     }
     return "unknown";
 }

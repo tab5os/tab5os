@@ -25,20 +25,20 @@ extern "C" {
 
 typedef t5_err_t (*t5_autosave_fn_t)(void *arg);
 
-t5_err_t t5_autosave_register(const char *name, t5_autosave_fn_t fn, void *arg);
+T5_MUST_CHECK t5_err_t t5_autosave_register(const char *name, t5_autosave_fn_t fn, void *arg);
 /* Run every saver now. Returns the first error; all savers still run. */
-t5_err_t t5_autosave_now(void);
+T5_MUST_CHECK t5_err_t t5_autosave_now(void);
 /* Periodic check (the power task calls it). */
 void t5_autosave_poll(uint32_t now_ms);
 uint32_t t5_autosave_runs(void);
 uint32_t t5_autosave_failures(void);
 
 /* Session blob: set marks it dirty, the next autosave writes it. */
-t5_err_t t5_session_set(const void *data, size_t len);
+T5_MUST_CHECK t5_err_t t5_session_set(const void *data, size_t len);
 /* What was saved before the last power-off (loaded at init). */
-t5_err_t t5_session_get(void *buf, size_t cap, size_t *len);
+T5_MUST_CHECK t5_err_t t5_session_get(void *buf, size_t cap, size_t *len);
 /* Load the session from storage (power init calls it). */
-t5_err_t t5_session_load(void);
+T5_MUST_CHECK t5_err_t t5_session_load(void);
 
 /* Where the session and other system records live. Host tests point this
  * at a temporary directory. */

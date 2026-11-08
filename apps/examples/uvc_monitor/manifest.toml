@@ -1,0 +1,11 @@
+id = "com.t5.example.uvcmonitor"
+name = "UVC Monitor"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+orientation = "landscape"
+
+[permissions]
+usb = true
+camera = true

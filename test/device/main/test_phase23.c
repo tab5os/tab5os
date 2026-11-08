@@ -54,10 +54,10 @@ TEST_CASE("rail holds switch the expander pin", "[power]")
     bool lvl = false;
     TEST_ASSERT_EQUAL(T5_OK, t5_xpin_read(T5_XP_USB5V_EN, &lvl));
     TEST_ASSERT_TRUE(lvl);
-    t5_rail_release(a);
+    TEST_ASSERT_EQUAL(T5_OK, t5_rail_release(a));
     TEST_ASSERT_EQUAL(T5_OK, t5_xpin_read(T5_XP_USB5V_EN, &lvl));
     TEST_ASSERT_TRUE(lvl);
-    t5_rail_release(b);
+    TEST_ASSERT_EQUAL(T5_OK, t5_rail_release(b));
     TEST_ASSERT_EQUAL(T5_OK, t5_xpin_read(T5_XP_USB5V_EN, &lvl));
     TEST_ASSERT_FALSE(lvl);
 }

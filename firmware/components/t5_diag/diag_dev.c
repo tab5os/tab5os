@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
  * rtc, imu, fs, disp, touch commands (1.4-1.8)
  */
+#include "esp_attr.h"
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -153,7 +154,7 @@ static int fs_verify(void)
     FILE *f = fopen(STRESS_PATH, "rb");
     if (!f) { printf("VERIFY none (no file)\n"); return 0; }
     stress_hdr_t h;
-    static uint8_t buf[4096];
+    EXT_RAM_BSS_ATTR static uint8_t buf[4096];
     size_t n = fread(&h, 1, sizeof h, f);
     size_t m = n == sizeof h && h.len <= sizeof buf ? fread(buf, 1, h.len, f) : 0;
     fclose(f);
@@ -168,7 +169,7 @@ static int fs_verify(void)
 
 static int fs_stress(uint32_t count)
 {
-    static uint8_t buf[sizeof(stress_hdr_t) + 4096];
+    EXT_RAM_BSS_ATTR static uint8_t buf[sizeof(stress_hdr_t) + 4096];
     uint32_t seq = 0;
     FILE *f = fopen(STRESS_PATH, "rb");
     if (f) {

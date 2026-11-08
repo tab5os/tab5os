@@ -16,10 +16,9 @@
 #include "esp_pm.h"
 #endif
 
-static const char *TAG = "t5.power_hw";
-
 static SemaphoreHandle_t s_wake;
 #if CONFIG_PM_ENABLE
+static const char *TAG = "t5.power_hw";
 static esp_pm_lock_handle_t s_cpu_max;
 static bool s_cpu_max_held;
 #endif
@@ -118,10 +117,19 @@ void t5_power_hw_notify(bool from_isr)
     }
 }
 
+/* Woken early: wait a little more before the next step, so a burst of
+ * notifications (an app taking and dropping wake locks in a loop) becomes one
+ * step. The power task outranks app tasks; unpaced, such a loop would keep it
+ * busy and starve core 0. */
+#define MIN_STEP_GAP_MS 5
+
 void t5_power_hw_wait(uint32_t ms)
 {
-    if (s_wake) xSemaphoreTake(s_wake, pdMS_TO_TICKS(ms));
-    else t5_delay_ms(ms);
+    if (!s_wake) {
+        t5_delay_ms(ms);
+        return;
+    }
+    if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(ms)) == pdTRUE && ms > MIN_STEP_GAP_MS) t5_delay_ms(MIN_STEP_GAP_MS);
 }
 
 static void (*s_step)(void);
@@ -137,7 +145,7 @@ static void power_task(void *arg)
 t5_err_t t5_power_hw_start_task(void (*fn)(void))
 {
     s_step = fn;
-    return t5_task_create("t5_power", power_task, NULL, 6144, 8, 0, NULL);
+    return t5_task_create_lp("t5_power", power_task, NULL, 6144, 8, 0, NULL);
 }
 
 void t5_power_hw_halt(uint32_t wake_after_ms)

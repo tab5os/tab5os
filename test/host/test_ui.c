@@ -315,6 +315,33 @@ static void test_tokens_curves(void)
     TEST_ASSERT_EQUAL_HEX32(0x808080, md_mix(0xFFFFFF, 0x000000, 128) & 0xFEFEFE);
 }
 
+static uint32_t covered(const t5_rect_t *r, int n, int32_t x, int32_t y)
+{
+    uint32_t c = 0;
+    for (int i = 0; i < n; i++) c += x >= r[i].x1 && x <= r[i].x2 && y >= r[i].y1 && y <= r[i].y2;
+    return c;
+}
+
+static void test_fbt_subtract(void)
+{
+    t5_rect_t a[2] = { { 0, 0, 99, 99 }, { 200, 0, 209, 9 } };
+    t5_rect_t cut[2] = { { 20, 30, 59, 69 }, { 0, 90, 300, 300 } };
+    t5_rect_t out[32];
+    int n = t5_fbt_subtract(a, 2, cut, 2, out, 32);
+    /* Every pixel: in the answer exactly when it is in a and in no cut, once. */
+    for (int32_t y = 0; y < 120; y++) {
+        for (int32_t x = 0; x < 220; x++) {
+            bool in_a = covered(a, 2, x, y) > 0, in_cut = covered(cut, 2, x, y) > 0;
+            TEST_ASSERT_EQUAL_UINT32((in_a && !in_cut) ? 1 : 0, covered(out, n, x, y));
+        }
+    }
+    /* A full-screen cut leaves nothing (the scrolling case). */
+    t5_rect_t full = { 0, 0, 1279, 719 };
+    TEST_ASSERT_EQUAL(0, t5_fbt_subtract(a, 2, &full, 1, out, 32));
+    /* No room: the uncut input comes back (a superset). */
+    TEST_ASSERT_EQUAL(1, t5_fbt_subtract(a, 1, cut, 1, out, 1));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -330,6 +357,7 @@ int main(void)
     RUN_TEST(test_fbt_lag);
     RUN_TEST(test_fbt_merge_and_overflow);
     RUN_TEST(test_fbt_pick);
+    RUN_TEST(test_fbt_subtract);
     RUN_TEST(test_tokens_density_and_type);
     RUN_TEST(test_tokens_dark_scheme);
     RUN_TEST(test_tokens_light_names_exist);

@@ -6,3 +6,4 @@ runtime = "native"
 entry = "app.elf"
 
 [permissions]
+net = true

@@ -2,3 +2,5 @@ dependencies:
   # Wi-Fi and BLE through the ESP32-C6 over SDIO. On IDF 6.1 esp_hosted
   # provides esp_wifi_* itself; esp_wifi_remote is only needed before 6.1.
   espressif/esp_hosted: "~3.1.0"
+  # MQTT 3.1.1/5 client (t5_net/mqtt.h wraps it into a tracked, polled handle).
+  espressif/mqtt: "^1.1.0"

@@ -35,8 +35,8 @@ typedef struct {
 typedef struct t5_zip t5_zip_t;
 
 /* Open by path, or over an already open file (own_file: closed by t5_zip_close). */
-t5_err_t t5_zip_open(const char *path, t5_zip_t **out);
-t5_err_t t5_zip_open_file(FILE *f, bool own_file, t5_zip_t **out);
+T5_MUST_CHECK t5_err_t t5_zip_open(const char *path, t5_zip_t **out);
+T5_MUST_CHECK t5_err_t t5_zip_open_file(FILE *f, bool own_file, t5_zip_t **out);
 void t5_zip_close(t5_zip_t *z);
 
 int t5_zip_count(const t5_zip_t *z);
@@ -44,16 +44,16 @@ const t5_zip_entry_t *t5_zip_entry(const t5_zip_t *z, int index);
 const t5_zip_entry_t *t5_zip_find(const t5_zip_t *z, const char *name);
 
 /* Extract to a caller buffer. T5_ERR_NO_MEM if e->size > cap. */
-t5_err_t t5_zip_extract_mem(t5_zip_t *z, const t5_zip_entry_t *e, void *buf, size_t cap, size_t *out_len);
+T5_MUST_CHECK t5_err_t t5_zip_extract_mem(t5_zip_t *z, const t5_zip_entry_t *e, void *buf, size_t cap, size_t *out_len);
 /* Extract into a new malloc'd buffer of e->size + 1 bytes, NUL-terminated
  * (handy for text). Refuses entries larger than max_size. Free with free(). */
-t5_err_t t5_zip_extract_alloc(t5_zip_t *z, const t5_zip_entry_t *e, size_t max_size, char **out,
+T5_MUST_CHECK t5_err_t t5_zip_extract_alloc(t5_zip_t *z, const t5_zip_entry_t *e, size_t max_size, char **out,
                               size_t *out_len);
 /* Stream to a sink (same contract as the inflate sink). */
-t5_err_t t5_zip_extract_cb(t5_zip_t *z, const t5_zip_entry_t *e, t5_inflate_write_fn wr, void *ctx);
+T5_MUST_CHECK t5_err_t t5_zip_extract_cb(t5_zip_t *z, const t5_zip_entry_t *e, t5_inflate_write_fn wr, void *ctx);
 /* Extract to a file (created or truncated, fsync'd). The file is removed on
  * any failure, including a CRC mismatch. */
-t5_err_t t5_zip_extract_file(t5_zip_t *z, const t5_zip_entry_t *e, const char *path);
+T5_MUST_CHECK t5_err_t t5_zip_extract_file(t5_zip_t *z, const t5_zip_entry_t *e, const char *path);
 
 /* Relative, forward-slash path with no "", "." or ".." components, no
  * backslash, colon or control characters, shorter than T5_ZIP_NAME_MAX.

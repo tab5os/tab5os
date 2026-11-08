@@ -138,7 +138,7 @@ static void test_conflict_names_owner_and_port(void)
     TEST_ASSERT_EQUAL(T5_OK, t5_port_open("stamp", T5_MODE_SPI, &sc, &b));
     TEST_ASSERT_EQUAL(4, mock_ports.released[5] + mock_ports.released[18] + mock_ports.released[19] +
                          mock_ports.released[46]);   /* G5, G18, G19 by mbus.spi, G46 by the GPIO */
-    t5_port_close(b);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(b));
 }
 
 static void test_debug_uart_vs_stamp_and_singles(void)
@@ -156,8 +156,8 @@ static void test_debug_uart_vs_stamp_and_singles(void)
     bool lv = false;
     TEST_ASSERT_EQUAL(T5_OK, t5_port_gpio_get(g, &lv));
     TEST_ASSERT_TRUE(lv);
-    t5_port_close(g);
-    t5_port_close(dbg);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(g));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(dbg));
 }
 
 static void test_ext_pins_split_by_mode(void)
@@ -175,8 +175,8 @@ static void test_ext_pins_split_by_mode(void)
     TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_port_open_ex("ext", T5_MODE_SPI, NULL, 0, &gpio, why, sizeof why));
     TEST_ASSERT_EQUAL_STRING("ext has no spi mode", why);
     TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_port_open("usb", T5_MODE_GPIO, NULL, &gpio));
-    t5_port_close(i2c);
-    t5_port_close(uart);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(i2c));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(uart));
     TEST_ASSERT_EQUAL(0, mock_ports.live[0] + mock_ports.live[1]);
 }
 
@@ -189,7 +189,7 @@ static void test_risky_pins(void)
     TEST_ASSERT_NOT_NULL(strstr(why, "T5_PORT_FLAG_RISKY"));
     TEST_ASSERT_EQUAL(0, mock_ports.opens);
     TEST_ASSERT_EQUAL(T5_OK, t5_port_open_ex("mbus.uart", T5_MODE_UART, NULL, T5_PORT_FLAG_RISKY, &p, NULL, 0));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
 
     /* G35: flag needed, input only, never reconfigured or reset. */
     t5_port_gpio_cfg_t in = { 0 };
@@ -199,7 +199,7 @@ static void test_risky_pins(void)
     TEST_ASSERT_NOT_NULL(strstr(why, "input only"));
     TEST_ASSERT_EQUAL(T5_OK, t5_port_open_ex("mbus.g35", T5_MODE_GPIO, &in, T5_PORT_FLAG_RISKY, &p, NULL, 0));
     TEST_ASSERT_EQUAL(T5_ERR_STATE, t5_port_gpio_set(p, true));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
     TEST_ASSERT_EQUAL(0, mock_ports.configured[35]);
     /* ports_hw_pin_release is called (the device layer skips G35); the logic never configures it. */
 
@@ -208,7 +208,7 @@ static void test_risky_pins(void)
     t5_port_t *q;
     TEST_ASSERT_EQUAL(T5_ERR_DENIED, t5_port_open("mbus.uart", T5_MODE_UART, NULL, &q));
     TEST_ASSERT_EQUAL(T5_ERR_BUSY, t5_port_open_ex("mbus.uart", T5_MODE_UART, NULL, T5_PORT_FLAG_RISKY, &q, NULL, 0));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
 }
 
 static void test_release_and_res_hooks(void)
@@ -265,7 +265,7 @@ static void test_driver_failure_rolls_back(void)
     TEST_ASSERT_EQUAL(0, mock_events_count(T5_EV_PORT_CLAIMED));
     TEST_ASSERT_EQUAL(T5_OK, t5_port_open("rs485", T5_MODE_RS485, NULL, &p));
     TEST_ASSERT_EQUAL(34, mock_ports.rts);       /* DIR on G34 as RTS */
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
 }
 
 static void test_handle_pool_reusable(void)
@@ -295,13 +295,13 @@ static void test_adc_and_modes(void)
     /* Wrong-mode calls are rejected. */
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_port_pwm_set(p, 10));
     TEST_ASSERT_LESS_THAN(0, t5_port_uart_write(p, "x", 1));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
     /* ext ADC only on its ADC-capable pins (G49/G50). */
     ac.pin_index = 0;
     TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_port_open("ext", T5_MODE_ADC, &ac, &p));
     ac.pin_index = 3;
     TEST_ASSERT_EQUAL(T5_OK, t5_port_open("ext", T5_MODE_ADC, &ac, &p));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
 }
 
 static void test_external_i2c(void)
@@ -324,7 +324,7 @@ static void test_external_i2c(void)
     TEST_ASSERT_EQUAL(2, t5_port_i2c_scan(p, found, 8));
     TEST_ASSERT_EQUAL_HEX8(0x44, found[0]);
     TEST_ASSERT_EQUAL_HEX8(0x70, found[1]);
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
 }
 
 static void test_mbus_i2c_shared_and_reserved(void)
@@ -357,8 +357,8 @@ static void test_mbus_i2c_shared_and_reserved(void)
     TEST_ASSERT_FALSE(pi.claimed);
     TEST_ASSERT_EQUAL_STRING("system", pi.owner);
     TEST_ASSERT_EQUAL_STRING("mbus.i2c", pi.port);
-    t5_port_close(a);
-    t5_port_close(b);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(a));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(b));
     t5_i2c_dev_stats_t st[T5_I2C_MAX_DEVICES];
     TEST_ASSERT_EQUAL(0, t5_i2c_dev_stats(st, T5_I2C_MAX_DEVICES));
     TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_ports_pin_info(22, &pi));   /* backlight: not a port pin */
@@ -372,7 +372,7 @@ static void test_spi_and_uart_io(void)
     uint8_t tx[4] = { 1, 2, 3, 4 }, rx[4] = { 0 };
     TEST_ASSERT_EQUAL(T5_OK, t5_port_spi_transfer(p, tx, rx, 4));
     TEST_ASSERT_EQUAL_UINT8_ARRAY(tx, rx, 4);
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
     sc.cs_pin_index = 0;    /* mbus.spi has no CS pin; index 0 is MOSI */
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_port_open("mbus.spi", T5_MODE_SPI, &sc, &p));
 
@@ -384,7 +384,7 @@ static void test_spi_and_uart_io(void)
     TEST_ASSERT_EQUAL_MEMORY("hello", mock_ports.tx, 5);
     char buf[4];
     TEST_ASSERT_EQUAL(0, t5_port_uart_read(p, buf, 4, 10));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
     uc.data_bits = 9;
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_port_open("grove", T5_MODE_UART, &uc, &p));
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_ports_pin_info(53, NULL));
@@ -521,7 +521,7 @@ static void test_modbus_transactions(void)
     /* Bad args. */
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_modbus_read_holding(&mb, 7, 0, 126, regs));
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_modbus_read_holding(&mb, 0, 0, 1, regs));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_modbus_read_holding(&mb, 7, 0, 1, regs));
 }
 
@@ -643,7 +643,7 @@ static void test_profile_scan(void)
     TEST_ASSERT_EQUAL(T5_OK, t5_port_open("grove", T5_MODE_UART, NULL, &p));
     t5_app_ctx_set(NULL);
     TEST_ASSERT_EQUAL(T5_ERR_BUSY, t5_profiles_scan("grove", found, 8));
-    t5_port_close(p);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
     TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_profiles_scan("rs485", found, 8));
     /* Internal bus only when named, never its reserved addresses. */
     mock_i2c_add(0x44, false);

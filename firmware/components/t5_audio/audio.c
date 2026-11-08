@@ -1,0 +1,743 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Audio service (plan 7.1-7.3). Two tasks at the top priority:
+ *
+ *   output  runs while there is something to play: an app stream or a
+ *           system sound. Every 10 ms it mixes the stream (resampled to
+ *           48 kHz stereo) with the active sounds, keeps a mono copy for
+ *           the echo canceller, and writes the block to I2S (which paces the
+ *           loop). After 2 s with nothing to play the DAC powers down.
+ *   input   runs while an input stream is open: reads 10 ms from the mics,
+ *           optionally cancels the device's own output, converts to the
+ *           stream's format and queues it for the reader.
+ *
+ * Underruns: a stream that has started playing and then has less than a
+ * block queued counts one underrun per gap (the plan's endurance metric).
+ * Wake lock: an open, unpaused output stream holds T5_LOCK_AUDIO, so the
+ * screen can go off while playback continues.
+ */
+#include <stdlib.h>
+#include <string.h>
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
+#include "t5_audio/audio.h"
+#include "t5_core/event.h"
+#include "t5_core/log.h"
+#include "t5_core/os.h"
+#include "t5_core/res.h"
+#include "t5_power/autosave.h"
+#include "t5_power/power.h"
+#include "t5_storage/t5_storage.h"
+#include "audio_hw.h"
+
+static const char *TAG = "t5.audio";
+
+#define BLOCK_FRAMES 480                  /* 10 ms at 48 kHz */
+#define BLOCK_SAMPLES (BLOCK_FRAMES * T5_AUDIO_CH)
+#define IDLE_CLOSE_MS 2000
+#define MAX_VOICES 4
+#define AUDIO_PRIO (configMAX_PRIORITIES - 2)
+#define SETTINGS_FILE T5_SYS_DIR "/audio.bin"
+#define SETTINGS_VERSION 1
+#define REF_RING (T5_AUDIO_RATE / 5)      /* 200 ms of mono reference at 48 kHz */
+#define AEC_RATE 16000
+#define AEC_TAPS 512                      /* 32 ms at 16 kHz */
+#define AEC_DELAY 320                     /* 20 ms: the I2S output latency */
+
+typedef struct {
+    int volume;
+    bool muted;
+    bool sounds;
+    float in_gain;
+} settings_t;
+
+struct t5_audio_out {
+    uint32_t magic;
+    t5_audio_out_cfg_t cfg;
+    StreamBufferHandle_t sb;
+    t5_resampler_t rs;
+    int16_t pend[BLOCK_FRAMES * 2 * 2];   /* input frames not yet consumed by the resampler */
+    size_t npend;                         /* frames */
+    size_t frame_bytes;
+    volatile bool paused, closing;
+    bool primed;                          /* has played; gaps after this are underruns */
+    bool starved;                         /* ran dry; counted as an underrun if data comes again */
+};
+
+struct t5_audio_in {
+    uint32_t magic;
+    t5_audio_in_cfg_t cfg;
+    StreamBufferHandle_t sb;
+    t5_resampler_t rs;
+    bool aec;
+    t5_aec_t a;
+    volatile bool closing;
+};
+
+#define OUT_MAGIC 0x41554f54u
+#define IN_MAGIC 0x4155494eu
+
+static t5_mutex_t s_mx;
+static bool s_ready, s_dac, s_adc;
+static settings_t s_set = { .volume = 60, .muted = false, .sounds = true, .in_gain = 30.0f }, s_saved;
+static QueueHandle_t s_cmd;                /* t5_sound_t, or -1 to wake */
+static TaskHandle_t s_out_task, s_in_task;
+static t5_audio_out_t *s_stream;
+static t5_audio_in_t *s_input;
+static t5_wakelock_t *s_lock;
+static t5_audio_stats_t s_st;
+static volatile bool s_suspended;
+/* The input the input task is working on (set under s_mx), so a close can
+ * wait for it to let go before freeing it. */
+static t5_audio_in_t *volatile s_in_busy;
+static t5_audio_out_t *volatile s_out_busy;   /* likewise for the output task's stream */
+static volatile bool s_want_clock;      /* an input is opening: run the output side first */
+/* Codec opens and closes all happen on the output task, between its writes:
+ * esp_codec_dev reconfigures the I2S pair on each, which must never overlap
+ * a read or a write. */
+typedef enum { IN_REQ_NONE, IN_REQ_OPEN, IN_REQ_CLOSE } in_req_t;
+static volatile in_req_t s_in_req;
+static volatile t5_err_t s_in_req_err;
+
+/* Mono reference for the echo canceller, written by output, read by input. */
+static int16_t *s_ref;
+static volatile uint32_t s_ref_w, s_ref_r;
+
+/* ---- settings --------------------------------------------------------------------- */
+static t5_err_t save_settings(void *arg)
+{
+    (void)arg;
+    if (!memcmp(&s_set, &s_saved, sizeof s_set)) return T5_OK;
+    settings_t copy = s_set;
+    t5_err_t e = t5_storage_blob_write(SETTINGS_FILE, SETTINGS_VERSION, &copy, sizeof copy);
+    if (e == T5_OK) s_saved = copy;
+    return e;
+}
+
+static void load_settings(void)
+{
+    settings_t s;
+    size_t len = 0;
+    if (t5_storage_blob_read(SETTINGS_FILE, SETTINGS_VERSION, &s, sizeof s, &len) == T5_OK && len == sizeof s) {
+        if (s.volume >= 0 && s.volume <= 100) s_set = s;
+    }
+    s_saved = s_set;
+}
+
+/* ---- output task -------------------------------------------------------------------- */
+static void wake_out(void)
+{
+    int v = -1;
+    if (s_cmd) xQueueSend(s_cmd, &v, 0);
+}
+
+static void lock_update(void)
+{
+    /* The wake lock follows "a stream that wants to play". */
+    bool want = s_stream && !s_stream->paused && !s_stream->closing;
+    /* The lock is the service's, not the calling app's: the stream's own
+     * release path drops it. */
+    void *ctx = t5_app_ctx_get();
+    t5_app_ctx_set(NULL);
+    if (want && !s_lock) s_lock = t5_wakelock_acquire(T5_LOCK_AUDIO, "audio");
+    if (!want && s_lock) {
+        t5_wakelock_release(s_lock);
+        s_lock = NULL;
+    }
+    t5_app_ctx_set(ctx);
+}
+
+/* Pull up to BLOCK_FRAMES of 48 kHz stereo from the stream. */
+static size_t stream_pull(t5_audio_out_t *st, int16_t *out)
+{
+    size_t made = 0;
+    for (int guard = 0; guard < 4 && made < BLOCK_FRAMES; guard++) {
+        size_t room = sizeof st->pend / st->frame_bytes - st->npend;
+        if (room) {
+            size_t got = xStreamBufferReceive(st->sb, (uint8_t *)st->pend + st->npend * st->frame_bytes,
+                                              room * st->frame_bytes, 0);
+            st->npend += got / st->frame_bytes;
+        }
+        if (!st->npend) break;
+        size_t used = 0;
+        made += t5_resample(&st->rs, st->pend, st->npend, &used, out + made * 2, BLOCK_FRAMES - made, 2);
+        if (used) {
+            memmove(st->pend, (uint8_t *)st->pend + used * st->frame_bytes, (st->npend - used) * st->frame_bytes);
+            st->npend -= used;
+        }
+        if (!used && made < BLOCK_FRAMES) break;
+    }
+    return made;
+}
+
+static void ref_push(const int16_t *stereo, size_t frames)
+{
+    if (!s_ref) return;
+    for (size_t i = 0; i < frames; i++) {
+        s_ref[s_ref_w % REF_RING] = (int16_t)(((int32_t)stereo[2 * i] + stereo[2 * i + 1]) / 2);
+        s_ref_w++;
+    }
+}
+
+static void out_task(void *arg)
+{
+    (void)arg;
+    static int32_t acc[BLOCK_SAMPLES];
+    static int16_t blk[BLOCK_SAMPLES], app[BLOCK_SAMPLES];
+    t5_voice_t voices[MAX_VOICES] = { 0 };
+    bool running = false, hp = false, speaker = false;
+    uint32_t idle_ms = 0, hp_poll = 0;
+    for (;;) {
+        int cmd;
+        TickType_t wait = running ? 0 : portMAX_DELAY;
+        while (xQueueReceive(s_cmd, &cmd, wait) == pdTRUE) {
+            wait = 0;
+            if (cmd >= 0 && cmd < T5_SOUND_COUNT && s_set.sounds && !s_set.muted) {
+                for (int i = 0; i < MAX_VOICES; i++) {
+                    if (!voices[i].active) {
+                        t5_voice_start(&voices[i], (t5_sound_t)cmd);
+                        break;
+                    }
+                }
+            }
+        }
+        s_out_busy = NULL;               /* the last block is done with it */
+        t5_mutex_lock(s_mx);
+        t5_audio_out_t *st = s_stream;
+        bool have_stream = st && !st->paused && !st->closing;
+        s_out_busy = have_stream ? st : NULL;
+        /* Full-duplex I2S: the receive side runs on the transmit side's
+         * clock, so output keeps running (silently) while a mic is open. */
+        bool have_input = s_input != NULL || s_want_clock;
+        t5_mutex_unlock(s_mx);
+        bool have_voice = false;
+        for (int i = 0; i < MAX_VOICES; i++) have_voice |= voices[i].active;
+
+        if (s_suspended || (!have_stream && !have_voice && !have_input && running && idle_ms >= IDLE_CLOSE_MS)) {
+            if (running) {
+                audio_hw_out_close();
+                speaker = false;
+                running = false;
+                s_st.out_running = false;
+                s_st.speaker_on = false;
+            }
+            if (s_suspended) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            continue;
+        }
+        if (!running) {
+            if (!have_stream && !have_voice && !have_input) continue;
+            if (audio_hw_out_open(s_set.volume, s_set.muted) != T5_OK) {
+                s_st.codec_errors++;
+                for (int i = 0; i < MAX_VOICES; i++) voices[i].active = false;
+                vTaskDelay(pdMS_TO_TICKS(200));
+                continue;
+            }
+            running = true;
+            s_st.out_running = true;
+            s_st.opens++;
+            idle_ms = 0;
+            hp = audio_hw_headphones();
+            hp_poll = 0;
+            speaker = false;
+        }
+        if (s_in_req == IN_REQ_OPEN) {
+            s_in_req_err = audio_hw_in_open(s_set.in_gain);
+            s_in_req = IN_REQ_NONE;
+        } else if (s_in_req == IN_REQ_CLOSE) {
+            audio_hw_in_close();
+            s_in_req_err = T5_OK;
+            s_in_req = IN_REQ_NONE;
+        }
+        if (hp_poll++ % 50 == 0) {          /* every 500 ms */
+            hp = audio_hw_headphones();
+            s_st.headphones = hp;
+        }
+        bool want_spk = !hp && (have_stream || have_voice);   /* not for mic-only clocking */
+        if (want_spk != speaker) {
+            if (audio_hw_speaker(want_spk) == T5_OK) speaker = want_spk;
+            s_st.speaker_on = speaker;
+        }
+
+        int64_t t0 = esp_timer_get_time();
+        memset(acc, 0, sizeof acc);
+        if (have_stream) {
+            size_t got = stream_pull(st, app);
+            if (got) {
+                /* Data after running dry: that gap was an underrun (running
+                 * dry at the end of a stream is not). */
+                if (st->starved) s_st.underruns++;
+                st->primed = true;
+                st->starved = false;
+            }
+            if (got < BLOCK_FRAMES) {
+                memset(app + got * 2, 0, (BLOCK_FRAMES - got) * 2 * sizeof app[0]);
+                if (st->primed) st->starved = true;
+            }
+            t5_mix_add(acc, app, BLOCK_SAMPLES, 32767);
+            idle_ms = 0;
+        }
+        for (int i = 0; i < MAX_VOICES; i++) {
+            if (voices[i].active) {
+                t5_voice_render(&voices[i], acc, BLOCK_FRAMES);
+                idle_ms = 0;
+            }
+        }
+        if (!have_stream && !have_voice) idle_ms += 10;
+        t5_mix_to_s16(acc, blk, BLOCK_SAMPLES);
+        ref_push(blk, BLOCK_FRAMES);
+        s_st.out_peak_dbfs = t5_pcm_peak_dbfs(blk, BLOCK_SAMPLES);
+        uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+        if (us > s_st.loop_max_us) s_st.loop_max_us = us;
+        if (audio_hw_write(blk, sizeof blk) != T5_OK) {
+            s_st.codec_errors++;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        s_st.out_frames += BLOCK_FRAMES;
+    }
+}
+
+/* ---- input task ------------------------------------------------------------------------- */
+static void in_task(void *arg)
+{
+    (void)arg;
+    static int16_t raw[BLOCK_SAMPLES], mono[BLOCK_FRAMES], ref48[BLOCK_FRAMES];
+    static int16_t mic16[BLOCK_FRAMES / 3], ref16[BLOCK_FRAMES / 3], conv[BLOCK_SAMPLES];
+    for (;;) {
+        s_in_busy = NULL;
+        t5_mutex_lock(s_mx);
+        t5_audio_in_t *in = s_input;
+        if (in && !in->closing && !s_suspended) s_in_busy = in;
+        t5_mutex_unlock(s_mx);
+        if (!s_in_busy) {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+            continue;
+        }
+        if (audio_hw_read(raw, sizeof raw) != T5_OK) {
+            s_st.codec_errors++;
+            s_in_busy = NULL;
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        s_st.in_frames += BLOCK_FRAMES;
+        s_st.in_peak_dbfs = t5_pcm_peak_dbfs(raw, BLOCK_SAMPLES);
+        const int16_t *src = raw;
+        size_t frames = BLOCK_FRAMES;
+        uint8_t ch = 2;
+        uint32_t rate = T5_AUDIO_RATE;
+        if (in->aec) {
+            /* Mono, to 16 kHz (average of three: a crude low-pass that is
+             * enough ahead of an echo canceller), and the reference alike. */
+            t5_pcm_downmix(raw, mono, BLOCK_FRAMES);
+            uint32_t avail = s_ref_w - s_ref_r;
+            if (avail > REF_RING) s_ref_r = s_ref_w - REF_RING, avail = REF_RING;
+            for (int i = 0; i < BLOCK_FRAMES; i++) {
+                ref48[i] = avail > (uint32_t)i ? s_ref[(s_ref_r + i) % REF_RING] : 0;
+            }
+            s_ref_r += avail < BLOCK_FRAMES ? avail : BLOCK_FRAMES;
+            for (int i = 0; i < BLOCK_FRAMES / 3; i++) {
+                mic16[i] = (int16_t)(((int32_t)mono[3 * i] + mono[3 * i + 1] + mono[3 * i + 2]) / 3);
+                ref16[i] = (int16_t)(((int32_t)ref48[3 * i] + ref48[3 * i + 1] + ref48[3 * i + 2]) / 3);
+            }
+            t5_aec_process(&in->a, mic16, ref16, mic16, BLOCK_FRAMES / 3);
+            s_st.aec_erle_db = t5_aec_erle_db(&in->a);
+            src = mic16;
+            frames = BLOCK_FRAMES / 3;
+            ch = 1;
+            rate = AEC_RATE;
+            (void)rate;
+        }
+        size_t used = 0;
+        size_t n = t5_resample(&in->rs, src, frames, &used, conv, BLOCK_FRAMES, in->cfg.channels);
+        size_t bytes = n * in->cfg.channels * sizeof(int16_t);
+        if (xStreamBufferSpacesAvailable(in->sb) < bytes) {
+            s_st.overruns++;
+        } else {
+            xStreamBufferSend(in->sb, conv, bytes, 0);
+        }
+        (void)ch;
+    }
+}
+
+/* ---- public: output ---------------------------------------------------------------------- */
+int t5_audio_volume(void)
+{
+    return s_set.volume;
+}
+
+t5_err_t t5_audio_set_volume(int pct)
+{
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    s_set.volume = pct;
+    if (s_ready) audio_hw_set_volume(pct);
+    return T5_OK;
+}
+
+bool t5_audio_muted(void)
+{
+    return s_set.muted;
+}
+
+t5_err_t t5_audio_set_muted(bool on)
+{
+    s_set.muted = on;
+    if (s_ready) audio_hw_set_mute(on);
+    return T5_OK;
+}
+
+bool t5_audio_headphones(void)
+{
+    return s_st.headphones;
+}
+
+void t5_audio_play_sound(t5_sound_t s)
+{
+    if (!s_ready || !s_dac || s >= T5_SOUND_COUNT || !s_set.sounds || s_set.muted) return;
+    int v = (int)s;
+    xQueueSend(s_cmd, &v, 0);
+}
+
+bool t5_audio_system_sounds(void)
+{
+    return s_set.sounds;
+}
+
+void t5_audio_set_system_sounds(bool on)
+{
+    s_set.sounds = on;
+}
+
+static void out_release(void *h)
+{
+    t5_audio_out_close(h);
+}
+
+t5_err_t t5_audio_out_open(const t5_audio_out_cfg_t *cfg, t5_audio_out_t **out)
+{
+    if (!s_ready || !s_dac) return T5_ERR_NOT_FOUND;
+    if (!cfg || !out || cfg->rate < 8000 || cfg->rate > 48000 || (cfg->channels != 1 && cfg->channels != 2))
+        return T5_ERR_INVALID_ARG;
+    t5_audio_out_t *o = heap_caps_calloc(1, sizeof *o, MALLOC_CAP_SPIRAM);
+    if (!o) return T5_ERR_NO_MEM;
+    o->magic = OUT_MAGIC;
+    o->cfg = *cfg;
+    if (!o->cfg.buffer_ms) o->cfg.buffer_ms = 200;
+    o->frame_bytes = cfg->channels * sizeof(int16_t);
+    size_t sz = (size_t)cfg->rate * o->frame_bytes * o->cfg.buffer_ms / 1000;
+    o->sb = xStreamBufferCreateWithCaps(sz, 1, MALLOC_CAP_SPIRAM);
+    if (!o->sb) {
+        free(o);
+        return T5_ERR_NO_MEM;
+    }
+    t5_resampler_init(&o->rs, cfg->rate, cfg->channels, T5_AUDIO_RATE);
+    t5_mutex_lock(s_mx);
+    if (s_stream) {
+        t5_mutex_unlock(s_mx);
+        vStreamBufferDeleteWithCaps(o->sb);
+        free(o);
+        return T5_ERR_BUSY;
+    }
+    s_stream = o;
+    lock_update();
+    t5_res_add(T5_RES_OTHER, o, out_release);   /* under the lock: an exiting app can't be stopped between */
+    t5_mutex_unlock(s_mx);
+    wake_out();
+    *out = o;
+    return T5_OK;
+}
+
+int t5_audio_out_write(t5_audio_out_t *o, const void *pcm, size_t bytes, uint32_t timeout_ms)
+{
+    if (!o || o->magic != OUT_MAGIC || o->closing) return T5_ERR_INVALID_ARG;
+    bytes -= bytes % o->frame_bytes;
+    size_t done = 0;
+    uint32_t t0 = t5_time_ms();
+    while (done < bytes) {
+        uint32_t el = t5_time_ms() - t0;
+        if (el > timeout_ms && done) break;
+        TickType_t w = el >= timeout_ms ? 0 : pdMS_TO_TICKS(timeout_ms - el);
+        size_t n = xStreamBufferSend(o->sb, (const uint8_t *)pcm + done, bytes - done, w ? w : 0);
+        done += n;
+        if (!n && !w) break;
+    }
+    return (int)(done - done % o->frame_bytes);
+}
+
+t5_err_t t5_audio_out_pause(t5_audio_out_t *o, bool paused)
+{
+    if (!o || o->magic != OUT_MAGIC) return T5_ERR_INVALID_ARG;
+    t5_mutex_lock(s_mx);
+    o->paused = paused;
+    o->primed = false;           /* a pause isn't an underrun */
+    lock_update();
+    t5_mutex_unlock(s_mx);
+    wake_out();
+    return T5_OK;
+}
+
+uint32_t t5_audio_out_queued_ms(const t5_audio_out_t *o)
+{
+    if (!o || o->magic != OUT_MAGIC) return 0;
+    size_t b = xStreamBufferBytesAvailable(o->sb) + o->npend * o->frame_bytes;
+    return (uint32_t)(b * 1000 / (o->cfg.rate * o->frame_bytes));
+}
+
+t5_err_t t5_audio_out_drain(t5_audio_out_t *o, uint32_t timeout_ms)
+{
+    if (!o || o->magic != OUT_MAGIC) return T5_ERR_INVALID_ARG;
+    for (uint32_t t = 0; t5_audio_out_queued_ms(o) > 0; t += 10) {
+        if (t >= timeout_ms) return T5_ERR_TIMEOUT;
+        t5_delay_ms(10);
+    }
+    t5_delay_ms(30);             /* the I2S DMA still holds 20 ms */
+    return T5_OK;
+}
+
+t5_err_t t5_audio_out_close(t5_audio_out_t *o)
+{
+    if (!o || o->magic != OUT_MAGIC) return T5_ERR_INVALID_ARG;
+    t5_res_remove(o);
+    t5_mutex_lock(s_mx);
+    o->closing = true;
+    if (s_stream == o) s_stream = NULL;
+    lock_update();
+    t5_mutex_unlock(s_mx);
+    /* The output task may be using it (opening the codec first can take a
+     * while): wait for it to let go, rather than a fixed 25 ms. */
+    for (int i = 0; i < 200 && s_out_busy == o; i++) t5_delay_ms(5);
+    if (s_out_busy == o) {
+        T5_LOGE(TAG, "output task still using the stream after 1 s: leaking it");
+        return T5_ERR_TIMEOUT;
+    }
+    o->magic = 0;
+    vStreamBufferDeleteWithCaps(o->sb);
+    free(o);
+    wake_out();
+    return T5_OK;
+}
+
+t5_err_t t5_audio_tone(uint32_t hz, uint32_t ms)
+{
+    t5_audio_out_cfg_t c = { .rate = 48000, .channels = 1 };
+    t5_audio_out_t *o;
+    T5_RETURN_ON_ERR(t5_audio_out_open(&c, &o));
+    int16_t buf[480];
+    uint32_t phase = 0, inc = (uint32_t)(((uint64_t)hz << 32) / 48000);
+    for (uint32_t done = 0; done < ms; done += 10) {
+        for (int i = 0; i < 480; i++) {
+            phase += inc;
+            /* triangle from the phase: no libm on this path */
+            int32_t p = (int32_t)(phase >> 16) - 32768;
+            int32_t tri = (p < 0 ? -p : p) * 2 - 32768;
+            buf[i] = (int16_t)(tri / 4);
+        }
+        t5_audio_out_write(o, buf, sizeof buf, 100);
+    }
+    t5_audio_out_drain(o, ms + 500);
+    return t5_audio_out_close(o);
+}
+
+/* ---- public: input -------------------------------------------------------------------------- */
+static void in_release(void *h)
+{
+    t5_audio_in_close(h);
+}
+
+t5_err_t t5_audio_in_open(const t5_audio_in_cfg_t *cfg, t5_audio_in_t **out)
+{
+    if (!s_ready || !s_adc) return T5_ERR_NOT_FOUND;
+    if (!cfg || !out || cfg->rate < 8000 || cfg->rate > 48000 || (cfg->channels != 1 && cfg->channels != 2))
+        return T5_ERR_INVALID_ARG;
+    int pe = t5_core_perm_check(T5_CORE_PERM_MIC);
+    if (pe != T5_OK) return (t5_err_t)pe;
+    t5_audio_in_t *in = heap_caps_calloc(1, sizeof *in, MALLOC_CAP_SPIRAM);
+    if (!in) return T5_ERR_NO_MEM;
+    in->magic = IN_MAGIC;
+    in->cfg = *cfg;
+    if (!in->cfg.buffer_ms) in->cfg.buffer_ms = 200;
+    in->aec = cfg->aec && cfg->rate <= AEC_RATE && cfg->channels == 1;
+    if (in->aec && !t5_aec_init(&in->a, AEC_TAPS, AEC_DELAY)) {
+        free(in);
+        return T5_ERR_NO_MEM;
+    }
+    size_t sz = (size_t)cfg->rate * cfg->channels * 2 * in->cfg.buffer_ms / 1000;
+    in->sb = xStreamBufferCreateWithCaps(sz, 1, MALLOC_CAP_SPIRAM);
+    if (!in->sb) {
+        if (in->aec) t5_aec_free(&in->a);
+        free(in);
+        return T5_ERR_NO_MEM;
+    }
+    t5_resampler_init(&in->rs, in->aec ? AEC_RATE : T5_AUDIO_RATE, in->aec ? 1 : 2, cfg->rate);
+    t5_mutex_lock(s_mx);
+    if (s_input) {
+        t5_mutex_unlock(s_mx);
+        vStreamBufferDeleteWithCaps(in->sb);
+        if (in->aec) t5_aec_free(&in->a);
+        free(in);
+        return T5_ERR_BUSY;
+    }
+    /* The output side must be up before the input opens, and must not be
+     * reconfigured while the input task reads: both share one I2S port and
+     * esp_codec_dev reconfigures the pair on open. */
+    s_want_clock = true;
+    s_in_req_err = T5_ERR_TIMEOUT;
+    s_in_req = IN_REQ_OPEN;
+    t5_mutex_unlock(s_mx);
+    wake_out();
+    for (int i = 0; i < 100 && s_in_req != IN_REQ_NONE; i++) t5_delay_ms(10);
+    t5_mutex_lock(s_mx);
+    t5_err_t e = s_in_req == IN_REQ_NONE ? s_in_req_err : T5_ERR_TIMEOUT;
+    s_in_req = IN_REQ_NONE;
+    if (e != T5_OK) {
+        s_want_clock = false;
+        t5_mutex_unlock(s_mx);
+        vStreamBufferDeleteWithCaps(in->sb);
+        if (in->aec) t5_aec_free(&in->a);
+        free(in);
+        s_st.codec_errors++;
+        return e;
+    }
+    s_ref_r = s_ref_w;
+    s_input = in;
+    s_want_clock = false;
+    s_st.in_running = true;
+    t5_res_add(T5_RES_OTHER, in, in_release);   /* under the lock, as for output */
+    t5_mutex_unlock(s_mx);
+    xTaskNotifyGive(s_in_task);
+    t5_ev_media_t ev = { .on = true };
+    t5_event_post(T5_EV_MIC_STATE, &ev, sizeof ev);
+    *out = in;
+    return T5_OK;
+}
+
+int t5_audio_in_read(t5_audio_in_t *in, void *pcm, size_t bytes, uint32_t timeout_ms)
+{
+    if (!in || in->magic != IN_MAGIC || in->closing) return T5_ERR_INVALID_ARG;
+    size_t fb = in->cfg.channels * sizeof(int16_t);
+    bytes -= bytes % fb;
+    size_t n = xStreamBufferReceive(in->sb, pcm, bytes, pdMS_TO_TICKS(timeout_ms));
+    return (int)(n - n % fb);
+}
+
+t5_err_t t5_audio_in_close(t5_audio_in_t *in)
+{
+    if (!in || in->magic != IN_MAGIC) return T5_ERR_INVALID_ARG;
+    t5_res_remove(in);
+    t5_mutex_lock(s_mx);
+    in->closing = true;
+    if (s_input == in) s_input = NULL;
+    t5_mutex_unlock(s_mx);
+    /* The input task may be inside a block for this input (a read after a
+     * resume can take a while): it must let go before the input is freed.
+     * Sleeping 25 ms instead was a use-after-free (2026-11-07). */
+    for (int i = 0; i < 200 && s_in_busy == in; i++) t5_delay_ms(5);
+    if (s_in_busy == in) {
+        T5_LOGE(TAG, "input task still using the input after 1 s: leaking it");
+        return T5_ERR_TIMEOUT;
+    }
+    if (!s_input) {
+        s_in_req = IN_REQ_CLOSE;  /* the output task is still running: it clocked us */
+        wake_out();
+        for (int i = 0; i < 50 && s_in_req != IN_REQ_NONE; i++) t5_delay_ms(10);
+        s_st.in_running = false;
+    }
+    in->magic = 0;
+    vStreamBufferDeleteWithCaps(in->sb);
+    if (in->aec) t5_aec_free(&in->a);
+    free(in);
+    t5_ev_media_t ev = { .on = false };
+    t5_event_post(T5_EV_MIC_STATE, &ev, sizeof ev);
+    return T5_OK;
+}
+
+bool t5_audio_in_active(void)
+{
+    return s_input != NULL;
+}
+
+float t5_audio_in_gain_db(void)
+{
+    return s_set.in_gain;
+}
+
+t5_err_t t5_audio_in_set_gain_db(float db)
+{
+    if (db < 0 || db > 37.5f) return T5_ERR_INVALID_ARG;
+    s_set.in_gain = db;
+    audio_hw_set_in_gain(db);
+    return T5_OK;
+}
+
+void t5_audio_stats(t5_audio_stats_t *out)
+{
+    *out = s_st;
+    out->ready = s_ready;
+    out->muted = s_set.muted;
+    out->volume = s_set.volume;
+}
+
+bool t5_audio_ready(void)
+{
+    return s_ready;
+}
+
+/* ---- power ------------------------------------------------------------------------------------- */
+static t5_err_t audio_suspend(void *arg)
+{
+    (void)arg;
+    /* Sleep only happens without an audio lock, so nothing should be
+     * playing: make sure both codecs are powered down. */
+    s_suspended = true;
+    for (int i = 0; i < 10 && s_st.out_running; i++) t5_delay_ms(10);
+    t5_mutex_lock(s_mx);
+    if (s_input) audio_hw_in_close();
+    t5_mutex_unlock(s_mx);
+    return T5_OK;
+}
+
+static t5_err_t audio_resume(void *arg)
+{
+    (void)arg;
+    t5_mutex_lock(s_mx);
+    if (s_input) audio_hw_in_open(s_set.in_gain);
+    t5_mutex_unlock(s_mx);
+    s_suspended = false;
+    wake_out();
+    return T5_OK;
+}
+
+t5_err_t t5_audio_init(void)
+{
+    if (s_ready) return T5_OK;
+    s_mx = t5_mutex_create();
+    if (!s_mx) return T5_ERR_NO_MEM;
+    load_settings();
+    T5_RETURN_ON_ERR(audio_hw_init(&s_dac, &s_adc));
+    s_ref = heap_caps_calloc(REF_RING, sizeof *s_ref, MALLOC_CAP_SPIRAM);
+    s_cmd = xQueueCreate(8, sizeof(int));
+    if (!s_ref || !s_cmd) return T5_ERR_NO_MEM;
+    /* Stacks in PSRAM: internal RAM is what the C6 link and the H.264
+     * encoder need, and these tasks never touch flash. */
+    if (xTaskCreatePinnedToCoreWithCaps(out_task, "audio.out", 6144, NULL, AUDIO_PRIO, &s_out_task, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS ||
+        xTaskCreatePinnedToCoreWithCaps(in_task, "audio.in", 8192, NULL, AUDIO_PRIO, &s_in_task, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        return T5_ERR_NO_MEM;
+    }
+    s_st.headphones = audio_hw_headphones();
+    const t5_suspend_hook_t hook = {
+        .name = "audio", .prio = T5_SUSPEND_PRIO_MEDIA, .budget_ms = 150,
+        .suspend = audio_suspend, .resume = audio_resume,
+    };
+    T5_LOG_ON_ERR(TAG, t5_power_register_hook(&hook));
+    T5_LOG_ON_ERR(TAG, t5_autosave_register("audio", save_settings, NULL));
+    s_ready = true;
+    T5_LOGI(TAG, "audio up: volume %d%s, speaker/headphones %s", s_set.volume, s_set.muted ? " (muted)" : "",
+            s_st.headphones ? "headphones" : "speaker");
+    return T5_OK;
+}
