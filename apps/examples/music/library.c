@@ -503,7 +503,10 @@ void lib_rescan_playlists(lib_t *l)
         while ((e = readdir(d))) {
             if (e->d_name[0] == '.' || !(ext_is(e->d_name, ".m3u") || ext_is(e->d_name, ".m3u8"))) continue;
             char p[M3U_PATH_MAX];
-            snprintf(p, sizeof p, PLAYLIST_DIR "/%s", e->d_name);
+            size_t dl = sizeof PLAYLIST_DIR - 1, nl = strlen(e->d_name);
+            if (dl + 1 + nl >= sizeof p) continue;          /* too long a name to be one of ours */
+            memcpy(p, PLAYLIST_DIR "/", dl + 1);
+            memcpy(p + dl + 1, e->d_name, nl + 1);
             add_playlist(l, &cap, p, e->d_name);
         }
         closedir(d);
