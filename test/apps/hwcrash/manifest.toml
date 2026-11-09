@@ -1,0 +1,9 @@
+id = "com.t5.test.hwcrash"
+name = "HW Crash"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+
+[permissions]
+ble = true
