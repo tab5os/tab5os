@@ -4,5 +4,7 @@
 cmake_minimum_required(VERSION 3.22)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../VERSION" T5_VERSION LIMIT_COUNT 1)
+# Re-run CMake when VERSION changes, so the image never keeps a stale version.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../VERSION")
 set(PROJECT_VER "t5-c6-${T5_VERSION}")
 project(tab5os_c6)

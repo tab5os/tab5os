@@ -14,6 +14,8 @@ set(SDKCONFIG_DEFAULTS "${T5_FW}/sdkconfig.board;sdkconfig.defaults")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(MINIMAL_BUILD ON)
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../VERSION" T5_VERSION LIMIT_COUNT 1)
+# Re-run CMake when VERSION changes, so the image never keeps a stale version.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../VERSION")
 set(PROJECT_VER "${T5_VERSION}")
 project(tab5recovery)
 
