@@ -45,7 +45,8 @@ bool t5_ui_lock_timeout(uint32_t ms);
 void t5_ui_unlock(void);
 bool t5_ui_on_ui_task(void);
 
-/* Run fn(arg) on the UI task soon. Safe from any task. */
+/* Run fn(arg) on the UI task soon. Safe from any task. Calls run in the
+ * order they were posted (with t5_ui_sync calls too). */
 typedef void (*t5_ui_fn_t)(void *arg);
 t5_err_t t5_ui_async(t5_ui_fn_t fn, void *arg);
 /* Run fn(arg) on the UI task and wait for it (up to timeout_ms). */

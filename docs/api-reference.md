@@ -413,7 +413,7 @@ Native apps may call the 345 Tab5 OS functions below, 1908 LVGL 9.6 functions (t
   Open or close quick settings, go home.
 - `t5_err_t t5_shell_set_app_bar(bool shown);`
 - `t5_err_t t5_shell_set_fullscreen(bool on);`
-  The app's screen (t5_app_screen) is padded clear of them, so content built under it never sits beneath a bar. t5_shell_get_insets() says how much they take (dp), and T5_EV_UI_INSETS is posted when that changes. Full screen hides all three and the padding goes to 0. The swipes still work: touching the bottom edge shows the handle for a moment, and so does entering full screen. Everything resets when the app leaves the foreground. Any task, unless it says UI task.
+  much they take (dp), and T5_EV_UI_INSETS is posted when that changes. Full screen hides all three and the padding goes to 0. The swipes still work: touching the bottom edge shows the handle for a moment, and so does entering full screen. Everything resets when the app leaves the foreground. Any task, unless it says UI task. Off the UI task the setters are queued, in order, and take effect on the UI task a moment later: t5_shell_fullscreen() and t5_shell_get_insets() show the change then.
 - `t5_err_t t5_shell_set_title(const char * title);`
   The app bar's text. NULL goes back to the manifest's title (or name).
 - `t5_err_t t5_shell_toast(const char * text);`

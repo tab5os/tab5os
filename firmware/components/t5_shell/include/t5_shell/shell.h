@@ -37,7 +37,9 @@ t5_err_t t5_shell_register(void);
  * Full screen hides all three and the padding goes to 0. The swipes still
  * work: touching the bottom edge shows the handle for a moment, and so does
  * entering full screen. Everything resets when the app leaves the
- * foreground. Any task, unless it says UI task. */
+ * foreground. Any task, unless it says UI task. Off the UI task the setters
+ * are queued, in order, and take effect on the UI task a moment later:
+ * t5_shell_fullscreen() and t5_shell_get_insets() show the change then. */
 t5_err_t t5_shell_set_fullscreen(bool on);
 bool t5_shell_fullscreen(void);
 t5_err_t t5_shell_set_app_bar(bool shown);

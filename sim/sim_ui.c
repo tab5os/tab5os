@@ -2,6 +2,7 @@
  * t5_ui.h on the simulator: one thread, so locking is trivial; rotation
  * changes the window's resolution. Counters come from LVGL's render events.
  */
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
@@ -66,9 +67,45 @@ bool t5_ui_lock_timeout(uint32_t ms) { return true; }
 void t5_ui_unlock(void) {}
 bool t5_ui_on_ui_task(void) { return true; }
 
+/* In posting order, as on the device (t5_ui/ui.c): one LVGL call drains a
+ * FIFO, since LVGL runs timers made in one frame newest first. */
+typedef struct sim_async {
+    t5_ui_fn_t fn;
+    void *arg;
+    struct sim_async *next;
+} sim_async_t;
+static sim_async_t *s_qh, *s_qt;
+static bool s_drain;
+
+static void sim_drain(void *unused)
+{
+    (void)unused;
+    sim_async_t *a = s_qh;
+    s_qh = s_qt = NULL;
+    s_drain = false;
+    while (a) {
+        sim_async_t *next = a->next;
+        a->fn(a->arg);
+        free(a);
+        a = next;
+    }
+}
+
 t5_err_t t5_ui_async(t5_ui_fn_t fn, void *arg)
 {
-    return lv_async_call(fn, arg) == LV_RESULT_OK ? T5_OK : T5_ERR_NO_MEM;
+    sim_async_t *a = calloc(1, sizeof *a);
+    if (!a) return T5_ERR_NO_MEM;
+    if (!s_drain && lv_async_call(sim_drain, NULL) != LV_RESULT_OK) {
+        free(a);
+        return T5_ERR_NO_MEM;
+    }
+    s_drain = true;
+    a->fn = fn;
+    a->arg = arg;
+    if (s_qt) s_qt->next = a;
+    else s_qh = a;
+    s_qt = a;
+    return T5_OK;
 }
 
 t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms)

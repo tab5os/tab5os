@@ -779,10 +779,11 @@ typedef struct {
     SemaphoreHandle_t sem;
 } sync_wait_t;
 
-typedef struct {
+typedef struct async {
     t5_ui_fn_t fn;
     void *arg;
     sync_wait_t *wait;
+    struct async *next;
 } async_t;
 
 /* Calls waiting for the UI task. The common case comes from a fixed pool, so
@@ -820,15 +821,43 @@ static void async_put(async_t *a)
     else heap_caps_free(a);
 }
 
-static void async_tramp(void *p)
+/* Posted calls run in the order they were posted. Each lv_async_call is a
+ * one-shot timer, and LVGL puts new timers at the head of its list, so calls
+ * posted within one frame used to run newest first (an app setting a label
+ * to "A" then "B" from a task ended on "A"). Instead they wait in this FIFO
+ * and one LVGL call drains it: the batch that was queued when it starts, so
+ * a call that posts again runs in the next one. Guarded by the UI lock. */
+static async_t *s_q_head, *s_q_tail;
+static bool s_drain_posted;
+
+static void async_drain(void *unused)
 {
-    async_t a = *(async_t *)p;
-    async_put(p);
-    a.fn(a.arg);
-    if (a.wait) {
-        a.wait->done = true;
-        xSemaphoreGive(a.wait->sem);
+    (void)unused;
+    async_t *a = s_q_head;
+    s_q_head = s_q_tail = NULL;
+    s_drain_posted = false;
+    while (a) {
+        async_t c = *a;
+        async_put(a);
+        c.fn(c.arg);
+        if (c.wait) {
+            c.wait->done = true;
+            xSemaphoreGive(c.wait->sem);
+        }
+        a = c.next;
     }
+}
+
+/* Take a not-yet-run call back out of the queue (UI lock held). */
+static bool async_unqueue(async_t *a)
+{
+    for (async_t **pp = &s_q_head, *prev = NULL; *pp; prev = *pp, pp = &(*pp)->next) {
+        if (*pp != a) continue;
+        *pp = a->next;
+        if (s_q_tail == a) s_q_tail = prev;
+        return true;
+    }
+    return false;
 }
 
 static t5_err_t post(t5_ui_fn_t fn, void *arg, sync_wait_t *wait, async_t **out)
@@ -840,9 +869,16 @@ static t5_err_t post(t5_ui_fn_t fn, void *arg, sync_wait_t *wait, async_t **out)
         t5_ui_unlock();
         return T5_ERR_BUSY;
     }
-    *a = (async_t){ fn, arg, wait };
-    lv_result_t r = lv_async_call(async_tramp, a);
-    if (r != LV_RESULT_OK) async_put(a);
+    *a = (async_t){ fn, arg, wait, NULL };
+    lv_result_t r = s_drain_posted ? LV_RESULT_OK : lv_async_call(async_drain, NULL);
+    if (r == LV_RESULT_OK) {
+        s_drain_posted = true;
+        if (s_q_tail) s_q_tail->next = a;
+        else s_q_head = a;
+        s_q_tail = a;
+    } else {
+        async_put(a);
+    }
     t5_ui_unlock();
     if (r != LV_RESULT_OK) return T5_ERR_NO_MEM;
     if (out) *out = a;
@@ -870,7 +906,7 @@ t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms)
          * so with the lock held the call has either finished or not
          * started: cancel it in the second case. */
         t5_ui_lock();
-        bool cancelled = !w.done && lv_async_call_cancel(async_tramp, a) == LV_RESULT_OK;
+        bool cancelled = !w.done && async_unqueue(a);
         if (cancelled) async_put(a);
         t5_ui_unlock();
         if (cancelled) e = T5_ERR_TIMEOUT;
