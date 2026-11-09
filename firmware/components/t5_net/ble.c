@@ -1456,7 +1456,7 @@ t5_err_t t5_ble_enable(bool on)
     }
     /* The stack starts and stops on the net task, which owns the C6. */
     net_ble_changed();
-    return on && !s_link_up ? T5_ERR_STATE : T5_OK;   /* starts when the C6 is up */
+    return T5_OK;   /* the net task powers the C6 if it was off; the stack starts once it is up */
 }
 
 bool t5_ble_enabled(void)

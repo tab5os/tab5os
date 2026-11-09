@@ -97,7 +97,7 @@ static void scan_clicked(lv_event_t *e)
 {
     (void)e;
     if (!t5_ble_ready()) {
-        T5_IGNORE(t5_shell_toast("Turn on Wi-Fi and Bluetooth in Settings"));
+        T5_IGNORE(t5_shell_toast("Turn on Bluetooth in Settings"));
         return;
     }
     if (s.job == JOB_NONE) s.job = JOB_SCAN;
@@ -267,8 +267,7 @@ static void on_create(t5_app_t *app)
         md_appbar_add_action(bar, MD_ICON_SEARCH, scan_clicked, NULL);
         s.serve_btn = md_appbar_add_action(bar, MD_ICON_BLUETOOTH, serve_clicked, NULL);
     }
-    s.status = md_label_create(scr, t5_ble_ready() ? "Tap search to scan." : "Bluetooth is off: turn on Wi-Fi and "
-                                                                             "Bluetooth in Settings.",
+    s.status = md_label_create(scr, t5_ble_ready() ? "Tap search to scan." : "Bluetooth is off: turn it on in Settings.",
                                MD_TYPE_BODY2);
     lv_obj_set_style_pad_all(s.status, T5_DP(16), 0);
     s.list = md_list_create(scr, 0, 72, bind, clicked, NULL);

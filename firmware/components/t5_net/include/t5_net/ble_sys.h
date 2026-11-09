@@ -4,8 +4,10 @@
  * app API (t5_net/ble.h), so they share the radio: a system scan while an
  * app scans gets T5_ERR_BUSY, and links count against T5_BLE_MAX_LINKS.
  *
- * BLE lives and dies with the C6: when t5_net powers it down (Sleep with no
- * net lock, Wi-Fi or Bluetooth off, a C6 reset) the stack stops and links
+ * BLE lives and dies with the C6. t5_net runs the C6 while Wi-Fi or
+ * Bluetooth is on (Bluetooth alone starts it without the Wi-Fi driver).
+ * When it powers the C6 down (Sleep with no net lock, both off, a C6
+ * reset) the stack stops and links
  * drop (T5_EV_BLE_DISCONNECTED); it starts again when the C6 comes back.
  * While a link is up BLE holds a T5_LOCK_NET wake lock so Sleep keeps the
  * C6 up.

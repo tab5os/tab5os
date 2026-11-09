@@ -154,7 +154,7 @@ The CA bundle is Mozilla's full list, with cross-signed chains supported. `ca_pe
 
 ## Bluetooth LE
 
-`t5/ble.h` needs the `ble` permission and follows the networking conventions above: handles (scanner, link, advertiser, server) close when the app exits, an app holds at most 6, timeouts are in milliseconds, events are pulled with `*_next()` calls. The radio is the ESP32-C6, which is Bluetooth LE only, and it is up while Wi-Fi and Bluetooth are both on in Settings (`t5_ble_ready()`). Up to 3 links at once in either role. See the [Bluetooth guide](wiki/Bluetooth.md) for the hardware's limits and examples of each role.
+`t5/ble.h` needs the `ble` permission and follows the networking conventions above: handles (scanner, link, advertiser, server) close when the app exits, an app holds at most 6, timeouts are in milliseconds, events are pulled with `*_next()` calls. The radio is the ESP32-C6, which is Bluetooth LE only, and Bluetooth works whenever it is on in Settings, with Wi-Fi on or off (`t5_ble_ready()`). Up to 3 links at once in either role. See the [Bluetooth guide](wiki/Bluetooth.md) for the hardware's limits and examples of each role.
 
 ```c
 t5_ble_conn_t *c;

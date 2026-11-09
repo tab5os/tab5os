@@ -29,7 +29,7 @@
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
-#include "t5_net/ble.h"
+#include "t5_net/ble_sys.h"
 #include "t5_net/net.h"
 #include "t5_net/netcfg.h"
 #include "t5_net/sock.h"
@@ -300,6 +300,40 @@ static void fwversion(void)
     t5_mutex_unlock(s_mtx);
 }
 
+/* The C6 runs while Wi-Fi or Bluetooth is on; the Wi-Fi driver (scans,
+ * joining networks) only while Wi-Fi is. So Bluetooth works with Wi-Fi off. */
+static bool wifi_wanted(void)
+{
+    return !(s_cfg.flags & T5_NETCFG_FLAG_DISABLED);
+}
+
+static bool radio_wanted(void)
+{
+    return wifi_wanted() || t5_ble_enabled();
+}
+
+/* Wi-Fi off, the C6 left up (for Bluetooth). */
+static void wifi_down(void)
+{
+    bool connected = s_st.state == T5_NET_CONNECTED;
+    if (s_wifi_up) {
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        s_wifi_up = false;
+    }
+    s_got_ip = false;
+    s_scanning = false;
+    s_ps = false;
+    t5_mutex_lock(s_mtx);
+    memset(s_st.ip, 0, sizeof s_st.ip);
+    s_st.ssid[0] = 0;
+    s_st.rssi = 0;
+    s_st.power_save = false;
+    t5_mutex_unlock(s_mtx);
+    set_state(T5_NET_OFF);
+    if (connected) post_ev(T5_EV_NET_DISCONNECTED, T5_OK);
+}
+
 static void power_down(void)
 {
     s_t_link_change = t5_time_ms();
@@ -351,6 +385,7 @@ static t5_err_t power_up(void)
         T5_RETURN_ON_ERR(t5_rail_acquire_system(T5_RAIL_WLAN, "net", T5_RAIL_KEEP_IN_SLEEP, &s_rail));
         t5_delay_ms(POWER_SETTLE_MS);
     }
+    bool c6_new = !s_hosted_up;
     if (!s_hosted_up) {
         if (esp_hosted_init() != 0 || esp_hosted_connect_to_slave() != 0) {
             T5_LOGE(TAG, "C6 link did not come up");
@@ -359,7 +394,7 @@ static t5_err_t power_up(void)
         }
         s_hosted_up = true;
     }
-    if (!s_wifi_up) {
+    if (!s_wifi_up && wifi_wanted()) {
         if (!s_netif) s_netif = esp_netif_create_default_wifi_sta();
         wifi_init_config_t wc = WIFI_INIT_CONFIG_DEFAULT();
         if (esp_wifi_init(&wc) != ESP_OK) return T5_ERR_FAIL;
@@ -370,6 +405,21 @@ static t5_err_t power_up(void)
             return T5_ERR_FAIL;
         }
         s_wifi_up = true;
+    }
+    if (!wifi_wanted()) {
+        /* Bluetooth only: the C6 is up, the Wi-Fi driver stays off. */
+        if (c6_new) {
+            fwversion();
+            s_t_link_change = t5_time_ms();
+            T5_LOGI(TAG, "C6 up for Bluetooth (Wi-Fi off) in %u ms", (unsigned)(t5_time_ms() - s_t_power_on));
+            post_ev(T5_EV_NET_C6_UP, T5_OK);
+            s_health_fails = 0;
+            s_next_health = t5_time_ms() + HEALTH_PERIOD_MS;
+            s_start_backoff = START_RETRY_MIN_MS;
+        }
+        set_state(T5_NET_OFF);
+        t5_ble_on_link(true);
+        return T5_OK;
     }
     fwversion();
     s_t_link_change = t5_time_ms();
@@ -683,7 +733,10 @@ static t5_err_t c6_update(bool force)
 
 static void suspend(void)
 {
-    if (t5_wakelock_count(T5_LOCK_NET) > 0 && s_wifi_up) {
+    if (t5_wakelock_count(T5_LOCK_NET) > 0 && s_hosted_up && !s_wifi_up) {
+        /* Bluetooth only, with a link or an app's handle open: keep the C6. */
+        T5_LOGI(TAG, "sleep: C6 kept up for Bluetooth");
+    } else if (t5_wakelock_count(T5_LOCK_NET) > 0 && s_wifi_up) {
         /* With connections open (a download, a socket an app is using),
          * the light power save: MAX_MODEM sleeps through DTIM intervals
          * and cuts throughput to a trickle. */
@@ -694,7 +747,7 @@ static void suspend(void)
         s_st.power_save = true;
         t5_mutex_unlock(s_mtx);
         T5_LOGI(TAG, "sleep: Wi-Fi kept up (%s)", busy ? "connections open" : "net lock held, power save");
-    } else if (s_st.state != T5_NET_OFF) {
+    } else if (s_hosted_up || s_st.state != T5_NET_OFF) {
         s_suspended_off = true;
         power_down();
         T5_LOGI(TAG, "sleep: C6 off");
@@ -712,7 +765,7 @@ static void resume(void)
     }
     if (s_suspended_off) {
         s_suspended_off = false;
-        if (!(s_cfg.flags & T5_NETCFG_FLAG_DISABLED)) start();
+        if (radio_wanted()) start();
     }
 }
 
@@ -742,7 +795,7 @@ static void handle(const msg_t *m)
             t5_mutex_unlock(s_mtx);
             cfg_save();
         }
-        if (s_st.state == T5_NET_OFF || s_st.state == T5_NET_FAILED) start();
+        if (s_st.state == T5_NET_OFF || s_st.state == T5_NET_FAILED) start();   /* the C6 may be up already, for Bluetooth */
         break;
     case CMD_STOP:
         t5_mutex_lock(s_mtx);
@@ -750,7 +803,8 @@ static void handle(const msg_t *m)
         t5_mutex_unlock(s_mtx);
         cfg_save();
         s_next_start = 0;
-        power_down();
+        if (t5_ble_enabled() && s_hosted_up) wifi_down();    /* Bluetooth keeps the C6 */
+        else power_down();
         break;
     case CMD_SCAN:
         start_scan(false);
@@ -806,7 +860,11 @@ static void handle(const msg_t *m)
         cfg_save();
         break;
     case CMD_BLE:
-        t5_ble_on_link(s_hosted_up);
+        /* Bluetooth on powers the C6 even with Wi-Fi off; off powers it down
+         * unless Wi-Fi still wants it. */
+        if (t5_ble_enabled() && !s_hosted_up && !s_suspended_off) start();
+        else if (!radio_wanted() && s_hosted_up) power_down();
+        else t5_ble_on_link(s_hosted_up);
         break;
     case EV_STA_START:
         break;
@@ -854,20 +912,11 @@ static void handle(const msg_t *m)
 static void timers(void)
 {
     uint32_t now = t5_time_ms();
-    if (due(s_next_start, now) && !(s_cfg.flags & T5_NETCFG_FLAG_DISABLED)) {
+    if (due(s_next_start, now) && radio_wanted()) {
         s_next_start = 0;
         start();
     }
-    if (!s_wifi_up) return;
-    if (due(s_next_connect, now)) {
-        s_next_connect = 0;
-        if (s_auto && s_target[0] && s_st.state != T5_NET_CONNECTED) do_connect(s_target, NULL);
-    }
-    if (due(s_next_scan, now)) {
-        s_next_scan = 0;
-        if (s_auto && s_st.state == T5_NET_IDLE) start_scan(true);
-    }
-    if (due(s_next_health, now)) {
+    if (s_hosted_up && due(s_next_health, now)) {
         s_next_health = now + HEALTH_PERIOD_MS;
         esp_hosted_coprocessor_fwver_t v;
         if (esp_hosted_get_coprocessor_fwversion(&v) == ESP_OK) {
@@ -887,12 +936,21 @@ static void timers(void)
             }
         }
     }
+    if (!s_wifi_up) return;
+    if (due(s_next_connect, now)) {
+        s_next_connect = 0;
+        if (s_auto && s_target[0] && s_st.state != T5_NET_CONNECTED) do_connect(s_target, NULL);
+    }
+    if (due(s_next_scan, now)) {
+        s_next_scan = 0;
+        if (s_auto && s_st.state == T5_NET_IDLE) start_scan(true);
+    }
 }
 
 static void net_task(void *arg)
 {
     (void)arg;
-    if (!(s_cfg.flags & T5_NETCFG_FLAG_DISABLED)) start();
+    if (radio_wanted()) start();
     for (;;) {
         msg_t m;
         if (xQueueReceive(s_q, &m, pdMS_TO_TICKS(500)) == pdTRUE) handle(&m);

@@ -5,10 +5,10 @@
  *
  * The radio: the controller runs on the ESP32-C6 (HCI over the esp_hosted
  * SDIO link) and NimBLE runs here. Bluetooth LE only: no Classic Bluetooth
- * (no audio profiles, no SPP). It works while the C6 is up, which needs
- * Wi-Fi and Bluetooth both on in Settings (they share the chip):
- * t5_ble_ready() says so, and calls return T5_ERR_STATE otherwise. When the
- * C6 goes down (either turned off, a C6 reset) links drop, a scan ends and
+ * (no audio profiles, no SPP). It works while Bluetooth is on in Settings,
+ * with Wi-Fi on or off (the C6 runs while either is on): t5_ble_ready()
+ * says so, and calls return T5_ERR_STATE otherwise. When the C6 goes down
+ * (Bluetooth turned off, Sleep with no handle open, a C6 reset) links drop, a scan ends and
  * reads fail; an advertiser and a server stay open and come back on the air
  * by themselves when it is up again.
  *

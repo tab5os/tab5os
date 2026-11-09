@@ -11,7 +11,7 @@ Include `<t5/ble.h>` and declare `ble = true` in `[permissions]`. Everything her
 | Classic Bluetooth | No: the C6 has none. No A2DP or HFP audio, no SPP serial |
 | LE Audio | No: not available on the C6 with this ESP-IDF |
 | Links | 3 at once (`T5_BLE_MAX_LINKS`), every app's and the system's, in either role |
-| Power | Bluetooth works while the C6 is up: **Wi-Fi and Bluetooth both on** in Settings (they share the chip). `t5_ble_ready()` says so; calls return `T5_ERR_STATE` otherwise. While your app has a handle open the OS holds a net wake lock, so Sleep keeps the radio up |
+| Power | Bluetooth works whenever it is on in Settings, with Wi-Fi on or off: the C6 runs while either is on, and with Wi-Fi off only its Bluetooth side is started. `t5_ble_ready()` says so; calls return `T5_ERR_STATE` otherwise. While your app has a handle open the OS holds a net wake lock, so Sleep keeps the radio up |
 
 When the C6 goes down (turned off, a C6 reset) links drop and a scan ends. Advertisers and servers stay open and come back on the air by themselves.
 
