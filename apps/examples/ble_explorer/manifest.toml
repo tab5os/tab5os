@@ -8,6 +8,3 @@ description = "Scan for Bluetooth LE devices, read them, and act as a battery-le
 
 [permissions]
 ble = true
-
-[shell]
-app_bar = true

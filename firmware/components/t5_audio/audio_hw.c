@@ -3,6 +3,8 @@
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "t5_bsp/xpin.h"
 #include "t5_core/log.h"
 #include "t5_i2c/t5_i2c.h"
@@ -11,6 +13,8 @@
 #include "audio_hw.h"
 
 static const char *TAG = "t5.audio";
+
+#define AUDIO_HW_CLK_SRC I2S_CLK_SRC_APLL
 
 /* esp_codec_dev register access through the bus broker, so codec traffic is
  * serialised with every other device and counted in `i2c stats`. */
@@ -55,6 +59,11 @@ static i2s_chan_handle_t s_tx, s_rx;
 static const audio_codec_data_if_t *s_data;
 static esp_codec_dev_handle_t s_out, s_in;
 static bool s_out_open, s_in_open;
+/* Idle: the ES8388 stays powered with its outputs muted (soft ramp) and the
+ * I2S clocks stopped. Powering its DACs or output drivers down and up again
+ * steps the headphone line: a click at every pause and play. */
+static bool s_out_standby;
+#define STANDBY_RAMP_MS 30            /* the DAC's soft mute: 0.5 dB per 4 LRCK, to -96 dB in 16 ms */
 static t5_rail_hold_t *s_spk;
 
 static void ctrl_init(t5_ctrl_t *t, t5_i2c_dev_t *dev)
@@ -73,6 +82,32 @@ static esp_codec_dev_sample_info_t fs(void)
         .bits_per_sample = 16, .channel = T5_AUDIO_CH, .sample_rate = T5_AUDIO_RATE, .mclk_multiple = 256,
     };
     return f;
+}
+
+static void es8388_set(uint8_t reg, uint8_t clear, uint8_t set)
+{
+    uint8_t v = 0;
+    if (t5_i2c_read(s_dac_ctrl.dev, reg, &v, 1) != T5_OK) return;
+    v = (uint8_t)((v & ~clear) | set);
+    T5_LOG_ON_ERR(TAG, t5_i2c_write(s_dac_ctrl.dev, reg, &v, 1));
+}
+
+/* What esp_codec_dev's ES8388 driver leaves differently from Everest's
+ * playback sequence (ES8388 user guide 11.3) and M5Stack's Tab5 setup. We
+ * only play through the ES8388 (the mics are on the ES7210):
+ *   0x00 EnRef: the analog reference on (the driver writes 0x12, which
+ *        turns it off)
+ *   0x03 ADC and line inputs, with their +24 dB preamp, powered down
+ *   0x02 the ADC's DLL, state machine and reference down (DAC side on)
+ *   0x19 DACSoftRamp: volume and mute changes ramp instead of stepping,
+ *        so they don't click
+ * The driver doesn't touch these again on start and stop. */
+static void es8388_tune(void)
+{
+    es8388_set(0x00, 0, 0x04);
+    es8388_set(0x03, 0, 0xff);
+    es8388_set(0x02, 0, 0xaa);
+    es8388_set(0x19, 0, 0x20);
 }
 
 t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
@@ -103,11 +138,18 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
         },
     };
     std.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    /* MCLK from the APLL (24.576 MHz / 2), not the default. Before P4 v3 the
+     * default is the 40 MHz XTAL, and 12.288 MHz from it is a 3.255 fractional
+     * divide: MCLK periods alternate between 75 and 100 ns, and the ES8388's
+     * DAC turns that jitter into hiss under anything playing. */
+    std.clk_cfg.clk_src = AUDIO_HW_CLK_SRC;
     if (i2s_channel_init_std_mode(s_tx, &std) != ESP_OK || i2s_channel_init_std_mode(s_rx, &std) != ESP_OK ||
         i2s_channel_enable(s_tx) != ESP_OK || i2s_channel_enable(s_rx) != ESP_OK) {
         return T5_ERR_IO;
     }
-    audio_codec_i2s_cfg_t ic = { .port = I2S_NUM_0, .rx_handle = s_rx, .tx_handle = s_tx };
+    /* esp_codec_dev sets the clock again on every open: the same source. */
+    audio_codec_i2s_cfg_t ic = { .port = I2S_NUM_0, .rx_handle = s_rx, .tx_handle = s_tx,
+                                 .clk_src = AUDIO_HW_CLK_SRC };
     s_data = audio_codec_new_i2s_data(&ic);
     if (!s_data) return T5_ERR_NO_MEM;
 
@@ -150,7 +192,11 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
      * known state (the factory firmware may have left them running). */
     if (s_out) {
         esp_codec_dev_sample_info_t f = fs();
-        if (esp_codec_dev_open(s_out, &f) == ESP_CODEC_DEV_OK) esp_codec_dev_close(s_out);
+        if (esp_codec_dev_open(s_out, &f) == ESP_CODEC_DEV_OK) {
+            es8388_tune();          /* the ADC side off */
+            s_out_open = true;
+            audio_hw_out_close(true);   /* idle from boot: the first sound doesn't click either */
+        }
     }
     if (s_in) {
         esp_codec_dev_sample_info_t f = fs();
@@ -163,26 +209,47 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
 t5_err_t audio_hw_out_open(int volume, bool muted)
 {
     if (!s_out) return T5_ERR_NOT_FOUND;
+    if (s_out_open && s_out_standby) {                 /* clocks on, then the soft unmute */
+        if (i2s_channel_enable(s_tx) != ESP_OK) return T5_ERR_IO;
+        s_out_standby = false;
+        esp_codec_dev_set_out_vol(s_out, volume);
+        esp_codec_dev_set_out_mute(s_out, muted);
+        return T5_OK;
+    }
     if (s_out_open) return T5_OK;
     esp_codec_dev_sample_info_t f = fs();
     if (esp_codec_dev_open(s_out, &f) != ESP_CODEC_DEV_OK) return T5_ERR_IO;
+    es8388_tune();
     s_out_open = true;
     esp_codec_dev_set_out_vol(s_out, volume);
     esp_codec_dev_set_out_mute(s_out, muted);
     return T5_OK;
 }
 
-void audio_hw_out_close(void)
+void audio_hw_out_close(bool keep_outputs)
 {
     if (!s_out_open) return;
     audio_hw_speaker(false);
+    if (keep_outputs) {
+        if (s_out_standby) return;
+        /* mute with the soft ramp while the clocks still run, then stop them */
+        esp_codec_dev_set_out_mute(s_out, true);
+        vTaskDelay(pdMS_TO_TICKS(STANDBY_RAMP_MS));
+        i2s_channel_disable(s_tx);
+        s_out_standby = true;
+        return;
+    }
+    if (s_out_standby) {                               /* a full close wants the clocks for its sequence */
+        if (i2s_channel_enable(s_tx) == ESP_OK) s_out_standby = false;
+    }
     esp_codec_dev_close(s_out);
     s_out_open = false;
+    s_out_standby = false;
 }
 
 t5_err_t audio_hw_write(const int16_t *pcm, size_t bytes)
 {
-    if (!s_out_open) return T5_ERR_STATE;
+    if (!s_out_open || s_out_standby) return T5_ERR_STATE;
     return esp_codec_dev_write(s_out, (void *)pcm, (int)bytes) == ESP_CODEC_DEV_OK ? T5_OK : T5_ERR_IO;
 }
 
@@ -217,7 +284,7 @@ void audio_hw_set_volume(int pct)
 
 void audio_hw_set_mute(bool on)
 {
-    if (s_out_open) esp_codec_dev_set_out_mute(s_out, on);
+    if (s_out_open && !s_out_standby) esp_codec_dev_set_out_mute(s_out, on);   /* idle: on the next open */
 }
 
 void audio_hw_set_in_gain(float db)

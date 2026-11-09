@@ -99,10 +99,10 @@ The section needs `background_wake = true`. See [Power and background](Power-and
 
 ```toml
 [shell]
-app_bar = true          # the shell's 48 dp app bar with the title (default false)
-title = "Air Log"       # its text, at most 47 bytes (default: name)
 fullscreen = false      # start in full screen (default false)
 ```
+
+The shell doesn't draw a title bar. `app_bar` and `title`, from the first 0.1.0 SDK, are refused by `t5 pack`; packages already built with them still install, without the bar.
 
 All optional; unknown keys are errors. The app can change each at run time ([UI guide](UI-Guide.md#shell-bars)).
 

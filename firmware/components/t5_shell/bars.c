@@ -1,11 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
- * The bars the shell draws around an app's screen, besides the status bar:
+ * The bar the shell draws around an app's screen, besides the status bar.
+ * There is no app bar: an app that wants a title or actions draws its own
+ * (md_appbar_create, md_page_create).
  *
- *   App bar      48 dp under the status bar with the app's title ([shell]
- *                app_bar in the manifest, or t5_shell_set_app_bar). The app
- *                may add actions to it (t5_shell_app_bar). One per app: made
- *                when the app's screen is, deleted with it, so the app's
- *                actions never outlive its code.
  *   Gesture bar  a handle centred in a 16 dp strip at the bottom: swipe up
  *                from here to go home. The app's screen is padded clear of
  *                the strip. In full screen it is hidden; a finger on the
@@ -13,7 +10,7 @@
  *                and entering full screen shows it for SHELL_PEEK_MS, so the
  *                way out stays visible.
  *
- * Both live on lv_layer_top() behind everything else there (quick
+ * It lives on lv_layer_top() behind everything else there (quick
  * settings, menus, dialogs, the keyboard). UI task only.
  */
 #include "shell_priv.h"
@@ -21,48 +18,9 @@
 #define HANDLE_W_DP 96
 #define HANDLE_H_DP 4
 
-static lv_obj_t *s_appbar, *s_handle;
+static lv_obj_t *s_handle;
 static lv_timer_t *s_peek;
 static bool s_handle_wanted;   /* shown outside full screen */
-
-/* ---- app bar ---------------------------------------------------------------------- */
-static void appbar_deleted(lv_event_t *e)
-{
-    if (lv_event_get_target_obj(e) == s_appbar) s_appbar = NULL;
-}
-
-void bars_appbar_create(const char *title)
-{
-    bars_appbar_delete();
-    void *saved = shell_sys_enter();
-    s_appbar = md_appbar_create(lv_layer_top(), title, NULL, NULL, NULL);
-    lv_obj_add_event_cb(s_appbar, appbar_deleted, LV_EVENT_DELETE, NULL);
-    lv_obj_set_y(s_appbar, T5_DP(SHELL_STATUS_H_DP));
-    lv_obj_move_to_index(s_appbar, 0);
-    lv_obj_set_hidden(s_appbar, true);
-    shell_sys_leave(saved);
-}
-
-void bars_appbar_delete(void)
-{
-    if (s_appbar) lv_obj_delete(s_appbar);    /* appbar_deleted clears it */
-    s_appbar = NULL;
-}
-
-void bars_appbar_show(bool shown)
-{
-    if (s_appbar && lv_obj_is_hidden(s_appbar) == shown) lv_obj_set_hidden(s_appbar, !shown);
-}
-
-void bars_appbar_title(const char *title)
-{
-    if (s_appbar) md_appbar_set_title(s_appbar, title);
-}
-
-lv_obj_t *bars_appbar(void)
-{
-    return s_appbar && !lv_obj_is_hidden(s_appbar) ? s_appbar : NULL;
-}
 
 /* ---- gesture bar ------------------------------------------------------------------ */
 static void handle_create(void)
@@ -128,7 +86,7 @@ void bars_handle_peek(void)
 
 void bars_reset(void)
 {
-    s_appbar = s_handle = NULL;
+    s_handle = NULL;
     s_peek = NULL;
     s_handle_wanted = false;
 }

@@ -203,6 +203,58 @@ char *t5_app_lv_strdup(const char *s)
     return s ? t5_app_strdup(s) : NULL;
 }
 
+/* Label text: setting the text a label already shows is a no-op. LVGL
+ * re-lays out and redraws the label on every set, and apps that refresh a
+ * label from a timer (a clock, a track title, a sensor value) mostly set
+ * the same text again. Redraws are memory traffic, and while audio plays
+ * the speaker amp picks that up as static. A label's own buffer passed back
+ * (text edited in place) still refreshes. */
+static bool label_same(lv_obj_t *obj, const char *text)
+{
+    if (!obj || !text || !lv_obj_check_type(obj, &lv_label_class)) return false;
+    const char *cur = lv_label_get_text(obj);
+    return cur && cur != text && strcmp(cur, text) == 0;
+}
+
+void t5_app_lv_label_set_text(lv_obj_t *obj, const char *text)
+{
+    if (label_same(obj, text)) return;
+    lv_label_set_text(obj, text);
+}
+
+void t5_app_lv_label_set_text_vfmt(lv_obj_t *obj, const char *fmt, va_list args)
+{
+    if (!fmt) {
+        lv_label_set_text_vfmt(obj, fmt, args);
+        return;
+    }
+    char small[96];
+    va_list copy;
+    va_copy(copy, args);
+    int n = vsnprintf(small, sizeof small, fmt, copy);
+    va_end(copy);
+    if (n < 0) return;
+    char *text = small;
+    if ((size_t)n >= sizeof small) {
+        text = malloc((size_t)n + 1);
+        if (!text) {
+            lv_label_set_text_vfmt(obj, fmt, args);
+            return;
+        }
+        vsnprintf(text, (size_t)n + 1, fmt, args);
+    }
+    t5_app_lv_label_set_text(obj, text);
+    if (text != small) free(text);
+}
+
+void t5_app_lv_label_set_text_fmt(lv_obj_t *obj, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    t5_app_lv_label_set_text_vfmt(obj, fmt, args);
+    va_end(args);
+}
+
 char *t5_app_lv_strndup(const char *s, size_t max)
 {
     if (!s) return NULL;

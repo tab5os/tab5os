@@ -34,6 +34,9 @@ void *t5_app_lv_realloc(void *p, size_t n);
 void *t5_app_lv_reallocf(void *p, size_t n);
 char *t5_app_lv_strdup(const char *s);
 char *t5_app_lv_strndup(const char *s, size_t max);
+void t5_app_lv_label_set_text(lv_obj_t *obj, const char *text);
+void t5_app_lv_label_set_text_fmt(lv_obj_t *obj, const char *fmt, ...);
+void t5_app_lv_label_set_text_vfmt(lv_obj_t *obj, const char *fmt, va_list args);
 lv_draw_buf_t *t5_app_lv_draw_buf_create(uint32_t w, uint32_t h, lv_color_format_t cf, uint32_t stride);
 lv_draw_buf_t *t5_app_lv_draw_buf_create_ex(const lv_draw_buf_handlers_t *handlers, uint32_t w, uint32_t h,
                                             lv_color_format_t cf, uint32_t stride);

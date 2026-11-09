@@ -11,7 +11,7 @@ Apps use LVGL 9.6 with a Material Design 2 layer (`md_*`) that already matches t
 
 Density is fixed at 2 px per dp. Always write `T5_DP(n)`, so a size means the same thing everywhere. A literal `1` is right only for a one-pixel hairline.
 
-The shell's bars take space from your screen, as padding on `t5_app_screen()`: the status bar the top 24 dp, the app bar (if you turn it on) the next 48, and the gesture bar the bottom 16. `t5_shell_get_insets()` says how much, `T5_EV_UI_INSETS` when it changes, and `t5_shell_set_fullscreen(true)` gives it all back until you leave the foreground. Keep important content away from the edges, since two system gestures start there: swipe down from the top for quick settings and swipe up from the bottom to go home. See [Shell bars](#shell-bars).
+The shell's bars take space from your screen, as padding on `t5_app_screen()`: the status bar the top 24 dp and the gesture bar the bottom 16. There's no title bar unless you draw one. `t5_shell_get_insets()` says how much, `T5_EV_UI_INSETS` when it changes, and `t5_shell_set_fullscreen(true)` gives it all back until you leave the foreground. Keep important content away from the edges, since two system gestures start there: swipe down from the top for quick settings and swipe up from the bottom to go home. See [Shell bars](#shell-bars).
 
 Touch targets are at least 48 dp. The `md_*` controls already are.
 
@@ -266,14 +266,13 @@ The buffer is your app's memory (freed at exit). RGB565 at 300 × 160 dp is 192 
 
 ## Shell bars
 
-The shell can draw an **app bar** for you: `[shell] app_bar = true` in the manifest (or `t5_shell_set_app_bar(true)`) shows a 48 dp MD2 app bar with your app's name, or `title = "..."`. `t5_shell_set_title()` changes it at run time, and `t5_shell_app_bar()` gives you the bar to add actions to with `md_appbar_add_action()`. It belongs to the shell and is deleted with your screen. If you build your own app bar (an `md_page`, say) leave the shell's off.
+The shell draws the **status bar** and the **gesture bar**, nothing else: there's no title bar, and your screen starts right under the status bar. If you want a title, a back arrow or actions, build them yourself with `md_appbar_create()` and `md_appbar_add_action()`, or an `md_page`.
 
 The **gesture bar** is a handle in a 16 dp strip at the bottom of every app screen, showing where to swipe up to go home. In **full screen** all bars go and your content gets the whole panel; the handle shows over your app for 2.5 s when full screen starts, and whenever a finger rests on the bottom edge (until 2.5 s after it lifts), so people can always find the way out. Design full-screen UIs so the bottom 16 dp can carry a brief overlay.
 
 | Call | Does |
 | --- | --- |
 | `t5_shell_set_fullscreen(on)`, `t5_shell_fullscreen()` | Full screen on or off (`[shell] fullscreen = true` starts that way) |
-| `t5_shell_set_app_bar(shown)`, `t5_shell_set_title(text)`, `t5_shell_app_bar()` | The app bar |
 | `t5_shell_get_insets(&in)` | What the bars take, in dp; `T5_EV_UI_INSETS` when it changes |
 | `t5_shell_activity_start/update/end` | An ongoing activity in the status bar and quick settings ([SDK guide](../sdk.md#status-bar-and-activities)) |
 | `t5_ambient_set(&card)`, `t5_ambient_clear()` | Your app's card on the standby screen, which shows on USB power when the device dims. Needs `ambient = true` ([SDK guide](../sdk.md#standby)) |

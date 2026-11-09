@@ -67,6 +67,7 @@ static const char *TAG = "t5.audio";
 #define MIC_OPEN_MS 1000
 #define MIC_CLOSE_MS 500
 #define RELEASE_WAIT_MS 1000          /* for a task to let go of a closing stream */
+#define FADE_WAIT_MS 50               /* for a stream's fade out (a block, then some) */
 #define HOLD_WAIT_MS 100
 #define HOLD_MIC_WAIT_MS 50           /* the input task's block in flight */
 #define HP_IDLE_POLL_MS 1000          /* the jack, while nothing plays */
@@ -96,6 +97,13 @@ struct t5_audio_out {
     t5_audio_usage_t usage;
     volatile int32_t level_q15;           /* t5_audio_out_set_volume */
     int32_t duck_q15;                     /* the ducking gain now (output task) */
+    /* Fades, so a stream never starts or stops mid-waveform (a click):
+     * it fades in over its first block of sound and, asked to pause or
+     * close, out over one block before it does. */
+    int32_t fade_q15;                     /* the output task's */
+    bool had_data;                        /* this block (output task) */
+    volatile bool fade_out;               /* asked: fade to silence */
+    volatile bool faded;                  /* done: the block that reaches silence is mixed */
 };
 
 struct t5_audio_in {
@@ -170,6 +178,18 @@ static void load_settings(void)
     s_saved = s_set;
 }
 
+/* A stream buffer for PCM that only ever holds whole frames. A static
+ * stream buffer (which xStreamBufferCreateWithCaps makes) keeps one byte of
+ * its storage unused: 9600 bytes hold 9599. With an odd capacity a writer
+ * that times out on a full buffer (the reader paused) writes the odd byte,
+ * and every sample after it is made of the wrong two bytes: loud noise.
+ * So: a whole number of frames, plus that byte. */
+static StreamBufferHandle_t pcm_buffer(uint32_t rate, size_t frame_bytes, uint32_t ms)
+{
+    size_t frames = (size_t)rate * ms / 1000;
+    return xStreamBufferCreateWithCaps(frames * frame_bytes + 1, 1, MALLOC_CAP_SPIRAM);
+}
+
 static void wake_out(void)
 {
     int v = -1;
@@ -230,7 +250,7 @@ static void close_for_hold(bool mic, bool running)
         audio_hw_in_close();
         s_mic_parked = true;
     }
-    if (running) audio_hw_out_close();
+    if (running) audio_hw_out_close(false);
     xEventGroupSetBits(s_ev, EV_HELD);
 }
 
@@ -329,6 +349,7 @@ static int take_streams(t5_audio_out_t **sts)
 static size_t pull_block(t5_audio_out_t *st, int16_t *buf)
 {
     size_t got = stream_pull(st, buf);
+    st->had_data = got > 0;
     if (got) {
         /* Data after running dry: that gap was an underrun (running dry
          * at the end of a stream is not). */
@@ -344,8 +365,8 @@ static size_t pull_block(t5_audio_out_t *st, int16_t *buf)
     return got;
 }
 
-/* Every stream into acc: MEDIA ducked while duck is set, each ramped from
- * its last gain to the new one over the block. */
+/* Every stream into acc: MEDIA ducked while duck is set, faded in or out,
+ * each ramped from its last gain to the new one over the block. */
 static void mix_streams(int32_t *acc, t5_audio_out_t **sts, int n, bool duck)
 {
     for (int i = 0; i < n; i++) {
@@ -353,9 +374,15 @@ static void mix_streams(int32_t *acc, t5_audio_out_t **sts, int n, bool duck)
         int32_t want = st->usage == T5_AUDIO_USAGE_MEDIA && duck ? DUCK_Q15 : UNITY_Q15;
         int32_t from = st->duck_q15;
         st->duck_q15 = t5_gain_step_q15(from, want, want < from ? DUCK_DOWN_STEP : DUCK_UP_STEP);
+        /* the fade: out when asked; in only once there's sound to fade in */
+        int32_t ffrom = st->fade_q15;
+        bool out = st->fade_out;
+        st->fade_q15 = out ? 0 : st->had_data ? UNITY_Q15 : ffrom;
         int32_t lv = st->level_q15;
-        t5_mix_add_ramp(acc, s_pull + (size_t)i * BLOCK_SAMPLES, BLOCK_FRAMES, 2, (int32_t)((int64_t)from * lv >> 15),
-                        (int32_t)((int64_t)st->duck_q15 * lv >> 15));
+        int64_t g0 = (int64_t)from * lv >> 15, g1 = (int64_t)st->duck_q15 * lv >> 15;
+        t5_mix_add_ramp(acc, s_pull + (size_t)i * BLOCK_SAMPLES, BLOCK_FRAMES, 2, (int32_t)(g0 * ffrom >> 15),
+                        (int32_t)(g1 * st->fade_q15 >> 15));
+        if (out) st->faded = true;
     }
 }
 
@@ -401,7 +428,7 @@ static void out_task(void *arg)
         if (hold || (!have_stream && !have_voice && !have_input && running && idle_ms >= IDLE_CLOSE_MS)) {
             serve_mic_request(false);
             if (hold) close_for_hold(mic, running);
-            else if (running) audio_hw_out_close();
+            else if (running) audio_hw_out_close(true);   /* idle: no pop in the headphones */
             if (running) {
                 speaker = false;
                 running = false;
@@ -458,6 +485,15 @@ static void out_task(void *arg)
         }
         if (!have_stream && !have_voice) idle_ms += BLOCK_MS;
         t5_mix_to_s16(acc, blk, BLOCK_SAMPLES);
+        /* The speaker amp hears only the left output (schematic: LOUT1 to
+         * the NS4150B, single ended), so on the speaker both channels carry
+         * the mix of the two: nothing panned right is lost. */
+        if (speaker) {
+            for (int i = 0; i < BLOCK_FRAMES; i++) {
+                int16_t m = (int16_t)(((int32_t)blk[2 * i] + blk[2 * i + 1]) / 2);
+                blk[2 * i] = blk[2 * i + 1] = m;
+            }
+        }
         ref_push(blk, BLOCK_FRAMES);
         s_st.out_peak_dbfs = t5_pcm_peak_dbfs(blk, BLOCK_SAMPLES);
         uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
@@ -612,8 +648,7 @@ t5_err_t t5_audio_out_open_usage(const t5_audio_out_cfg_t *cfg, t5_audio_usage_t
     o->duck_q15 = UNITY_Q15;
     if (!o->cfg.buffer_ms) o->cfg.buffer_ms = 200;
     o->frame_bytes = cfg->channels * sizeof(int16_t);
-    size_t sz = (size_t)cfg->rate * o->frame_bytes * o->cfg.buffer_ms / 1000;
-    o->sb = xStreamBufferCreateWithCaps(sz, 1, MALLOC_CAP_SPIRAM);
+    o->sb = pcm_buffer(cfg->rate, o->frame_bytes, o->cfg.buffer_ms);
     if (!o->sb) {
         free(o);
         return T5_ERR_NO_MEM;
@@ -670,11 +705,25 @@ bool t5_audio_out_active(void)
     return any;
 }
 
+/* Fade a playing stream to silence before it stops (a click otherwise):
+ * one block, so it's quick; given up on if the output isn't moving. */
+static void fade_out(t5_audio_out_t *o)
+{
+    if (!playing(o) || !s_st.out_running || !o->fade_q15) return;
+    o->faded = false;
+    o->fade_out = true;
+    wake_out();
+    for (int i = 0; i < FADE_WAIT_MS / 2 && !o->faded; i++) t5_delay_ms(2);
+}
+
 t5_err_t t5_audio_out_pause(t5_audio_out_t *o, bool paused)
 {
     if (!o || o->magic != OUT_MAGIC) return T5_ERR_INVALID_ARG;
+    if (paused) fade_out(o);
     t5_mutex_lock(s_mx);
     o->paused = paused;
+    o->fade_out = false;
+    if (paused) o->fade_q15 = 0;  /* and in again on resume */
     o->primed = false;           /* a pause isn't an underrun */
     lock_update();
     t5_mutex_unlock(s_mx);
@@ -708,6 +757,7 @@ t5_err_t t5_audio_out_close(t5_audio_out_t *o)
 {
     if (!o || o->magic != OUT_MAGIC) return T5_ERR_INVALID_ARG;
     t5_res_remove(o);
+    fade_out(o);
     t5_mutex_lock(s_mx);
     o->closing = true;
     for (int i = 0; i < T5_AUDIO_OUT_MAX; i++) {
@@ -771,8 +821,7 @@ t5_err_t t5_audio_in_open(const t5_audio_in_cfg_t *cfg, t5_audio_in_t **out)
         free(in);
         return T5_ERR_NO_MEM;
     }
-    size_t sz = (size_t)cfg->rate * cfg->channels * 2 * in->cfg.buffer_ms / 1000;
-    in->sb = xStreamBufferCreateWithCaps(sz, 1, MALLOC_CAP_SPIRAM);
+    in->sb = pcm_buffer(cfg->rate, cfg->channels * sizeof(int16_t), in->cfg.buffer_ms);
     if (!in->sb) {
         if (in->aec) t5_aec_free(&in->a);
         free(in);

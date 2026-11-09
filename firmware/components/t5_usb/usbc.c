@@ -23,6 +23,7 @@
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
+#include "t5_power/power.h"
 #include "t5_storage/t5_storage.h"
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
@@ -36,6 +37,10 @@ static const char *TAG = "t5.usbc";
 static t5_usbc_mode_t s_mode = T5_USBC_CONSOLE;
 static void *s_card;
 static tinyusb_msc_storage_handle_t s_store;
+/* Awake while the computer has the card: in Sleep USB stops answering, and
+ * the computer drops the drive and can't mount it again. The screen may
+ * still turn off. */
+static t5_wakelock_t *s_awake;
 static esp_timer_handle_t s_timer;
 static void msc_event(tinyusb_msc_storage_handle_t h, tinyusb_msc_event_t *ev, void *arg);
 static t5_mutex_t s_mx;
@@ -94,6 +99,7 @@ static t5_err_t storage_on(void)
         usb_wrap_ll_phy_select(&USB_WRAP, 0);      /* in case the PHY driver reset the mapping */
         usb_wrap_ll_phy_enable_pad(&USB_WRAP, true);
         phy_log("tinyusb up");
+        s_awake = t5_wakelock_acquire_system(T5_LOCK_CPU, "usbc.storage");
     }
     if (e != ESP_OK) {
         T5_LOGE(TAG, "mass storage start failed: %s", esp_err_to_name(e));
@@ -118,6 +124,8 @@ uint32_t t5_usbc_trace(void)
 
 static void storage_off(void)
 {
+    if (s_awake) t5_wakelock_release(s_awake);
+    s_awake = NULL;
     s_trace = 0x7B000001;
     tinyusb_driver_uninstall();
     s_trace = 0x7B000002;

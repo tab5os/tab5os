@@ -81,9 +81,7 @@ typedef struct {
     char bg_entry[T5_MANIFEST_FUNC_LEN];   /* [background] entry */
     uint32_t bg_max_seconds;  /* [background] max_seconds */
     /* [shell]: the bars the shell draws around the app's screen. */
-    bool app_bar;             /* app_bar = true: a 48 dp bar with the title under the status bar */
     bool fullscreen;          /* fullscreen = true: start without the bars (t5_shell_set_fullscreen) */
-    char title[T5_APP_NAME_LEN];   /* title = "...": the app bar's text; "" = name */
 } t5_manifest_t;
 
 /* Parse and validate. On failure err holds a human-readable reason

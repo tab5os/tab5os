@@ -6,7 +6,3 @@ runtime = "native"
 entry = "app.elf"
 orientation = "any"
 description = "MD2 components, raw LVGL, a custom widget class and canvas drawing, with the shell's bars"
-
-[shell]
-app_bar = true
-title = "Gallery"
