@@ -228,7 +228,7 @@ void audio_hw_set_in_gain(float db)
 bool audio_hw_headphones(void)
 {
     bool level = false;
-    /* HP_DET reads high with a plug in (to confirm on the bench). */
+    /* HP_DET reads high with a plug in (confirmed on Unit A, 2026-11-09). */
     if (t5_xpin_read(T5_XP_HP_DET, &level) != T5_OK) return false;
     return level;
 }
