@@ -227,6 +227,8 @@ def cmd_update(a):
     protos = header_protos(a.headers)
     bad = 0
     for s in syms:
+        if s.data:
+            continue                 # an object's extern declaration, kept as written
         if s.ext:
             s.proto = norm(s.proto)
             continue
