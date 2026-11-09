@@ -44,6 +44,7 @@ typedef struct {
 typedef struct {
     const char *path;
     const char *name;          /* the file name without .m3u / .m3u8 */
+    int n;                     /* entries in it */
 } lib_playlist_t;
 
 typedef struct lib lib_t;

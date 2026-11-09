@@ -7,7 +7,7 @@
 #include "m3u.h"
 
 #define MAX_DEPTH 8
-#define CACHE_MAGIC "MLIB1\n"
+#define CACHE_MAGIC "MLIB2\n"
 #define PL_MAX_BYTES (512 * 1024)
 
 /* ---- arena: the strings and per-group arrays, freed together ---------------------- */
@@ -379,6 +379,22 @@ static void add_track(scan_t *sc, const char *path, const struct stat *st)
     l->n++;
 }
 
+/* Entries in a playlist: its lines that aren't blank or comments. */
+static int count_entries(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    char line[M3U_PATH_MAX];
+    int n = 0;
+    while (fgets(line, sizeof line, f)) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t' || (unsigned char)*p == 0xef || (unsigned char)*p == 0xbb || (unsigned char)*p == 0xbf) p++;
+        if (*p && *p != '#' && *p != '\r' && *p != '\n') n++;
+    }
+    fclose(f);
+    return n;
+}
+
 static void add_playlist(lib_t *l, int *cap, const char *path, const char *name)
 {
     if (l->npl == *cap) {
@@ -393,6 +409,7 @@ static void add_playlist(lib_t *l, int *cap, const char *path, const char *name)
     tag_copy(n, sizeof n, name, dot ? (size_t)(dot - name) : strlen(name));
     l->pl[l->npl].path = ar_str(l, path);
     l->pl[l->npl].name = ar_str(l, n);
+    l->pl[l->npl].n = count_entries(path);
     l->npl++;
 }
 
@@ -519,6 +536,7 @@ bool lib_save_cache(const lib_t *l, const char *file)
     for (int i = 0; i < l->npl; i++) {
         put_str(f, l->pl[i].path);
         put_str(f, l->pl[i].name);
+        put_u32(f, (uint32_t)l->pl[i].n);
     }
     bool ok = !ferror(f);
     ok &= fclose(f) == 0;
@@ -590,7 +608,10 @@ lib_t *lib_load_cache(const char *file)
     int cap = 0;
     while (p < end) {
         const char *path = take_str(&p, end), *name = path ? take_str(&p, end) : NULL;
-        if (!name) break;
+        if (!name || end - p < 4) break;
+        uint32_t count;
+        memcpy(&count, p, 4);
+        p += 4;
         if (l->npl == cap) {
             int c = cap ? cap * 2 : 16;
             lib_playlist_t *q = realloc(l->pl, (size_t)c * sizeof *q);
@@ -600,6 +621,7 @@ lib_t *lib_load_cache(const char *file)
         }
         l->pl[l->npl].path = ar_str(l, path);
         l->pl[l->npl].name = ar_str(l, name);
+        l->pl[l->npl].n = (int)count;
         l->npl++;
     }
     free(buf);
