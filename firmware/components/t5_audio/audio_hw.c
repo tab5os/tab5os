@@ -12,6 +12,8 @@
 
 static const char *TAG = "t5.audio";
 
+#define AUDIO_HW_CLK_SRC I2S_CLK_SRC_APLL
+
 /* esp_codec_dev register access through the bus broker, so codec traffic is
  * serialised with every other device and counted in `i2c stats`. */
 typedef struct {
@@ -103,11 +105,18 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
         },
     };
     std.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    /* MCLK from the APLL (24.576 MHz / 2), not the default. Before P4 v3 the
+     * default is the 40 MHz XTAL, and 12.288 MHz from it is a 3.255 fractional
+     * divide: MCLK periods alternate between 75 and 100 ns, and the ES8388's
+     * DAC turns that jitter into hiss under anything playing. */
+    std.clk_cfg.clk_src = AUDIO_HW_CLK_SRC;
     if (i2s_channel_init_std_mode(s_tx, &std) != ESP_OK || i2s_channel_init_std_mode(s_rx, &std) != ESP_OK ||
         i2s_channel_enable(s_tx) != ESP_OK || i2s_channel_enable(s_rx) != ESP_OK) {
         return T5_ERR_IO;
     }
-    audio_codec_i2s_cfg_t ic = { .port = I2S_NUM_0, .rx_handle = s_rx, .tx_handle = s_tx };
+    /* esp_codec_dev sets the clock again on every open: the same source. */
+    audio_codec_i2s_cfg_t ic = { .port = I2S_NUM_0, .rx_handle = s_rx, .tx_handle = s_tx,
+                                 .clk_src = AUDIO_HW_CLK_SRC };
     s_data = audio_codec_new_i2s_data(&ic);
     if (!s_data) return T5_ERR_NO_MEM;
 
