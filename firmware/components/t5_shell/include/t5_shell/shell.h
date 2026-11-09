@@ -52,6 +52,28 @@ typedef struct {
 } t5_shell_insets_t;
 /* T5_ERR_STATE (and zeros) on the home screen. */
 t5_err_t t5_shell_get_insets(t5_shell_insets_t *out);
+/* ---- App API: ongoing activities ---------------------------------------------
+ *
+ * Something the app is doing that people should be able to see while it
+ * lasts (a sync, a recording, a long download): an icon in the status bar
+ * (up to three apps' icons there, the rest as "+N"), and a line in quick
+ * settings with the app's name, the text and, if given, a progress bar.
+ * Ended by t5_shell_activity_end() or when the app exits. At most
+ * T5_SHELL_ACTIVITY_MAX per app. Any task.
+ *
+ *   t5_shell_activity_t *a;
+ *   t5_shell_activity_start(MD_ICON_DOWNLOAD, "Syncing photos", &a);
+ *   t5_shell_activity_update(a, "Syncing photos: 12 of 40", 30);
+ *   t5_shell_activity_end(a);
+ */
+#define T5_SHELL_ACTIVITY_MAX 4
+typedef struct t5_shell_activity t5_shell_activity_t;
+/* icon: one MD_ICON_* glyph (NULL: a clock). text is copied (47 bytes kept). */
+t5_err_t t5_shell_activity_start(const char *icon, const char *text, t5_shell_activity_t **out);
+/* text NULL keeps it; percent 0..100, or -1 for no progress bar. */
+t5_err_t t5_shell_activity_update(t5_shell_activity_t *a, const char *text, int percent);
+t5_err_t t5_shell_activity_end(t5_shell_activity_t *a);
+
 /* A snackbar from any task (copied). */
 t5_err_t t5_shell_toast(const char *text);
 /* Open or close quick settings, go home. */

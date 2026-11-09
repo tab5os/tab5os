@@ -22,6 +22,8 @@ T5_MUST_CHECK t5_err_t t5_download_open(const char *url, t5_download_t **out, in
  * negative t5_err_t (the shape of t5_ota_read_fn; ctx is the download). */
 int t5_download_read(void *dl, void *buf, size_t n);
 void t5_download_close(t5_download_t *dl);
+/* Downloads open now (the status bar's indicator). */
+int t5_download_active(void);
 
 /* The whole body into a file. bytes (may be NULL) gets its size. */
 T5_MUST_CHECK t5_err_t t5_download_file(const char *url, const char *path, int64_t *bytes, char *err,

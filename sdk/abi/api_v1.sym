@@ -2336,6 +2336,9 @@ t5_resample |  | size_t t5_resample(t5_resampler_t * r, const int16_t * in, size
 t5_resampler_init |  | void t5_resampler_init(t5_resampler_t * r, uint32_t in_rate, uint8_t in_ch, uint32_t out_rate);
 t5_rot_name |  | const char * t5_rot_name(t5_rotation_t r);
 t5_rot_size |  | void t5_rot_size(t5_rotation_t r, int32_t * w, int32_t * h);
+t5_shell_activity_end |  | t5_err_t t5_shell_activity_end(t5_shell_activity_t * a);
+t5_shell_activity_start |  | t5_err_t t5_shell_activity_start(const char * icon, const char * text, t5_shell_activity_t ** out);
+t5_shell_activity_update |  | t5_err_t t5_shell_activity_update(t5_shell_activity_t * a, const char * text, int percent);
 t5_shell_app_bar |  | struct _lv_obj_t * t5_shell_app_bar(void);
 t5_shell_fullscreen |  | bool t5_shell_fullscreen(void);
 t5_shell_get_insets |  | t5_err_t t5_shell_get_insets(t5_shell_insets_t * out);

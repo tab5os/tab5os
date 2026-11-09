@@ -226,6 +226,31 @@ static void on_create(t5_app_t *app) {
 
 **Full screen** (`t5_shell_set_fullscreen(true)`, or `[shell] fullscreen = true` to start that way) hides all three bars and the padding goes to 0. The gestures still work. So people can find the way out, the gesture bar's handle shows over the app for 2.5 s when full screen starts, and again whenever a finger touches the bottom 20 dp; a swipe up from there still goes home. `t5_shell_fullscreen()` says whether it's on. Everything resets when the app leaves the foreground. Python apps have `t5.ui.fullscreen()`, `t5.ui.app_bar()` and `t5.ui.title()`.
 
+## Status bar and activities
+
+Besides the time, Wi-Fi, Bluetooth (on, or connected), USB, a keyboard and the battery, the status bar shows what is going on in the background, so nothing runs unseen:
+
+| Icon | When |
+| --- | --- |
+| The app's own icon | An app posted an activity (below). Up to three apps' icons (one in portrait), then "+N" |
+| Bolt | An app other than the one in front holds a wake lock, or runs its alarm headless |
+| Alarm | An app has a background wake scheduled (`t5_app_schedule_alarm`) |
+| Download, update | The OS is downloading something or installing an update |
+| Arrows | Network handles are open (any app's); left out in portrait |
+| Note, headphones, speaker off | Sound is playing (to the speaker or headphones), or the sound is muted |
+| Mic, camera (in colour) | The microphone or camera is in use |
+
+Quick settings lists the same activities with the app's name, a line of text and a progress bar if there is one. An app posts one for something people should be able to see while it lasts, such as a sync or a recording:
+
+```c
+t5_shell_activity_t *a;
+t5_shell_activity_start(MD_ICON_DOWNLOAD, "Syncing photos", &a);      /* any task */
+t5_shell_activity_update(a, "Syncing photos: 12 of 40", 30);          /* text (NULL keeps it), percent or -1 */
+t5_shell_activity_end(a);                                            /* or the app exits */
+```
+
+At most `T5_SHELL_ACTIVITY_MAX` (4) per app; the icon is one `MD_ICON_*` glyph.
+
 ## Manifest
 
 ```toml

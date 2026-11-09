@@ -832,6 +832,40 @@ bool t5_apps_fg_manifest(t5_manifest_t *out)
     return ok;
 }
 
+bool t5_apps_headless(char *id, size_t n)
+{
+    apps_lock();
+    bool on = s_headless != NULL;
+    if (on) snprintf(id, n, "%s", s_headless->id);
+    apps_unlock();
+    return on;
+}
+
+bool t5_apps_alarm_pending(char *id, size_t n, time_t *when)
+{
+    /* The file is read again only when the scheduled time changes. */
+    static time_t s_seen;
+    static char s_id[T5_APP_ID_LEN];
+    uint32_t flags = 0;
+    time_t t = t5_power_next_wake(&flags);
+    if (!t || !(flags & T5_WAKE_FLAG_BACKGROUND)) return false;
+    if (t != s_seen) {
+        char path[T5_APP_PATH_MAX];
+        s_id[0] = 0;
+        FILE *f = t5_sys_path(path, sizeof path, ALARM_FILE) == T5_OK ? fopen(path, "r") : NULL;
+        if (f) {
+            size_t k = fread(s_id, 1, sizeof s_id - 1, f);
+            s_id[k] = 0;
+            fclose(f);
+        }
+        s_seen = t;
+    }
+    if (!s_id[0]) return false;
+    snprintf(id, n, "%s", s_id);
+    if (when) *when = t;
+    return true;
+}
+
 int t5_apps_list(t5_app_entry_t *out, int max)
 {
     int n = 0;

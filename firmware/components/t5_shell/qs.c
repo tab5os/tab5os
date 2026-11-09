@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Quick settings (plan 6.4): a sheet that slides down from the top over a
  * scrim. Tiles for Wi-Fi, Bluetooth, auto-rotate, battery saver and mute;
- * sliders for brightness and volume; the time, the battery and a shortcut
- * to Settings. A long press on a tile opens its Settings page. Close by
+ * sliders for brightness and volume; the ongoing activities (apps' and the
+ * system's: what each is doing, with progress); the time, the battery and
+ * a shortcut to Settings. A long press on a tile opens its Settings page. Close by
  * tapping outside, swiping up, or the back gesture.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "shell_priv.h"
 
@@ -28,6 +30,8 @@ static struct {
     lv_obj_t *time, *date, *battery;
     lv_obj_t *tile[TILE_COUNT], *tile_icon[TILE_COUNT], *tile_label[TILE_COUNT];
     lv_obj_t *bright, *volume;
+    lv_obj_t *acts;               /* the activity rows */
+    uint32_t acts_sig;            /* what they show, to rebuild only on a change */
     bool on[TILE_COUNT];
     bool closing;
     lv_timer_t *timer;
@@ -49,6 +53,8 @@ static void tile_paint(int i, bool on)
     lv_obj_set_style_text_color(circle, md_color(on ? sc->c.on_primary : sc->c.on_surface), 0);
     shell_set_text(c, on ? s_tile_def[i].icon_on : s_tile_def[i].icon_off);
 }
+
+static void update_activities(void);
 
 static void update(void)
 {
@@ -78,6 +84,66 @@ static void update(void)
     tile_paint(TILE_MUTE, st.muted);
     if (!lv_obj_has_state(s.bright, LV_STATE_PRESSED)) lv_slider_set_value(s.bright, st.brightness, LV_ANIM_OFF);
     if (!lv_obj_has_state(s.volume, LV_STATE_PRESSED)) lv_slider_set_value(s.volume, st.volume, LV_ANIM_OFF);
+    update_activities();
+}
+
+static uint32_t act_sig(const shell_activity_t *a, int n)
+{
+    uint32_t h = 2166136261u;     /* FNV-1a over what the rows show */
+    for (int i = 0; i < n; i++) {
+        const uint8_t *p = (const uint8_t *)&a[i];
+        for (size_t j = 0; j < sizeof a[i]; j++) h = (h ^ p[j]) * 16777619u;
+    }
+    return h ^ (uint32_t)n;
+}
+
+static void act_row(lv_obj_t *parent, const shell_activity_t *a)
+{
+    const md_scheme_t *sc = md_scheme();
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, T5_DP(12), 0);
+    lv_obj_set_clickable(row, false);
+    md_icon_create(row, a->icon, 18);
+    lv_obj_t *col = lv_obj_create(row);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, T5_DP(2), 0);
+    lv_obj_set_clickable(col, false);
+    char text[T5_APP_NAME_LEN + SHELL_ACTIVITY_TEXT_LEN + 8];
+    snprintf(text, sizeof text, "%s%s%s", a->who, a->who[0] ? " · " : "", a->text);
+    lv_obj_t *l = md_label_create(col, text, MD_TYPE_BODY2);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
+    if (a->percent >= 0) {
+        lv_obj_t *bar = lv_bar_create(col);
+        lv_obj_set_size(bar, LV_PCT(100), T5_DP(4));
+        lv_bar_set_value(bar, a->percent, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(bar, md_color(sc->c.on_surface), 0);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_20, 0);
+        lv_obj_set_style_bg_color(bar, md_color(sc->c.primary), LV_PART_INDICATOR);
+    }
+}
+
+static void update_activities(void)
+{
+    shell_activity_t *a = calloc(SHELL_ACTIVITY_MAX, sizeof *a);
+    int n = a ? shell_sys_activities(a, SHELL_ACTIVITY_MAX) : 0;
+    uint32_t sig = act_sig(a, n);
+    if (sig != s.acts_sig) {
+        s.acts_sig = sig;
+        void *saved = shell_sys_enter();
+        lv_obj_clean(s.acts);
+        for (int i = 0; i < n; i++) act_row(s.acts, &a[i]);
+        shell_sys_leave(saved);
+        lv_obj_set_hidden(s.acts, n == 0);
+    }
+    free(a);
 }
 
 static void timer_cb(lv_timer_t *t)
@@ -288,6 +354,16 @@ void qs_open(void)
     slider_row(p, MD_ICON_BRIGHTNESS_6, &s.bright, bright_changed);
     slider_row(p, MD_ICON_VOLUME_UP, &s.volume, volume_changed);
     lv_obj_add_event_cb(s.volume, volume_released, LV_EVENT_RELEASED, NULL);
+
+    s.acts = lv_obj_create(p);
+    lv_obj_remove_style_all(s.acts);
+    lv_obj_set_size(s.acts, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(s.acts, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s.acts, T5_DP(8), 0);
+    lv_obj_set_style_pad_ver(s.acts, T5_DP(4), 0);
+    lv_obj_set_scrollable(s.acts, false);
+    lv_obj_set_clickable(s.acts, false);
+    s.acts_sig = 1;               /* not any real list's: the first update builds it */
 
     /* A drag handle hint at the bottom. */
     lv_obj_t *hrow = lv_obj_create(p);

@@ -45,6 +45,8 @@ void shell_sys_status(shell_status_t *o)
     o->wifi_rssi = g_sim.rssi;
     snprintf(o->ssid, sizeof o->ssid, "Workshop");
     o->ble_on = s_ble;
+    o->background = true;          /* matches the activities below */
+    o->net_handles = 2;
     o->mic_active = g_sim.mic;
     o->rotation_locked = s_locked;
     o->brightness = s_brightness;
@@ -142,6 +144,20 @@ void shell_sys_chrome(shell_chrome_t *out)
 
 void shell_sys_insets_changed(void)
 {
+}
+
+/* The activities a screenshot shows: one an app posted, with progress, and
+ * an app working in the background. */
+int shell_sys_activities(shell_activity_t *out, int max)
+{
+    static const shell_activity_t demo[] = {
+        { MD_ICON_DOWNLOAD, "Air Log", "Syncing readings: 12 of 40", 30, true },
+        { MD_ICON_BOLT, "Weather", "Using the network in the background", -1, false },
+    };
+    int n = (int)(sizeof demo / sizeof demo[0]);
+    if (n > max) n = max;
+    memcpy(out, demo, (size_t)n * sizeof *out);
+    return n;
 }
 
 bool shell_sys_dismiss_modal(void)

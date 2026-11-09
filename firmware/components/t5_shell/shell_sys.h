@@ -27,7 +27,27 @@ typedef struct {
     int brightness;           /* 1..100 */
     int volume;               /* 0..100 */
     bool muted, headphones;
+    /* Background work, for the status bar's indicators. */
+    bool audio_playing;       /* an app's sound is playing */
+    int net_handles;          /* open network handles, every app's */
+    bool transfer;            /* an OS download or update in progress */
+    bool background;          /* an app other than the one in front is working: it holds a
+                               * wake lock, or runs its alarm headless */
+    bool alarm;               /* an app has a background wake scheduled */
 } shell_status_t;
+
+/* An ongoing activity: one an app posted (t5_shell_activity_*), or one the
+ * shell sees for itself (an update downloading, an app in the background). */
+#define SHELL_ACTIVITY_TEXT_LEN 48
+#define SHELL_ACTIVITY_MAX 12
+typedef struct {
+    char icon[T5_APP_ICON_LEN];         /* MD_ICON_* */
+    char who[T5_APP_NAME_LEN];          /* the app's name, or "" for the system */
+    char text[SHELL_ACTIVITY_TEXT_LEN];
+    int8_t percent;                     /* 0..100, -1: no progress */
+    bool app;                           /* posted by an app */
+} shell_activity_t;
+int shell_sys_activities(shell_activity_t *out, int max);
 
 /* One entry of the app registry (t5_app_entry_t on the device). */
 typedef struct {

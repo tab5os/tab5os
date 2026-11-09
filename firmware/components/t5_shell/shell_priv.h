@@ -50,6 +50,8 @@ void bars_handle_peek(void);
 void bars_reset(void);
 /* shell.c: in an app, in full screen (the gesture bar peeks on an edge touch) */
 bool shell_fullscreen(void);
+/* activity.c (device): the activities apps posted; app_name fills who. */
+int shell_activity_list(shell_activity_t *out, int max, const char *(*app_name)(void *app, char *buf, size_t n));
 /* qs.c */
 void qs_open(void);
 void qs_close(void);

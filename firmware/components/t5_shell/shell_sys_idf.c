@@ -12,7 +12,10 @@
 #include "t5_camera/camera.h"
 #include "t5_display/t5_display.h"
 #include "t5_net/ble.h"
+#include "t5_net/download.h"
 #include "t5_net/net.h"
+#include "t5_net/sock.h"
+#include "t5_ota/ota.h"
 #include "t5_pkg/pkg.h"
 #include "t5_power/power.h"
 #include "t5_time/t5_time.h"
@@ -23,6 +26,97 @@
 #include "t5_core/log.h"
 
 static const char *TAG = "t5.shell";
+
+/* An app's name from its id (the id itself if it isn't installed). */
+static void app_name_of(const char *id, char *out, size_t n)
+{
+    snprintf(out, n, "%s", id);
+    t5_app_entry_t *e = calloc(T5_APPS_MAX, sizeof *e);
+    int k = e ? t5_apps_list(e, T5_APPS_MAX) : 0;
+    for (int i = 0; i < k; i++) {
+        if (!strcmp(e[i].id, id) && e[i].name[0]) snprintf(out, n, "%s", e[i].name);
+    }
+    free(e);
+}
+
+static const char *ctx_name(void *app, char *buf, size_t n)
+{
+    const t5_app_ctx_hdr_t *h = app;
+    if (!h || h->magic != T5_APP_CTX_MAGIC) snprintf(buf, n, "%s", "");
+    else app_name_of(h->id, buf, n);
+    return buf;
+}
+
+/* Wake locks held by apps other than the one in front: how many, and the
+ * index-th one's app context and type. */
+static int bg_lock_holder(void **app, t5_lock_type_t *type, int index)
+{
+    t5_wakelock_info_t *l = calloc(T5_WAKELOCK_MAX, sizeof *l);
+    if (!l) return 0;
+    int k = t5_wakelock_list(l, T5_WAKELOCK_MAX), n = 0;
+    char fg[T5_APP_ID_LEN];
+    t5_apps_current(fg, sizeof fg);
+    for (int i = 0; i < k; i++) {
+        const t5_app_ctx_hdr_t *h = l[i].app;
+        if (!h || h->magic != T5_APP_CTX_MAGIC || !strcmp(h->id, fg)) continue;
+        if (n == index && app) {
+            *app = l[i].app;
+            *type = l[i].type;
+        }
+        n++;
+    }
+    free(l);
+    return n;
+}
+
+static void act(shell_activity_t *a, const char *icon, const char *who, const char *text, int pct)
+{
+    memset(a, 0, sizeof *a);
+    snprintf(a->icon, sizeof a->icon, "%s", icon);
+    snprintf(a->who, sizeof a->who, "%s", who);
+    snprintf(a->text, sizeof a->text, "%s", text);
+    a->percent = (int8_t)pct;
+}
+
+int shell_sys_activities(shell_activity_t *out, int max)
+{
+    int n = 0;
+    t5_ota_status_t ota;
+    t5_ota_status(&ota);
+    if (n < max && (ota.state == T5_OTA_RECEIVING || ota.state == T5_OTA_VERIFYING)) {
+        int pct = ota.total ? (int)((uint64_t)ota.done * 100 / ota.total) : -1;
+        act(&out[n++], MD_ICON_SYSTEM_UPDATE, "", ota.state == T5_OTA_VERIFYING ? "Checking the update" : "Installing an update", pct);
+    }
+    if (n < max && t5_download_active() > 0) act(&out[n++], MD_ICON_DOWNLOAD, "", "Downloading", -1);
+    char id[T5_APP_ID_LEN], name[T5_APP_NAME_LEN];
+    if (n < max && t5_apps_headless(id, sizeof id)) {
+        app_name_of(id, name, sizeof name);
+        act(&out[n++], MD_ICON_ALARM, name, "Running in the background", -1);
+    }
+    int locks = bg_lock_holder(NULL, NULL, 0);
+    for (int i = 0; i < locks && n < max; i++) {
+        void *app = NULL;
+        t5_lock_type_t type = T5_LOCK_CPU;
+        bg_lock_holder(&app, &type, i);
+        ctx_name(app, name, sizeof name);
+        bool dup = false;
+        for (int j = 0; j < n; j++) dup |= !strcmp(out[j].who, name) && !strcmp(out[j].icon, MD_ICON_BOLT);
+        if (dup) continue;
+        act(&out[n++], MD_ICON_BOLT, name, type == T5_LOCK_NET ? "Using the network in the background"
+                                           : type == T5_LOCK_AUDIO ? "Playing in the background"
+                                                                   : "Working in the background", -1);
+    }
+    time_t when;
+    if (n < max && t5_apps_alarm_pending(id, sizeof id, &when)) {
+        struct tm tm;
+        char text[SHELL_ACTIVITY_TEXT_LEN];
+        if (localtime_r(&when, &tm)) snprintf(text, sizeof text, "Wakes the device at %02d:%02d", tm.tm_hour, tm.tm_min);
+        else snprintf(text, sizeof text, "Wakes the device later");
+        app_name_of(id, name, sizeof name);
+        act(&out[n++], MD_ICON_ALARM, name, text, -1);
+    }
+    return n + shell_activity_list(out + n, max - n, ctx_name);
+}
 
 void shell_sys_status(shell_status_t *o)
 {
@@ -52,6 +146,14 @@ void shell_sys_status(shell_status_t *o)
     o->cam_active = t5_camera_active();
     o->usb_devices = t5_usb_device_count() > 0;
     o->usb_storage = t5_usbc_mode() == T5_USBC_STORAGE;
+    o->audio_playing = t5_audio_out_active();
+    o->net_handles = t5_net_handles_open();
+    t5_ota_status_t ota;
+    t5_ota_status(&ota);
+    o->transfer = t5_download_active() > 0 || ota.state == T5_OTA_RECEIVING || ota.state == T5_OTA_VERIFYING;
+    char id[T5_APP_ID_LEN];
+    o->background = t5_apps_headless(id, sizeof id) || bg_lock_holder(NULL, NULL, 0) > 0;
+    o->alarm = t5_apps_alarm_pending(id, sizeof id, NULL);
 }
 
 bool shell_sys_time(struct tm *out)

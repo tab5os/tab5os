@@ -160,6 +160,8 @@ void t5_net_cancel_flag(volatile bool *flag);
  * reused after a close; the number isn't (for 2^32 opens). Not in the ABI. */
 uint32_t t5_net_handle_id(void *h);
 
+/* Open handles, every app's (the status bar's indicator). */
+int t5_net_handles_open(void);
 /* Open handles, for diagnostics: one line each into buf. Returns the count. */
 int t5_net_handles_dump(char *buf, size_t n);
 

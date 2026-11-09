@@ -21,4 +21,3 @@ void net_ble_changed(void);
 void t5_ble_on_link(bool up);
 /* sock.c: how many handles are open. While any is, the stack holds a NET
  * wake lock ("net.io"), so Sleep keeps Wi-Fi connected. */
-int t5_net_handles_open(void);

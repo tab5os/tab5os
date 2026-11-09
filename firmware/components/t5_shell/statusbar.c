@@ -1,18 +1,36 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Status bar (plan 6.3): 24 dp across the top of every screen. Left: the
- * home button (in apps; long press for recents) and the time. Right: the
- * privacy indicators for the microphone and camera, then USB, Bluetooth,
- * Wi-Fi and the battery. Tap anywhere else to open quick settings.
+ * home button (in apps; long press for recents) and the time. Right, in
+ * this order:
+ *   activities  what apps posted (t5_shell_activity_*), up to three icons
+ *               (one in portrait), then a count of the rest
+ *   background  an app other than the one in front at work (a wake lock,
+ *               its alarm running headless): a bolt
+ *   alarm       an app's background wake is scheduled
+ *   transfer    an OS download or update in progress
+ *   network     network handles are open (any app's)
+ *   audio       muted, or something playing (a note, or headphones when
+ *               they're in)
+ *   privacy     the microphone and camera, in colour
+ *   devices     USB, a keyboard, Bluetooth (connected or on), Wi-Fi, battery
+ * Quick settings lists the activities with their text and progress. Tap
+ * anywhere else on the bar to open it. Narrow (portrait) bars leave out the
+ * alarm and network icons.
  *
  * Updated once a second; labels only change when their text does, so an
  * idle status bar draws nothing.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "shell_priv.h"
 #include "t5_ui/t5_ui.h"
 
+#define ACT_ICONS 3
+#define NARROW_DP 480          /* below this width: fewer indicators */
+
 static lv_obj_t *s_bar, *s_home, *s_time, *s_mic, *s_cam, *s_usb, *s_kbd, *s_ble, *s_wifi, *s_bat, *s_pct;
+static lv_obj_t *s_act[ACT_ICONS], *s_more, *s_bg, *s_alarm, *s_xfer, *s_net, *s_audio;
 static bool s_in_app;
 
 static void set_shown(lv_obj_t *o, bool shown)
@@ -47,6 +65,27 @@ static lv_obj_t *icon(lv_obj_t *parent, const char *glyph)
     lv_obj_t *l = md_icon_create(parent, glyph, 18);
     lv_obj_set_clickable(l, false);
     return l;
+}
+
+/* The app-posted activities: an icon each, then "+N" for the rest. */
+static void update_activities(int room)
+{
+    shell_activity_t *a = calloc(SHELL_ACTIVITY_MAX, sizeof *a);
+    int k = a ? shell_sys_activities(a, SHELL_ACTIVITY_MAX) : 0;
+    int shown = 0, more = 0;
+    for (int i = 0; i < k; i++) {
+        if (!a[i].app) continue;          /* the system's have their own icons */
+        if (shown < room) shell_set_text(s_act[shown++], a[i].icon);
+        else more++;
+    }
+    for (int i = 0; i < ACT_ICONS; i++) set_shown(s_act[i], i < shown);
+    set_shown(s_more, more > 0);
+    if (more) {
+        char buf[8];
+        snprintf(buf, sizeof buf, "+%d", more);
+        shell_set_text(s_more, buf);
+    }
+    free(a);
 }
 
 lv_obj_t *statusbar_create(void)
@@ -87,6 +126,14 @@ lv_obj_t *statusbar_create(void)
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_clickable(spacer, false);
 
+    for (int i = 0; i < ACT_ICONS; i++) s_act[i] = icon(s_bar, MD_ICON_SCHEDULE);
+    s_more = md_label_create(s_bar, "", MD_TYPE_CAPTION);
+    lv_obj_set_clickable(s_more, false);
+    s_bg = icon(s_bar, MD_ICON_BOLT);
+    s_alarm = icon(s_bar, MD_ICON_ALARM);
+    s_xfer = icon(s_bar, MD_ICON_DOWNLOAD);
+    s_net = icon(s_bar, MD_ICON_SWAP_HORIZ);
+    s_audio = icon(s_bar, MD_ICON_MUSIC_NOTE);
     s_mic = icon(s_bar, MD_ICON_MIC);
     lv_obj_set_style_text_color(s_mic, md_color(md_accent(MD_ACCENT_AMBER)->dark), 0);
     s_cam = icon(s_bar, MD_ICON_VIDEOCAM);
@@ -98,7 +145,8 @@ lv_obj_t *statusbar_create(void)
     s_bat = icon(s_bar, MD_ICON_BATTERY_STD);
     s_pct = md_label_create(s_bar, "", MD_TYPE_CAPTION);
     lv_obj_set_clickable(s_pct, false);
-    lv_obj_t *hide[] = { s_mic, s_cam, s_usb, s_kbd, s_ble };
+    lv_obj_t *hide[] = { s_mic, s_cam, s_usb, s_kbd, s_ble, s_act[0], s_act[1], s_act[2], s_more, s_bg, s_alarm,
+                         s_xfer, s_net, s_audio };
     for (size_t i = 0; i < sizeof hide / sizeof hide[0]; i++) lv_obj_set_hidden(hide[i], true);
     return s_bar;
 }
@@ -121,6 +169,17 @@ void statusbar_update(void)
     shell_status_t st;
     shell_sys_status(&st);
     shell_show_time(s_time, NULL);
+    bool narrow = lv_obj_get_width(s_bar) < T5_DP(NARROW_DP);
+    update_activities(narrow ? 1 : ACT_ICONS);
+    set_shown(s_bg, st.background);
+    set_shown(s_alarm, st.alarm && !narrow);
+    set_shown(s_xfer, st.transfer);
+    set_shown(s_net, st.net_handles > 0 && !narrow);
+    const char *audio = st.muted ? MD_ICON_VOLUME_OFF
+                        : st.audio_playing ? (st.headphones ? MD_ICON_HEADPHONES : MD_ICON_MUSIC_NOTE)
+                                           : NULL;
+    set_shown(s_audio, audio != NULL);
+    if (audio) shell_set_text(s_audio, audio);
     set_shown(s_mic, st.mic_active);
     set_shown(s_cam, st.cam_active);
     set_shown(s_usb, st.usb_devices || st.usb_storage);
@@ -148,5 +207,7 @@ void statusbar_update(void)
 void statusbar_reset(void)
 {
     s_bar = s_home = s_time = s_mic = s_cam = s_usb = s_kbd = s_ble = s_wifi = s_bat = s_pct = NULL;
+    for (int i = 0; i < ACT_ICONS; i++) s_act[i] = NULL;
+    s_more = s_bg = s_alarm = s_xfer = s_net = s_audio = NULL;
     s_in_app = false;
 }

@@ -110,6 +110,11 @@ void t5_apps_current(char *id, size_t n);
 /* The foreground app's manifest (a built-in app's has its name and the
  * defaults); false if the launcher is showing. Valid from home->prepare on. */
 bool t5_apps_fg_manifest(t5_manifest_t *out);
+/* For the status bar: the app running its alarm headless now, and the app
+ * whose background wake (t5_app_schedule_alarm) is scheduled, with when.
+ * False if none. */
+bool t5_apps_headless(char *id, size_t n);
+bool t5_apps_alarm_pending(char *id, size_t n, time_t *when);
 
 /* The foreground app's tracked resources. */
 typedef struct {

@@ -10,6 +10,13 @@
 #define BUF_SIZE 4096
 #define TIMEOUT_MS 15000
 
+static int s_active;          /* open downloads, atomic */
+
+int t5_download_active(void)
+{
+    return __atomic_load_n(&s_active, __ATOMIC_RELAXED);
+}
+
 t5_err_t t5_download_open(const char *url, t5_download_t **out, int64_t *len, char *err, size_t errlen)
 {
     *out = NULL;
@@ -28,6 +35,7 @@ t5_err_t t5_download_open(const char *url, t5_download_t **out, int64_t *len, ch
     }
     if (len) *len = t5_http_content_length(h);
     *out = (t5_download_t *)h;
+    __atomic_add_fetch(&s_active, 1, __ATOMIC_RELAXED);
     return T5_OK;
 }
 
@@ -39,7 +47,9 @@ int t5_download_read(void *dl, void *buf, size_t n)
 
 void t5_download_close(t5_download_t *dl)
 {
-    if (dl) T5_IGNORE(t5_http_close((t5_http_t *)dl));
+    if (!dl) return;
+    __atomic_sub_fetch(&s_active, 1, __ATOMIC_RELAXED);
+    T5_IGNORE(t5_http_close((t5_http_t *)dl));       /* reading is over: nothing to report */
 }
 
 t5_err_t t5_download_file(const char *url, const char *path, int64_t *bytes, char *err, size_t errlen)
