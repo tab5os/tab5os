@@ -52,6 +52,7 @@ BG_MAX_SECONDS = _m("T5_MANIFEST_BG_MAX_SECONDS")
 TOP_KEYS = set(strings(MANIFEST_C, "s_top_keys") + strings(MANIFEST_C, "s_info_keys"))
 BG_KEYS = strings(MANIFEST_C, "s_bg_keys")
 SHELL_KEYS = strings(MANIFEST_C, "s_shell_keys")
+SHELL_RETIRED = strings(MANIFEST_C, "s_shell_retired")
 ORIENTATIONS = strings(MANIFEST_C, "s_orients")
 ENTRY_SYMBOL = define("t5_app/include/t5_app/app.h", "T5_APP_ENTRY_SYMBOL")
 PERM_BOOLS = {p.name for p in permissions() if p.name != "ports"}
@@ -216,11 +217,13 @@ def validate(text):
 
     shell = m.get("shell", {})
     for k, v in shell.items():
+        if k in SHELL_RETIRED:
+            raise PackError(f"shell.{k}: the shell no longer draws an app bar; "
+                            "draw your own with md_appbar_create() and remove this key")
         if k not in SHELL_KEYS:
             raise PackError(f"unknown key 'shell.{k}'")
-        if k != "title" and not isinstance(v, bool):
+        if not isinstance(v, bool):
             raise PackError(f"shell.{k}: must be true or false")
-    string(shell, "title", False, _m("T5_APP_NAME_LEN") - 1)
     return m
 
 

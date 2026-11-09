@@ -6,9 +6,8 @@
  *              widget class of our own: a gauge drawn in its draw event.
  *   Canvas     free drawing into a pixel buffer (lv_canvas): a sine wave
  *              redrawn by a timer.
- *   Shell      the bars around the app: the app bar's title and actions,
- *              full screen, the insets they take, and an ongoing activity
- *              in the status bar.
+ *   Shell      the bars around the app: full screen, the insets they
+ *              take, and an ongoing activity in the status bar.
  *
  * The custom widget follows the ABI rule for widgets (docs/abi-stability.md):
  * its class leaves instance_size at 0, so objects are lv_obj_t-sized, and
@@ -129,7 +128,6 @@ static struct {
     t5_shell_activity_t *activity;
     int act_pct;
     lv_timer_t *act_timer;
-    bool titled;
 } s;
 
 /* ---- Material tab ----------------------------------------------------------- */
@@ -286,13 +284,6 @@ static void fullscreen_clicked(lv_event_t *e)
     T5_IGNORE(t5_shell_set_fullscreen(!t5_shell_fullscreen()));   /* on the UI task: can't fail */
 }
 
-static void title_clicked(lv_event_t *e)
-{
-    (void)e;
-    s.titled = !s.titled;
-    T5_IGNORE(t5_shell_set_title(s.titled ? "Gallery: renamed" : NULL));   /* NULL: the manifest's */
-}
-
 static void act_tick(lv_timer_t *t)
 {
     s.act_pct += 10;
@@ -318,12 +309,6 @@ static void activity_clicked(lv_event_t *e)
     }
 }
 
-static void action_clicked(lv_event_t *e)
-{
-    (void)e;
-    md_snackbar_show("An app bar action", NULL, NULL, NULL);
-}
-
 static void build_shell(lv_obj_t *page)
 {
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
@@ -334,8 +319,6 @@ static void build_shell(lv_obj_t *page)
     lv_label_set_long_mode(s.insets, LV_LABEL_LONG_MODE_WRAP);
     show_insets();
     lv_obj_add_event_cb(md_button_create(page, "Full screen on or off", MD_BUTTON_OUTLINED), fullscreen_clicked,
-                        LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(md_button_create(page, "Change the title", MD_BUTTON_OUTLINED), title_clicked,
                         LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(md_button_create(page, "Post a 10 s activity", MD_BUTTON_OUTLINED), activity_clicked,
                         LV_EVENT_CLICKED, NULL);
@@ -349,9 +332,6 @@ static void on_create(t5_app_t *app)
 {
     s.app = app;
     gauge_class_init();
-    /* [shell] app_bar = true in the manifest: add an action to the shell's bar. */
-    lv_obj_t *bar = t5_shell_app_bar();
-    if (bar) md_appbar_add_action(bar, MD_ICON_INFO, action_clicked, NULL);
     lv_obj_t *tabs = md_tabs_create(t5_app_screen(app));
     lv_obj_set_size(tabs, LV_PCT(100), LV_PCT(100));
     build_material(md_tabs_add(tabs, "Material"));

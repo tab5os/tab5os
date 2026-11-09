@@ -5,9 +5,10 @@
  * Layering: the status bar, the app and gesture bars (bars.c), quick
  * settings, menus and the keyboard live on lv_layer_top(), created in
  * system context so an exiting app never takes them with it. Every screen
- * is padded at the top by the status bar's height; an app's screen also by
- * its app bar's, and at the bottom by the gesture bar's strip, unless the
- * app asked for full screen. t5_shell_get_insets() reports the padding.
+ * is padded at the top by the status bar's height, and an app's screen at
+ * the bottom by the gesture bar's strip, unless the app asked for full
+ * screen. t5_shell_get_insets() reports the padding. There is no app bar:
+ * apps draw their own if they want one.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,8 +20,6 @@
 static bool s_ready;
 static char s_cur[T5_APP_ID_LEN];          /* "" = home */
 static bool s_fullscreen;
-static bool s_appbar;                      /* the app wants its app bar */
-static char s_title[T5_APP_NAME_LEN];      /* the manifest's title or name */
 static lv_obj_t *s_app_screen;
 /* What the bars take from the app's screen, in dp (any task reads it). */
 static volatile int32_t s_inset_top, s_inset_bottom;
@@ -185,7 +184,6 @@ static void app_screen_deleted(lv_event_t *e)
 {
     if (lv_event_get_target_obj(e) != s_app_screen) return;
     s_app_screen = NULL;
-    bars_appbar_delete();    /* with any actions the app added: before its code goes */
 }
 
 bool shell_fullscreen(void)
@@ -197,14 +195,13 @@ static void apply_inset(void)
 {
     bool app = s_app_screen != NULL;
     bool bars = app && !s_fullscreen;
-    int32_t top = s_fullscreen ? 0 : SHELL_STATUS_H_DP + (bars && s_appbar ? SHELL_APP_BAR_H_DP : 0);
+    int32_t top = s_fullscreen ? 0 : SHELL_STATUS_H_DP;
     int32_t bottom = bars ? SHELL_GESTURE_H_DP : 0;
     if (app) {
         lv_obj_set_style_pad_top(s_app_screen, T5_DP(top), 0);
         lv_obj_set_style_pad_bottom(s_app_screen, T5_DP(bottom), 0);
     }
     statusbar_set_hidden(s_fullscreen);
-    bars_appbar_show(bars && s_appbar);
     bars_handle_show(bars);
     bool changed = app && (top != s_inset_top || bottom != s_inset_bottom);
     s_inset_top = app ? top : 0;
@@ -239,11 +236,8 @@ void shell_prepare(lv_obj_t *scr, const char *id)
     shell_sys_chrome(&c);
     s_app_screen = scr;
     s_fullscreen = c.fullscreen;
-    s_appbar = c.app_bar;
-    snprintf(s_title, sizeof s_title, "%s", c.title);
     s_inset_top = s_inset_bottom = -1;      /* a new screen: always post its insets */
     lv_obj_add_event_cb(scr, app_screen_deleted, LV_EVENT_DELETE, NULL);
-    bars_appbar_create(s_title);
     apply_inset();
     if (s_fullscreen) bars_handle_peek();
 }
@@ -259,8 +253,6 @@ void shell_changed(const char *id)
     } else {
         s_app_screen = NULL;
         s_fullscreen = false;
-        s_appbar = false;
-        bars_appbar_delete();
         apply_inset();
         /* The app's screen is deleted straight after this, so there is no
          * cross-fade: fade the launcher in from black instead (150 ms). */
@@ -300,46 +292,6 @@ t5_err_t t5_shell_set_fullscreen(bool on)
 bool t5_shell_fullscreen(void)
 {
     return shell_fullscreen();
-}
-
-static void appbar_async(void *p)
-{
-    if (!s_cur[0]) return;
-    s_appbar = p != NULL;
-    apply_inset();
-}
-
-t5_err_t t5_shell_set_app_bar(bool shown)
-{
-    return on_ui(appbar_async, shown ? (void *)1 : NULL);
-}
-
-static void title_async(void *p)
-{
-    if (s_cur[0]) {
-        if (p) snprintf(s_title, sizeof s_title, "%s", (const char *)p);
-        else {
-            shell_chrome_t c;
-            shell_sys_chrome(&c);
-            snprintf(s_title, sizeof s_title, "%s", c.title);
-        }
-        bars_appbar_title(s_title);
-    }
-    free(p);
-}
-
-t5_err_t t5_shell_set_title(const char *title)
-{
-    char *copy = NULL;
-    if (title && !(copy = strdup(title))) return T5_ERR_NO_MEM;
-    t5_err_t e = on_ui(title_async, copy);
-    if (e != T5_OK) free(copy);
-    return e;
-}
-
-struct _lv_obj_t *t5_shell_app_bar(void)
-{
-    return t5_ui_on_ui_task() && s_cur[0] ? bars_appbar() : NULL;
 }
 
 t5_err_t t5_shell_get_insets(t5_shell_insets_t *out)
@@ -442,7 +394,6 @@ void shell_reset(void)
     s_ready = false;
     s_cur[0] = 0;
     s_fullscreen = false;
-    s_appbar = false;
     s_app_screen = NULL;
     s_inset_top = s_inset_bottom = 0;
     memset(&s_recents, 0, sizeof s_recents);

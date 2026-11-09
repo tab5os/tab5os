@@ -26,5 +26,5 @@ void sa_sim_fill(lv_obj_t *body);      /* widgets for the stand-in app page */
 /* Every widget on a stand-in page, in front like an app, though no app. */
 #define SIM_WIDGETS_PAGE "com.t5.widgets"
 void sim_show_widgets(void);
-void sim_show_app(bool app_bar, bool fullscreen);
+void sim_show_app(bool fullscreen);
 void sim_shell_sys_reset(void);   /* a stand-in app with the shell's bars */

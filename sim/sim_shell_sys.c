@@ -99,14 +99,12 @@ void sim_show_widgets(void)
     open_stand_in(SIM_WIDGETS_PAGE);
 }
 
-/* An app as the SDK's ui_gallery would look: the shell's app bar (or full
- * screen) over plain content, no page of its own. */
-void sim_show_app(bool app_bar, bool fullscreen)
+/* An app with plain content and no bar of its own, under the shell's
+ * status and gesture bars (or full screen). */
+void sim_show_app(bool fullscreen)
 {
     memset(&s_chrome, 0, sizeof s_chrome);
-    s_chrome.app_bar = app_bar;
     s_chrome.fullscreen = fullscreen;
-    snprintf(s_chrome.title, sizeof s_chrome.title, "Air Log");
     snprintf(s_cur, sizeof s_cur, "com.example.airlog");
     if (s_app_scr) lv_obj_delete(s_app_scr);
     s_app_scr = lv_obj_create(NULL);
@@ -120,7 +118,6 @@ void sim_show_app(bool app_bar, bool fullscreen)
         lv_obj_set_size(card, LV_PCT(100), LV_PCT(45));
         md_label_create(card, i ? "Humidity 41%" : "CO2 612 ppm", MD_TYPE_HEADLINE5);
     }
-    if (app_bar) md_appbar_add_action(t5_shell_app_bar(), MD_ICON_REFRESH, NULL, NULL);
     lv_screen_load(s_app_scr);
     memset(&s_chrome, 0, sizeof s_chrome);
 }
@@ -135,11 +132,6 @@ void sim_shell_sys_reset(void)
 void shell_sys_chrome(shell_chrome_t *out)
 {
     *out = s_chrome;
-    if (!out->title[0]) {
-        for (int i = 0; i < NAPPS; i++) {
-            if (!strcmp(s_apps[i].id, s_cur)) snprintf(out->title, sizeof out->title, "%s", s_apps[i].name);
-        }
-    }
 }
 
 void shell_sys_insets_changed(void)

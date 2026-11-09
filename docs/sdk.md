@@ -73,7 +73,7 @@ T5_APP(.on_create = on_create);
 | --- | --- |
 | `t5/app.h` | Lifecycle (`T5_APP`, `on_create`, `on_resume`, `on_suspend`, `on_destroy`, `on_rotate`, `on_alarm`), the app's screen and data directory, permissions, scheduled alarms, tasks and mutexes, events |
 | `t5/ui.h` | LVGL 9.6, the MD2 layer (`md_*`: theme, type, elevation, ripple, app bar, buttons, FAB, card, recycled list, dialog; and from Phase 6 text field, switch, slider, checkbox, chips, tabs, menu, static rows and pages, snackbar, navigation drawer), `T5_DP()`, `t5_ui_lock`/`t5_ui_async` |
-| `t5/shell.h` | The app bar (title, actions), the gesture bar, full screen and the insets they take; snackbars from any task, quick settings, home, the on-screen keyboard |
+| `t5/shell.h` | The status and gesture bars, full screen and the insets they take; snackbars from any task, quick settings, home, the on-screen keyboard |
 | `t5/port.h` | Named ports (`grove`, `mbus.*`, `ext`, `rs485`, `stamp`), Modbus RTU, rails |
 | `t5/power.h` | Wake locks, power state, battery (read-only) |
 | `t5/sys.h` | Time (and local time with the zone from Settings), IMU, network status, FreeRTOS |
@@ -247,26 +247,27 @@ The active session is the one most recently opened or set to `T5_MEDIA_PLAYING`;
 
 ## Shell bars
 
-The shell draws up to three bars around an app's screen, and pads `t5_app_screen()` clear of them, so anything built under it is never covered:
+The shell draws two bars around an app's screen, and pads `t5_app_screen()` clear of them, so anything built under it is never covered. There's no title bar: the app's whole screen is its own. An app that wants a title, a back arrow or actions draws them itself, with `md_appbar_create()` or `md_page_create()`.
 
 | Bar | Size | When |
 | --- | --- | --- |
 | Status bar | 24 dp, top | Always, except in full screen |
-| App bar | 48 dp, under the status bar | When the manifest says `[shell] app_bar = true` or the app calls `t5_shell_set_app_bar(true)`. Shows the manifest's `title` (default: `name`); `t5_shell_set_title()` changes it |
 | Gesture bar | 16 dp, bottom | Always on app screens, except in full screen: a handle that shows where to swipe up to go home |
 
 ```c
 static void on_create(t5_app_t *app) {
-    t5_shell_set_app_bar(true);                                     /* or [shell] app_bar = true */
-    md_appbar_add_action(t5_shell_app_bar(), MD_ICON_REFRESH, refresh_cb, app);
+    lv_obj_t *scr = t5_app_screen(app);
+    lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
+    lv_obj_t *bar = md_appbar_create(scr, "Air Log", NULL, NULL, NULL);   /* only if you want one */
+    md_appbar_add_action(bar, MD_ICON_REFRESH, refresh_cb, app);
     t5_shell_insets_t in;
-    t5_shell_get_insets(&in);    /* {top 72, bottom 16} dp: already taken off the screen's content area */
+    t5_shell_get_insets(&in);    /* {top 24, bottom 16} dp: already taken off the screen's content area */
 }
 ```
 
-`t5_shell_app_bar()` returns the bar on the UI task while it's shown; actions added to it are deleted with the app's screen. `t5_shell_get_insets()` reports what the bars take, in dp, and `T5_EV_UI_INSETS` is posted when that changes (the app bar toggled, full screen). Objects you place yourself on `lv_layer_top()` aren't padded: use the insets for them.
+`t5_shell_get_insets()` reports what the bars take, in dp, and `T5_EV_UI_INSETS` is posted when that changes (full screen on or off). Objects you place yourself on `lv_layer_top()` aren't padded: use the insets for them.
 
-**Full screen** (`t5_shell_set_fullscreen(true)`, or `[shell] fullscreen = true` to start that way) hides all three bars and the padding goes to 0. The gestures still work. So people can find the way out, the gesture bar's handle shows over the app for 2.5 s when full screen starts, and again whenever a finger touches the bottom 20 dp; a swipe up from there still goes home. `t5_shell_fullscreen()` says whether it's on. Everything resets when the app leaves the foreground. Python apps have `t5.ui.fullscreen()`, `t5.ui.app_bar()` and `t5.ui.title()`.
+**Full screen** (`t5_shell_set_fullscreen(true)`, or `[shell] fullscreen = true` to start that way) hides both bars and the padding goes to 0. The gestures still work. So people can find the way out, the gesture bar's handle shows over the app for 2.5 s when full screen starts, and again whenever a finger touches the bottom 20 dp; a swipe up from there still goes home. `t5_shell_fullscreen()` says whether it's on. Everything resets when the app leaves the foreground. Python apps have `t5.ui.fullscreen()` and `t5.ui.is_fullscreen()`.
 
 ## Status bar and activities
 
@@ -332,8 +333,6 @@ entry = "on_alarm"
 max_seconds = 30
 
 [shell]                       # optional
-app_bar = true                # the shell's app bar with the title (default false)
-title = "Air Log"             # its text (default: name)
 fullscreen = false            # start in full screen
 ```
 

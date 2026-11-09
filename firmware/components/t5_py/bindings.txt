@@ -40,8 +40,6 @@ imu      status           t5_imu_status
 ui       toast            t5_shell_toast
 ui       fullscreen       t5_shell_set_fullscreen
 ui       is_fullscreen    t5_shell_fullscreen
-ui       app_bar          t5_shell_set_app_bar
-ui       title            t5_shell_set_title
 ui       low_power        t5_ui_low_power
 ui       rotation         t5_ui_rotation
 

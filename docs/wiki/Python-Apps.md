@@ -43,7 +43,7 @@ Set the manifest's `min_heap_kb` if the default 2 MB GC heap doesn't suit. The r
 
 Widgets have `set_text`, `text`, `set_secondary`, `value`, `set_value`, `on_click`, `on_change`, `set_hidden`, `enable`, `delete`, `size`, `grow`, `color`, `bg`, `focus` and `alive`. `fn=` receives the widget.
 
-Module level: `t5.ui.snackbar`, `t5.ui.dialog(title, text="", ok="OK", cancel=None, fn=None)`, `t5.ui.dp`, `t5.ui.size`, `t5.ui.icon`, `t5.ui.toast`, `t5.ui.fullscreen`, `t5.ui.is_fullscreen`, `t5.ui.app_bar`, `t5.ui.title`, `t5.ui.low_power`, `t5.ui.rotation`.
+Module level: `t5.ui.snackbar`, `t5.ui.dialog(title, text="", ok="OK", cancel=None, fn=None)`, `t5.ui.dp`, `t5.ui.size`, `t5.ui.icon`, `t5.ui.toast`, `t5.ui.fullscreen`, `t5.ui.is_fullscreen`, `t5.ui.low_power`, `t5.ui.rotation`.
 
 Only this MD2 subset exists: raw LVGL isn't reachable from Python.
 

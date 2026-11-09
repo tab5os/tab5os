@@ -281,9 +281,7 @@ void shell_sys_chrome(shell_chrome_t *out)
     memset(out, 0, sizeof *out);
     t5_manifest_t *m = malloc(sizeof *m);
     if (m && t5_apps_fg_manifest(m)) {
-        out->app_bar = m->app_bar;
         out->fullscreen = m->fullscreen;
-        snprintf(out->title, sizeof out->title, "%s", m->title[0] ? m->title : m->name);
     }
     free(m);
 }

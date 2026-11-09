@@ -9,6 +9,3 @@ description = "Plays WAV files and built-in tunes, and shows them on the standby
 
 [permissions]
 shared_read = true
-
-[shell]
-app_bar = true

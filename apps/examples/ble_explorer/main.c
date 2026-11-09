@@ -1,10 +1,10 @@
 /* BLE Explorer: the Bluetooth LE API (t5/ble.h) in both roles.
  *
- *   Scan (the search action in the app bar): lists nearby devices with their
+ *   Scan (the button at the top): lists nearby devices with their
  *   signal, newest names filled in as scan responses arrive.
  *   Tap a device: connects, discovers its GATT database, reads its name
  *   (0x2a00) and battery level (0x2a19) if it has them, and disconnects.
- *   Peripheral (the Bluetooth action): serves the battery service (0x180f)
+ *   Serve (the button next to it): serves the battery service (0x180f)
  *   with the Tab5's own level, notified every 5 s, and advertises as
  *   "Tab5 Explorer" so a phone can connect.
  *
@@ -33,7 +33,7 @@ typedef enum { JOB_NONE, JOB_SCAN, JOB_PROBE, JOB_SERVE } job_t;
 
 static struct {
     t5_app_t *app;
-    lv_obj_t *status, *list, *serve_btn;
+    lv_obj_t *status, *list;
     t5_mutex_t mx;
     peer_t devs[MAX_DEVS];
     int ndevs;
@@ -261,15 +261,20 @@ static void on_create(t5_app_t *app)
     s.mx = t5_mutex_create();
     lv_obj_t *scr = t5_app_screen(app);
     lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
-    /* The shell's app bar (manifest [shell] app_bar = true), with our actions. */
-    lv_obj_t *bar = t5_shell_app_bar();
-    if (bar) {
-        md_appbar_add_action(bar, MD_ICON_SEARCH, scan_clicked, NULL);
-        s.serve_btn = md_appbar_add_action(bar, MD_ICON_BLUETOOTH, serve_clicked, NULL);
-    }
-    s.status = md_label_create(scr, t5_ble_ready() ? "Tap search to scan." : "Bluetooth is off: turn it on in Settings.",
+    /* No title bar: the status line and the two actions share one row. */
+    lv_obj_t *row = lv_obj_create(scr);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(row, T5_DP(8), 0);
+    s.status = md_label_create(row, t5_ble_ready() ? "Tap Scan to look for devices." : "Bluetooth is off: turn it on in Settings.",
                                MD_TYPE_BODY2);
-    lv_obj_set_style_pad_all(s.status, T5_DP(16), 0);
+    lv_obj_set_style_pad_all(s.status, T5_DP(8), 0);
+    lv_obj_set_flex_grow(s.status, 1);
+    lv_label_set_long_mode(s.status, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_add_event_cb(md_button_create(row, "Scan", MD_BUTTON_TEXT), scan_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(md_button_create(row, "Serve", MD_BUTTON_TEXT), serve_clicked, LV_EVENT_CLICKED, NULL);
     s.list = md_list_create(scr, 0, 72, bind, clicked, NULL);
     lv_obj_set_width(s.list, LV_PCT(100));
     lv_obj_set_flex_grow(s.list, 1);
