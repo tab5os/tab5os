@@ -311,7 +311,7 @@ All system apps are built as normal apps against the public SDK, compiled into t
 
 | # | Work item | Detail | Size |
 | --- | --- | --- | --- |
-| 7.1 | Audio out | ES8388 via `esp_codec_dev`, speaker amp on `SPK_EN`, headphone detect routing, volume, power down by register on suspend, a mixer for system sounds and one app stream | M |
+| 7.1 | Audio out | ES8388 via `esp_codec_dev`, speaker amp on `SPK_EN`, headphone detect routing, volume, power down by register on suspend, a mixer for system sounds and app streams (up to 4 since Nov 9, with ducking) | M |
 | 7.2 | Audio in | ES7210 dual mics, echo cancellation (`esp-sr` AFE or similar), the privacy indicator in the status bar | M |
 | 7.3 | Audio priority | Audio task at top priority, underrun counter, audio wake lock that keeps playback going with the screen off | S |
 | 7.4 | Camera | SC2356 via `esp_video`, CSI → ISP → PPA → display preview outside LVGL, kept upright when rotated, released on suspend | L |

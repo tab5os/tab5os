@@ -77,7 +77,7 @@ T5_APP(.on_create = on_create);
 | `t5/port.h` | Named ports (`grove`, `mbus.*`, `ext`, `rs485`, `stamp`), Modbus RTU, rails |
 | `t5/power.h` | Wake locks, power state, battery (read-only) |
 | `t5/sys.h` | Time (and local time with the zone from Settings), IMU, network status, FreeRTOS |
-| `t5/audio.h` | One output stream (any rate 8-48 kHz, mono or stereo), system sounds, volume; microphone input (`mic`) with optional echo cancellation; resampling and level helpers |
+| `t5/audio.h` | Up to four mixed output streams (any rate 8-48 kHz, mono or stereo) with ducking, sound files (a WAV decoder and a player), system sounds, volume and route events; microphone input (`mic`) with optional echo cancellation; resampling and level helpers |
 | `t5/camera.h` | The built-in camera (`camera`): preview in an LVGL object, JPEG photos, H.264 video; hardware JPEG decoding (`t5_jpeg_decode`) |
 | `t5/usb.h` | USB-A devices: list, CDC serial, MIDI, UVC cameras (`usb`); a USB drive is mounted at `/usb` |
 | `t5/storage.h` | SD and `/data` state, atomic writes, safe eject (`storage`) |
@@ -166,6 +166,29 @@ t5_audio_out_write(out, pcm, bytes, 100);
 t5_audio_out_drain(out, 1000);
 t5_audio_out_close(out);
 ```
+
+Up to `T5_AUDIO_OUT_MAX` (4) output streams can be open at once, from any apps, and they are mixed. Each has a usage: `t5_audio_out_open()` opens a MEDIA stream; `t5_audio_out_open_usage(&cfg, T5_AUDIO_USAGE_ALERT, &out)` (or `SPEECH`) opens one that **ducks** the media streams to a quarter of their level (-12 dB) while it has sound queued, and so does every system sound (clicks, notifications). The level ramps down over 100 ms and back up over 300 ms, so there is no click. `t5_audio_out_set_volume(o, pct)` sets a stream's own level under the system volume.
+
+```c
+/* A sound file: the player decodes and plays it on its own task. */
+t5_audio_player_t *p;
+if (t5_audio_play_file("/sd/Music/chime.wav", T5_AUDIO_USAGE_ALERT, &p) == T5_OK) {
+    t5_audio_player_wait(p, 10000);          /* or poll t5_audio_player_state(p, &pos_ms) */
+    t5_audio_player_close(p);
+}
+/* Or decode it yourself: 16-bit PCM at the file's rate, 1 or 2 channels. */
+t5_audio_dec_t *d;
+t5_audio_dec_open(path, &d);                  /* t5_audio_dec_open_mem() for an asset in memory */
+t5_audio_info_t info;
+t5_audio_dec_info(d, &info);                  /* rate, channels, duration_ms */
+int16_t pcm[480 * 2];
+for (int n; (n = t5_audio_dec_read(d, pcm, 480)) > 0;) process(pcm, n);
+t5_audio_dec_close(d);
+```
+
+The decoder takes WAV: PCM 8, 16, 24 and 32-bit, 32 and 64-bit float, `WAVE_FORMAT_EXTENSIBLE`, any rate, up to 8 channels (it gives the first two). The player needs a rate the output takes, 8 to 48 kHz. MP3 is in the API (`T5_AUDIO_FMT_MP3`) but not in this OS build: `t5_audio_format_supported()` says false and the open calls return `T5_ERR_NOT_SUPPORTED`, because Espressif's decoder (`esp_audio_codec`, about 56 KB) doesn't fit the image's size budget. An app that needs MP3 can compile a decoder (minimp3, for example) into itself and play what it decodes through a stream. Files follow the app's file rules; decoders and players are closed when the app exits, at most 4 per app.
+
+`T5_EV_AUDIO_ROUTE` is posted when headphones are plugged in or out, and `T5_EV_AUDIO_VOLUME` when the system volume or mute changes; both carry `t5_ev_audio_t` (volume, muted, headphones). Bluetooth audio isn't possible: the radio is an ESP32-C6, which has Bluetooth LE only (no Classic Bluetooth, so no A2DP or HFP), and LE Audio (isochronous channels, LC3) isn't available on the C6 with ESP-IDF v6.1's controller and NimBLE host.
 
 Microphone input (`t5_audio_in_open`) and the camera (`t5_camera_open`) need the permission declared in the manifest and asked for at run time: call `t5_app_request_permission(app, T5_PERM_MIC, cb, user)` first and open in the callback. While either is open the status bar shows an indicator. Close the camera in `on_suspend` (the OS closes it for you at sleep, and on exit). The camera and the hardware JPEG decoder run their interrupts on core 0, so call them from any task; the photo and record calls block and must not run on the UI task.
 

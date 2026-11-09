@@ -58,6 +58,11 @@ uint32_t t5_sound_ms(t5_sound_t s);
 /* ---- mixing ------------------------------------------------------------------ */
 /* acc += pcm * gain_q15 / 32768 (samples, not frames). */
 void t5_mix_add(int32_t *acc, const int16_t *pcm, size_t samples, int32_t gain_q15);
+/* The same over frames of ch channels with the gain moving linearly from
+ * from_q15 to to_q15 (reached on the last frame): fades without clicks. */
+void t5_mix_add_ramp(int32_t *acc, const int16_t *pcm, size_t frames, uint8_t ch, int32_t from_q15, int32_t to_q15);
+/* now moved toward target by at most step. */
+int32_t t5_gain_step_q15(int32_t now, int32_t target, int32_t step);
 /* Saturate to 16 bits. */
 void t5_mix_to_s16(const int32_t *acc, int16_t *out, size_t samples);
 /* Peak level in dBFS (0 = full scale, -96 for silence). */

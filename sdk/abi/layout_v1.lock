@@ -93,6 +93,9 @@ enum MEMP_RAW_PCB = size=4
 enum PBUF_RAM = size=4
 enum PBUF_TRANSPORT = size=4
 enum T5_ANT_INTERNAL = size=4
+enum T5_AUDIO_FMT_UNKNOWN = size=4
+enum T5_AUDIO_PLAYER_PLAYING = size=4
+enum T5_AUDIO_USAGE_MEDIA = size=4
 enum T5_CHG_NO_USB = size=4
 enum T5_DIS_ACT_WARN = size=4
 enum T5_EV_ANY = size=4
@@ -1056,6 +1059,16 @@ enumerator PBUF_ROM = 1
 enumerator PBUF_TRANSPORT = 74
 enumerator T5_ANT_EXTERNAL = 1
 enumerator T5_ANT_INTERNAL = 0
+enumerator T5_AUDIO_FMT_MP3 = 2
+enumerator T5_AUDIO_FMT_UNKNOWN = 0
+enumerator T5_AUDIO_FMT_WAV = 1
+enumerator T5_AUDIO_PLAYER_ENDED = 2
+enumerator T5_AUDIO_PLAYER_ERROR = 3
+enumerator T5_AUDIO_PLAYER_PAUSED = 1
+enumerator T5_AUDIO_PLAYER_PLAYING = 0
+enumerator T5_AUDIO_USAGE_ALERT = 1
+enumerator T5_AUDIO_USAGE_MEDIA = 0
+enumerator T5_AUDIO_USAGE_SPEECH = 2
 enumerator T5_CHG_CHARGING = 1
 enumerator T5_CHG_FULL = 2
 enumerator T5_CHG_NO_USB = 0
@@ -1084,6 +1097,8 @@ enumerator T5_EV_APP_INSTALLED = 1003
 enumerator T5_EV_APP_REMOVED = 1004
 enumerator T5_EV_APP_STARTED = 1000
 enumerator T5_EV_APP_STOPPED = 1001
+enumerator T5_EV_AUDIO_ROUTE = 1206
+enumerator T5_EV_AUDIO_VOLUME = 1207
 enumerator T5_EV_BATTERY_CRITICAL = 654
 enumerator T5_EV_BATTERY_LOW = 651
 enumerator T5_EV_BATTERY_LOW_POWER = 652
@@ -2838,6 +2853,8 @@ macro T5_APP_STATE_MAX = 8192
 macro T5_APP_VERSION_LEN = 16
 macro T5_ASSERT(cond) = do { if (__builtin_expect(!(cond), 0)) { t5_assert_fail(__FILE__, __LINE__, #cond); } } while (0)
 macro T5_AUDIO_CH = 2
+macro T5_AUDIO_DEC_MAX = 4
+macro T5_AUDIO_OUT_MAX = 4
 macro T5_AUDIO_RATE = 48000
 macro T5_BATTERY_PERIOD_MS = 1000
 macro T5_BAT_HIST_CHARGING = 0x01
@@ -3501,9 +3518,13 @@ typedef suseconds_t = __suseconds_t
 typedef t5_app_desc_t = struct{api@+0:uint32_t; on_create@+4:fn(t5_app_t *) -> void *; on_resume@+8:fn(t5_app_t *) -> void *; on_suspend@+12:fn(t5_app_t *) -> void *; on_destroy@+16:fn(t5_app_t *) -> void *; on_rotate@+20:fn(t5_app_t *, int) -> void *; on_alarm@+24:fn(t5_app_t *) -> void *}
 typedef t5_app_entry_t = struct{id@+0:char[64]; name@+64:char[48]; version@+112:char[16]; builtin@+128:_Bool; running@+129:_Bool; autolaunch_blocked@+130:_Bool; crashes@+132:uint16_t; icon@+134:char[8]; perms@+144:uint32_t}
 typedef t5_app_info_t = struct{entry@+0:t5_app_entry_t; install_dir@+148:char[192]; data_dir@+340:char[192]; install_bytes@+536:uint64_t; data_bytes@+544:uint64_t; on_sd@+552:_Bool; install_time@+560:int64_t; granted@+568:uint32_t; denied@+572:uint32_t; crashes_total@+576:uint16_t; last_crash_kind@+578:uint8_t; last_crash_time@+584:int64_t; has_dump@+592:_Bool; dump_path@+593:char[192]; runtime@+785:char[12]}
+typedef t5_audio_format_t = enum{T5_AUDIO_FMT_UNKNOWN}
 typedef t5_audio_in_cfg_t = struct{rate@+0:uint32_t; channels@+4:uint8_t; aec@+5:_Bool; buffer_ms@+8:uint32_t}
+typedef t5_audio_info_t = struct{format@+0:t5_audio_format_t; rate@+4:uint32_t; channels@+8:uint8_t; file_channels@+9:uint8_t; bits@+10:uint8_t; frames@+12:uint32_t; duration_ms@+16:uint32_t}
 typedef t5_audio_out_cfg_t = struct{rate@+0:uint32_t; channels@+4:uint8_t; buffer_ms@+8:uint32_t}
+typedef t5_audio_player_state_t = enum{T5_AUDIO_PLAYER_PLAYING}
 typedef t5_audio_stats_t = struct{ready@+0:_Bool; out_running@+1:_Bool; in_running@+2:_Bool; speaker_on@+3:_Bool; headphones@+4:_Bool; muted@+5:_Bool; volume@+8:int; underruns@+12:uint32_t; overruns@+16:uint32_t; out_frames@+20:uint32_t; in_frames@+24:uint32_t; loop_max_us@+28:uint32_t; out_peak_dbfs@+32:int; in_peak_dbfs@+36:int; aec_erle_db@+40:float; codec_errors@+44:uint32_t; opens@+48:uint32_t}
+typedef t5_audio_usage_t = enum{T5_AUDIO_USAGE_MEDIA}
 typedef t5_bat_hist_pt_t = struct{t@+0:uint32_t; pct@+4:int8_t; flags@+5:uint8_t; mv@+6:uint16_t; ma@+8:int16_t}
 typedef t5_battery_status_t = struct{ready@+0:_Bool; mv@+2:uint16_t; ma10@+4:int32_t; mw@+8:int32_t; percent@+12:int; minutes_left@+16:int32_t; capacity_mah@+20:int32_t; charge_mah@+24:int32_t; usb@+28:_Bool; charge@+32:t5_charge_state_t; chg_en@+36:_Bool; fast@+37:_Bool; chg_stat@+38:_Bool; chg_stat_hi_charging@+40:uint32_t; chg_stat_hi_discharging@+44:uint32_t; chg_stat_lo_charging@+48:uint32_t; chg_stat_lo_discharging@+52:uint32_t; imu_c10@+56:int16_t; chip_c10@+58:int16_t; low_power@+60:_Bool; swapped@+61:_Bool; samples@+64:uint32_t; invalid_samples@+68:uint32_t; read_errors@+72:uint32_t; cycles@+76:uint16_t}
 typedef t5_camera_stats_t = struct{open@+0:_Bool; streaming@+1:_Bool; recording@+2:_Bool; frames@+4:uint32_t; dropped@+8:uint32_t; preview_frames@+12:uint32_t; fps@+16:uint32_t; preview_fps@+20:uint32_t; rec_frames@+24:uint32_t; rec_dropped@+28:uint32_t; rec_bytes@+32:uint64_t; rec_ms@+40:uint32_t; encode_us_max@+44:uint32_t; write_buffer_peak@+48:uint32_t; photos@+52:uint32_t; sensor@+56:char[16]}
@@ -3511,6 +3532,7 @@ typedef t5_charge_state_t = enum{T5_CHG_NO_USB}
 typedef t5_energy_rec_t = struct{id@+0:char[48]; mj@+48:uint64_t; ms@+56:uint32_t; last_seen@+60:uint32_t}
 typedef t5_err_t = enum{T5_OK}
 typedef t5_ev_app_t = struct{id@+0:char[28]; err@+28:int32_t}
+typedef t5_ev_audio_t = struct{volume@+0:uint8_t; muted@+1:uint8_t; headphones@+2:uint8_t}
 typedef t5_ev_battery_t = struct{percent@+0:int16_t; mv@+2:uint16_t; ma@+4:int16_t; charge@+6:uint8_t; usb@+7:uint8_t}
 typedef t5_ev_i2c_t = struct{addr@+0:uint8_t; err@+4:int32_t; errors@+8:uint32_t}
 typedef t5_ev_media_t = struct{on@+0:uint8_t; owner@+1:char[16]}

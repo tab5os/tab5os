@@ -16,12 +16,15 @@ if (t5_audio_out_open(&cfg, &out) == T5_OK) {
 
 | Fact | Detail |
 | --- | --- |
-| Streams | One app stream at a time. `T5_ERR_BUSY` otherwise |
+| Streams | Up to 4 (`T5_AUDIO_OUT_MAX`) open at once, every app's together, mixed. `T5_ERR_BUSY` past that |
+| Usage | `t5_audio_out_open` is MEDIA. `t5_audio_out_open_usage(&cfg, T5_AUDIO_USAGE_ALERT or SPEECH, &out)` ducks MEDIA streams by 12 dB while it has sound; system sounds do too |
+| Level | `t5_audio_out_set_volume(out, pct)`: the stream's own level under the system volume |
 | Conversion | Any supported format is converted to 48 kHz stereo for you |
 | Buffer | `buffer_ms` defaults to 200 |
 | Wake lock | An open stream holds an audio lock, so it plays with the screen off. `t5_audio_out_pause` releases it |
-| Routing | Speaker, or headphones when plugged in, automatic |
-| Mixing | System sounds are mixed over your stream |
+| Routing | Speaker, or headphones when plugged in, automatic. `T5_EV_AUDIO_ROUTE` says when it changes, `T5_EV_AUDIO_VOLUME` when the volume or mute does |
+| Mixing | Streams and system sounds are summed and clipped to 16 bits: leave headroom if several play at once |
+| Bluetooth | No Bluetooth audio: the C6 radio is Bluetooth LE only (no A2DP), and LE Audio isn't available on it |
 
 Write from a task, since `t5_audio_out_write` blocks until there's room. That also paces your loop. If it runs dry you hear a gap: `audio` on the console reports `underruns`. A longer `buffer_ms` buys tolerance at the cost of latency. See the [synth recipe](Cookbook.md#audio-synth).
 
@@ -31,6 +34,17 @@ Write from a task, since `t5_audio_out_write` blocks until there's room. That al
 | `t5_audio_tone(hz, ms)` | A test tone |
 | `t5_audio_volume`, `t5_audio_set_volume`, `t5_audio_muted`, `t5_audio_headphones` | Output state |
 | `t5_resample`, `t5_pcm_downmix`, `t5_mix_add`, `t5_pcm_peak_dbfs` | DSP building blocks |
+
+## Sound files
+
+`t5_audio_play_file(path, usage, &player)` (or `t5_audio_play_mem` for an asset in memory) decodes and plays on a task of its own; `t5_audio_player_pause`, `_seek`, `_set_volume`, `_state` (playing, paused, ended, error, and the position), `_wait` and `_close` control it. `t5_audio_dec_open` / `_read` / `_seek` give the PCM to your code instead.
+
+| Format | Support |
+| --- | --- |
+| WAV | PCM 8/16/24/32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE`; any rate (the player needs 8-48 kHz); up to 8 channels, the first two used |
+| MP3 | Not in this OS build (`t5_audio_format_supported(T5_AUDIO_FMT_MP3)` is false): the decoder doesn't fit the image budget. Compile one into your app (minimp3 is a single header) and play its PCM through a stream |
+
+Files follow your app's file rules, and decoders and players close when the app exits (4 per app). `audio wav /sd/t.wav 2 440` and `audio file /sd/t.wav` on the console make and play a test file; `audio duck` measures the ducking.
 
 ## Microphone
 

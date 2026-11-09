@@ -27,6 +27,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "t5_audio/audio.h"
+#include "t5_audio/decode.h"
 #include "t5_camera/camera.h"
 #include "t5_core/os.h"
 #include "t5_display/shot.h"
@@ -208,6 +209,108 @@ static int audio_echo(uint32_t seconds)
     return 0;
 }
 
+/* A sine WAV for the file tests: 16-bit, mono or stereo. */
+static int audio_wav_write(const char *path, uint32_t seconds, uint32_t hz, uint32_t rate, uint16_t ch)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        printf("can't create %s\n", path);
+        return 1;
+    }
+    uint32_t frames = seconds * rate, data = frames * ch * 2;
+    uint8_t h[44] = "RIFF....WAVEfmt ";
+    const uint32_t v32[] = { 36 + data, 16, rate, rate * ch * 2, data };
+    memcpy(h + 4, &v32[0], 4);
+    memcpy(h + 16, &v32[1], 4);
+    const uint16_t fmt[] = { 1, ch };
+    memcpy(h + 20, fmt, 4);
+    memcpy(h + 24, &v32[2], 4);
+    memcpy(h + 28, &v32[3], 4);
+    const uint16_t blk[] = { (uint16_t)(ch * 2), 16 };
+    memcpy(h + 32, blk, 4);
+    memcpy(h + 36, "data", 4);
+    memcpy(h + 40, &v32[4], 4);
+    fwrite(h, 1, sizeof h, f);
+    EXT_RAM_BSS_ATTR static int16_t buf[480 * 2];
+    for (uint32_t done = 0; done < frames;) {
+        uint32_t n = frames - done < 480 ? frames - done : 480;
+        for (uint32_t i = 0; i < n; i++) {
+            int16_t v = (int16_t)(sinf(2.0f * (float)M_PI * (float)hz * (float)(done + i) / (float)rate) * 8000.0f);
+            for (uint16_t c = 0; c < ch; c++) buf[i * ch + c] = v;
+        }
+        fwrite(buf, (size_t)n * ch * 2, 1, f);
+        done += n;
+    }
+    fclose(f);
+    printf("%s: %u s of %u Hz, %u Hz, %u ch\n", path, (unsigned)seconds, (unsigned)hz, (unsigned)rate, (unsigned)ch);
+    return 0;
+}
+
+static int audio_file(const char *path)
+{
+    t5_audio_dec_t *d;
+    t5_err_t e = t5_audio_dec_open(path, &d);
+    if (e != T5_OK) {
+        printf("%s: %s\n", path, t5_err_str(e));
+        return 1;
+    }
+    t5_audio_info_t in;
+    T5_IGNORE(t5_audio_dec_info(d, &in));    /* a decoder just opened */
+    printf("%s: WAV %u Hz, %u ch (%u in the file), %u-bit, %u ms\n", path, (unsigned)in.rate,
+           (unsigned)in.channels, (unsigned)in.file_channels, (unsigned)in.bits, (unsigned)in.duration_ms);
+    T5_IGNORE(t5_audio_dec_close(d));
+    t5_audio_player_t *p;
+    e = t5_audio_play_file(path, T5_AUDIO_USAGE_MEDIA, &p);
+    if (e != T5_OK) {
+        printf("play: %s\n", t5_err_str(e));
+        return 1;
+    }
+    int64_t t0 = t5_time_us();
+    e = t5_audio_player_wait(p, in.duration_ms + 3000);
+    uint32_t pos = 0;
+    t5_audio_player_state_t st = t5_audio_player_state(p, &pos);
+    printf("%s after %u ms: %s at %u ms\n", t5_err_str(e), (unsigned)((t5_time_us() - t0) / 1000),
+           st == T5_AUDIO_PLAYER_ENDED ? "ended" : st == T5_AUDIO_PLAYER_ERROR ? "error" : "playing", (unsigned)pos);
+    T5_IGNORE(t5_audio_player_close(p));
+    return e != T5_OK || st != T5_AUDIO_PLAYER_ENDED;
+}
+
+/* Ducking: the output's peak with a MEDIA tone alone, then with an ALERT
+ * stream (silent) open beside it: should drop about 12 dB. */
+static int audio_duck(void)
+{
+    t5_audio_out_cfg_t c = { .rate = 48000, .channels = 1, .buffer_ms = 200 };
+    t5_audio_out_t *m = NULL, *a = NULL;
+    t5_err_t e = t5_audio_out_open(&c, &m);
+    if (e == T5_OK) e = t5_audio_out_open_usage(&c, T5_AUDIO_USAGE_ALERT, &a);
+    if (e != T5_OK) {
+        printf("open: %s\n", t5_err_str(e));
+        if (m) T5_IGNORE(t5_audio_out_close(m));
+        return 1;
+    }
+    EXT_RAM_BSS_ATTR static int16_t tone[480], quiet[480];
+    for (int i = 0; i < 480; i++) tone[i] = (int16_t)(sinf(2.0f * (float)M_PI * 1000.0f * (float)i / 48000.0f) * 16000.0f);
+    int peak[2] = { 0 };
+    for (int phase = 0; phase < 2; phase++) {
+        int lo = 0;
+        for (int blk = 0; blk < 60; blk++) {        /* 600 ms; read the last 200 */
+            t5_audio_out_write(m, tone, sizeof tone, 100);
+            if (phase) t5_audio_out_write(a, quiet, sizeof quiet, 100);
+            if (blk >= 40) {
+                t5_audio_stats_t s;
+                t5_audio_stats(&s);
+                lo = blk == 40 ? s.out_peak_dbfs : (s.out_peak_dbfs < lo ? s.out_peak_dbfs : lo);
+            }
+        }
+        peak[phase] = lo;
+    }
+    T5_IGNORE(t5_audio_out_close(a));
+    T5_IGNORE(t5_audio_out_close(m));
+    int drop = peak[0] - peak[1];
+    printf("media alone %d dBFS, under an alert %d dBFS: ducked %d dB (want 9..15)\n", peak[0], peak[1], drop);
+    return drop < 9 || drop > 15;
+}
+
 static int cmd_audio(int argc, char **argv)
 {
     if (argc == 1) {
@@ -242,10 +345,19 @@ static int cmd_audio(int argc, char **argv)
         return audio_play(a, b);
     }
     if (!strcmp(c, "echo") && argc == 3 && diag_parse_u32(argv[2], 1, 60, &a)) return audio_echo(a);
+    if (!strcmp(c, "file") && argc == 3) return audio_file(argv[2]);
+    if (!strcmp(c, "duck") && argc == 2) return audio_duck();
+    if (!strcmp(c, "wav") && argc >= 5 && diag_parse_u32(argv[3], 1, 60, &a) && diag_parse_u32(argv[4], 20, 20000, &b)) {
+        uint32_t rate = 44100, ch = 2;
+        if (argc >= 6 && !diag_parse_u32(argv[5], 8000, 48000, &rate)) return 1;
+        if (argc >= 7 && !diag_parse_u32(argv[6], 1, 2, &ch)) return 1;
+        return audio_wav_write(argv[2], a, b, rate, (uint16_t)ch);
+    }
     if (!strcmp(c, "rec") && argc >= 3 && diag_parse_u32(argv[2], 1, 600, &a))
         return audio_rec(a, argc >= 4 && !strcmp(argv[3], "aec"));
     printf("usage: audio [vol <n> | mute on|off | sounds on|off | sound <name> | tone <hz> <ms> |\n"
-           "              play <s> [hz] | rec <s> [aec] | echo <s>]\n");
+           "              play <s> [hz] | rec <s> [aec] | echo <s> | duck |\n"
+           "              wav <path> <s> <hz> [rate] [ch] | file <path>]\n");
     return 1;
 }
 

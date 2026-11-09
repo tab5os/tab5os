@@ -93,6 +93,8 @@ typedef enum {
     T5_EV_USB_DETACHED,
     T5_EV_USB_STORAGE,              /* /usb mounted or unmounted */
     T5_EV_USBC_MODE,                /* USB-C console / mass storage changed */
+    T5_EV_AUDIO_ROUTE,              /* headphones plugged in or out (payload: t5_ev_audio_t) */
+    T5_EV_AUDIO_VOLUME,             /* system volume or mute changed (payload: t5_ev_audio_t) */
 } t5_event_id_t;
 
 typedef struct {
@@ -141,6 +143,12 @@ typedef struct {
     uint8_t on;
     char owner[16];       /* app id, truncated, "" for the system */
 } t5_ev_media_t;
+
+typedef struct {
+    uint8_t volume;       /* 0..100 */
+    uint8_t muted;
+    uint8_t headphones;   /* plugged in: output goes there, not the speaker */
+} t5_ev_audio_t;
 
 typedef struct {
     uint8_t addr;         /* USB address */

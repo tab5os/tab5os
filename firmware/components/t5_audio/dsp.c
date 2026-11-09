@@ -134,6 +134,23 @@ void t5_mix_add(int32_t *acc, const int16_t *pcm, size_t samples, int32_t gain_q
     for (size_t i = 0; i < samples; i++) acc[i] += (pcm[i] * gain_q15 + 16384) >> 15;
 }
 
+void t5_mix_add_ramp(int32_t *acc, const int16_t *pcm, size_t frames, uint8_t ch, int32_t from_q15, int32_t to_q15)
+{
+    if (!frames) return;
+    int32_t span = to_q15 - from_q15;
+    for (size_t f = 0; f < frames; f++) {
+        /* The gain reaches to_q15 on the last frame. */
+        int32_t g = from_q15 + (int32_t)((int64_t)span * (int64_t)(f + 1) / (int64_t)frames);
+        for (uint8_t c = 0; c < ch; c++) acc[f * ch + c] += (pcm[f * ch + c] * g + 16384) >> 15;
+    }
+}
+
+int32_t t5_gain_step_q15(int32_t now, int32_t target, int32_t step)
+{
+    if (now < target) return now + step < target ? now + step : target;
+    return now - step > target ? now - step : target;
+}
+
 void t5_mix_to_s16(const int32_t *acc, int16_t *out, size_t samples)
 {
     for (size_t i = 0; i < samples; i++) {

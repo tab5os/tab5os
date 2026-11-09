@@ -57,6 +57,8 @@ const char *t5_event_name(t5_event_id_t id)
     case T5_EV_USB_DETACHED: return "usb.detached";
     case T5_EV_USB_STORAGE: return "usb.storage";
     case T5_EV_USBC_MODE: return "usbc.mode";
+    case T5_EV_AUDIO_ROUTE: return "audio.route";
+    case T5_EV_AUDIO_VOLUME: return "audio.volume";
     }
     return "unknown";
 }
