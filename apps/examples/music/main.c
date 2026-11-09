@@ -160,17 +160,25 @@ static void worker(void *arg)
 }
 
 /* ---- UI ------------------------------------------------------------------------ */
+/* Labels only when they change: every set redraws, and redraws while music
+ * plays are memory traffic the speaker amp picks up as static. */
+static void set_text(lv_obj_t *label, const char *text)
+{
+    if (strcmp(lv_label_get_text(label), text)) lv_label_set_text(label, text);
+}
+
 static void refresh(lv_timer_t *t)
 {
     (void)t;
     t5_mutex_lock(s.mx);
     uint32_t pos = 0;
     if (s.player) t5_audio_player_state(s.player, &pos);
-    lv_label_set_text(s.title, s.tracks[s.cur].title);
-    lv_label_set_text(s.artist, s.tracks[s.cur].path[0] ? "Music folder" : "Tab5 demo tunes");
-    lv_label_set_text(lv_obj_get_child(s.play, 0), s.playing ? MD_ICON_PAUSE : MD_ICON_PLAY_ARROW);
+    set_text(s.title, s.tracks[s.cur].title);
+    set_text(s.artist, s.tracks[s.cur].path[0] ? "Music folder" : "Tab5 demo tunes");
+    set_text(lv_obj_get_child(s.play, 0), s.playing ? MD_ICON_PAUSE : MD_ICON_PLAY_ARROW);
     bool tune = !s.tracks[s.cur].path[0];
-    lv_bar_set_value(s.bar, tune ? (int32_t)(pos / (TUNE_SECONDS * 10)) : 0, LV_ANIM_OFF);
+    int32_t v = tune ? (int32_t)(pos / (TUNE_SECONDS * 10)) : 0;
+    if (lv_bar_get_value(s.bar) != v) lv_bar_set_value(s.bar, v, LV_ANIM_OFF);
     t5_mutex_unlock(s.mx);
 }
 

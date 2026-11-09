@@ -77,6 +77,32 @@ static esp_codec_dev_sample_info_t fs(void)
     return f;
 }
 
+static void es8388_set(uint8_t reg, uint8_t clear, uint8_t set)
+{
+    uint8_t v = 0;
+    if (t5_i2c_read(s_dac_ctrl.dev, reg, &v, 1) != T5_OK) return;
+    v = (uint8_t)((v & ~clear) | set);
+    T5_LOG_ON_ERR(TAG, t5_i2c_write(s_dac_ctrl.dev, reg, &v, 1));
+}
+
+/* What esp_codec_dev's ES8388 driver leaves differently from Everest's
+ * playback sequence (ES8388 user guide 11.3) and M5Stack's Tab5 setup. We
+ * only play through the ES8388 (the mics are on the ES7210):
+ *   0x00 EnRef: the analog reference on (the driver writes 0x12, which
+ *        turns it off)
+ *   0x03 ADC and line inputs, with their +24 dB preamp, powered down
+ *   0x02 the ADC's DLL, state machine and reference down (DAC side on)
+ *   0x19 DACSoftRamp: volume and mute changes ramp instead of stepping,
+ *        so they don't click
+ * The driver doesn't touch these again on start and stop. */
+static void es8388_tune(void)
+{
+    es8388_set(0x00, 0, 0x04);
+    es8388_set(0x03, 0, 0xff);
+    es8388_set(0x02, 0, 0xaa);
+    es8388_set(0x19, 0, 0x20);
+}
+
 t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
 {
     *dac_ok = *adc_ok = false;
@@ -159,7 +185,10 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
      * known state (the factory firmware may have left them running). */
     if (s_out) {
         esp_codec_dev_sample_info_t f = fs();
-        if (esp_codec_dev_open(s_out, &f) == ESP_CODEC_DEV_OK) esp_codec_dev_close(s_out);
+        if (esp_codec_dev_open(s_out, &f) == ESP_CODEC_DEV_OK) {
+            es8388_tune();          /* the ADC side off while idle too */
+            esp_codec_dev_close(s_out);
+        }
     }
     if (s_in) {
         esp_codec_dev_sample_info_t f = fs();
@@ -175,6 +204,7 @@ t5_err_t audio_hw_out_open(int volume, bool muted)
     if (s_out_open) return T5_OK;
     esp_codec_dev_sample_info_t f = fs();
     if (esp_codec_dev_open(s_out, &f) != ESP_CODEC_DEV_OK) return T5_ERR_IO;
+    es8388_tune();
     s_out_open = true;
     esp_codec_dev_set_out_vol(s_out, volume);
     esp_codec_dev_set_out_mute(s_out, muted);

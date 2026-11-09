@@ -470,6 +470,15 @@ static void out_task(void *arg)
         }
         if (!have_stream && !have_voice) idle_ms += BLOCK_MS;
         t5_mix_to_s16(acc, blk, BLOCK_SAMPLES);
+        /* The speaker amp hears only the left output (schematic: LOUT1 to
+         * the NS4150B, single ended), so on the speaker both channels carry
+         * the mix of the two: nothing panned right is lost. */
+        if (speaker) {
+            for (int i = 0; i < BLOCK_FRAMES; i++) {
+                int16_t m = (int16_t)(((int32_t)blk[2 * i] + blk[2 * i + 1]) / 2);
+                blk[2 * i] = blk[2 * i + 1] = m;
+            }
+        }
         ref_push(blk, BLOCK_FRAMES);
         s_st.out_peak_dbfs = t5_pcm_peak_dbfs(blk, BLOCK_SAMPLES);
         uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
