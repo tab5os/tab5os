@@ -889,11 +889,11 @@ lv_label_is_char_under_pos |  | bool lv_label_is_char_under_pos(const lv_obj_t *
 lv_label_set_long_mode |  | void lv_label_set_long_mode(lv_obj_t * obj, lv_label_long_mode_t long_mode);
 lv_label_set_max_lines |  | void lv_label_set_max_lines(lv_obj_t * obj, int32_t lines);
 lv_label_set_recolor |  | void lv_label_set_recolor(lv_obj_t * obj, bool en);
-lv_label_set_text |  | void lv_label_set_text(lv_obj_t * obj, const char * text);
-lv_label_set_text_fmt |  | void lv_label_set_text_fmt(lv_obj_t * obj, const char * fmt, ...)LV_FORMAT_ATTRIBUTE(2, 3);
+lv_label_set_text | wrap=t5_app_lv_label_set_text | void lv_label_set_text(lv_obj_t * obj, const char * text);
+lv_label_set_text_fmt | wrap=t5_app_lv_label_set_text_fmt | void lv_label_set_text_fmt(lv_obj_t * obj, const char * fmt, ...)LV_FORMAT_ATTRIBUTE(2, 3);
 lv_label_set_text_selection_end |  | void lv_label_set_text_selection_end(lv_obj_t * obj, uint32_t index);
 lv_label_set_text_selection_start |  | void lv_label_set_text_selection_start(lv_obj_t * obj, uint32_t index);
-lv_label_set_text_vfmt |  | void lv_label_set_text_vfmt(lv_obj_t * obj, const char * fmt, va_list args);
+lv_label_set_text_vfmt | wrap=t5_app_lv_label_set_text_vfmt | void lv_label_set_text_vfmt(lv_obj_t * obj, const char * fmt, va_list args);
 lv_layer_bottom |  | lv_obj_t * lv_layer_bottom(void);
 lv_layer_init |  | void lv_layer_init(lv_layer_t * layer);
 lv_layer_reset |  | void lv_layer_reset(lv_layer_t * layer);
