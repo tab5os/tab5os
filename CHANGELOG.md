@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Music is a real player now.** It plays MP3, FLAC (up to 192 kHz) and WAV from the SD card's `music` folder, with the decoders in the app. The library is browsable by song, album and artist from the files' tags (ID3v1 and v2, Vorbis comments, WAV INFO), with album art from the files or a `cover.jpg` in the album folder. It reads M3U playlists and makes and edits its own in `music/playlists`. Playback has a queue with play next, shuffle and repeat, a seekable progress bar, no gap between tracks of the same format, and it resumes where it left off. The standby screen's music card controls it.
 - **Calculator example:** a basic and a scientific calculator (trigonometry in degrees or radians, inverse trig, logarithms, powers, roots, factorial, π, e, Ans, brackets) with the result shown live as you type. Its engine is plain C with host tests (`test/host/test_calc.c`), and it brings its own font for the maths symbols the OS fonts lack.
 - **The shell no longer draws an app bar.** Apps get the whole screen under the status bar. An app that wants a title, a back arrow or actions draws its own with `md_appbar_create()` or `md_page_create()`. `t5_shell_set_app_bar()`, `t5_shell_set_title()` and `t5_shell_app_bar()` are gone from API level 1 (still a candidate), and so are `t5.ui.app_bar()` and `t5.ui.title()` in Python. `t5 pack` refuses `[shell] app_bar` and `title`; packages built with them still install, without the bar. Music, BLE Explorer and UI Gallery no longer use it.
 

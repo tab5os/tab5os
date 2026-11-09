@@ -10,5 +10,6 @@ t5_app(rs485_console SRCS rs485_console/main.c MANIFEST rs485_console/manifest.t
 t5_app(weather SRCS weather/main.c weather/wx.c weather/json.c MANIFEST weather/manifest.toml)
 t5_app(ble_explorer SRCS ble_explorer/main.c MANIFEST ble_explorer/manifest.toml)
 t5_app(ui_gallery SRCS ui_gallery/main.c MANIFEST ui_gallery/manifest.toml)
-t5_app(music SRCS music/main.c MANIFEST music/manifest.toml)
+t5_app(music SRCS music/main.c music/player.c music/decoder.c music/library.c music/tags.c music/m3u.c music/art.c
+       music/music_icons_48.c music/music_icons_80.c music/third_party/tjpgd/tjpgd.c MANIFEST music/manifest.toml)
 t5_app(calculator SRCS calculator/main.c calculator/calc.c calculator/calc_font_40.c calculator/calc_font_80.c MANIFEST calculator/manifest.toml)
