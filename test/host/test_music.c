@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "library.h"
 #include "m3u.h"
 #include "tags.h"
 #include "unity.h"
@@ -382,6 +383,22 @@ static void test_m3u_paths(void)
     TEST_ASSERT_EQUAL_STRING("../../other/y.mp3", r);
 }
 
+/* ---- library lookup -------------------------------------------------------------- */
+static void test_lib_find(void)
+{
+    lib_track_t t[3] = { { .path = "/sd/music/Charli xcx/BRAT/1-01. 360 - Charli xcx.flac" },
+                         { .path = "/sd/music/Other/Album/01 Song.mp3" },
+                         { .path = "/sd/music/Other/Album/02 Song.flac" } };
+    lib_t l = { .t = t, .n = 3 };
+    TEST_ASSERT_EQUAL(0, lib_find(&l, "/sd/music/Charli xcx/BRAT/1-01. 360 - Charli xcx.flac"));
+    TEST_ASSERT_EQUAL(0, lib_find(&l, "/SD/Music/charli xcx/brat/1-01. 360 - Charli xcx.flac"));   /* FAT: any case */
+    TEST_ASSERT_EQUAL(1, lib_find(&l, "/Music/Other/Album/01 Song.mp3"));                         /* a computer's path */
+    /* converted: the playlist says .m4a, the library has .flac */
+    TEST_ASSERT_EQUAL(0, lib_find(&l, "/sd/music/Charli xcx/BRAT/1-01. 360 - Charli xcx.m4a"));
+    TEST_ASSERT_EQUAL(2, lib_find(&l, "/sd/music/Other/Album/02 Song.m4a"));
+    TEST_ASSERT_EQUAL(-1, lib_find(&l, "/sd/music/Other/Album/03 Song.m4a"));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -395,5 +412,6 @@ int main(void)
     RUN_TEST(test_tag_copy_utf8);
     RUN_TEST(test_m3u_parse);
     RUN_TEST(test_m3u_paths);
+    RUN_TEST(test_lib_find);
     return UNITY_END();
 }

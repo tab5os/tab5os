@@ -62,7 +62,7 @@ target_link_libraries(test_calc PRIVATE unity m)
 add_test(NAME test_calc COMMAND test_calc)
 
 set(MUSIC ${CMAKE_CURRENT_LIST_DIR}/../../apps/examples/music)
-add_executable(test_music test_music.c ${MUSIC}/tags.c ${MUSIC}/m3u.c)
+add_executable(test_music test_music.c ${MUSIC}/tags.c ${MUSIC}/m3u.c ${MUSIC}/library.c)
 target_include_directories(test_music PRIVATE ${MUSIC})
 target_link_libraries(test_music PRIVATE unity)
 add_test(NAME test_music COMMAND test_music)

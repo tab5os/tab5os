@@ -303,6 +303,15 @@ int lib_find(const lib_t *l, const char *path)
             return i;
         }
     }
+    /* the same song in another format: a playlist made for the .m4a or .mp3
+     * files a library was converted from */
+    const char *dot = strrchr(tail, '.');
+    size_t sl = dot && !strchr(dot, '/') ? (size_t)(dot - tail) : tl;
+    for (int i = 0; sl && i < l->n; i++) {
+        const char *p = l->t[i].path, *pd = strrchr(p, '.');
+        size_t ps = pd && !strchr(pd, '/') ? (size_t)(pd - p) : strlen(p);
+        if (ps >= sl && !ncasecmp(p + ps - sl, tail, sl) && (ps == sl || p[ps - sl - 1] == '/')) return i;
+    }
     return -1;
 }
 
