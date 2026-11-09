@@ -19,7 +19,22 @@ cd hello && t5 run                   # build, push, launch, stream the log
 
 To install by hand instead: copy the `.t5app` (from `t5 app-build`, in `build/`) to the SD card and tap it in Files, or run `app install /sd/hello.t5app` (or `app fetch <url>`) on the console. `t5 apps` builds the test apps in `test/apps/`, `t5 examples` the examples in `apps/examples/`.
 
-The build uses the firmware's own compile flags for its ABI table (the generated `t5_abi/abi_table.c`: `sdk/cmake/app_flags.py` reads them from `firmware/build/compile_commands.json`, which the SDK release ships at the same place), so an app sees exactly the headers and LVGL configuration the OS was built with.
+An app compiles with the firmware's own flags for its ABI table (the generated `t5_abi/abi_table.c`) and against the same header files, so it sees exactly the headers and LVGL configuration the OS was built with. `sdk/cmake/sysroot.py` copies the headers the public `t5/*.h` headers reach (the OS's, ESP-IDF's libc, FreeRTOS and lwIP ports, LVGL, the generated `sdkconfig.h`: about 370 files, with their licences) into one tree, keeping each file's relative path so every include resolves as it did in the firmware, and writes the flags with paths relative to that tree. In the source tree `t5_app.cmake` stages it into the app's build directory from `firmware/build`. The SDK release ships it as `sdk/sysroot/`.
+
+### From the SDK release, on any machine
+
+The release's `tab5os-sdk-<version>.tar.gz` needs no firmware sources or build: only the ESP-IDF v6.1 RISC-V toolchain (`riscv32-esp-elf`, GCC 15.2.0; a full ESP-IDF install has it, or install the toolchain alone), CMake 3.22+, Ninja and Python 3.11+.
+
+```sh
+tar xzf tab5os-sdk-0.0.1.tar.gz && cd tab5os-sdk-0.0.1
+. tools/env.sh                       # with ESP-IDF v6.1 installed; or put riscv32-esp-elf-gcc on PATH yourself
+tools/t5/t5 new "Hello"              # an app from sdk/templates/c
+tools/t5/t5 app-build hello          # hello/build/com.example.hello.t5app
+tools/t5/t5 run hello                # build, push to a paired Tab5, launch, stream the log
+cmake -S apps/examples -B ex -G Ninja && cmake --build ex    # the example apps, from source
+```
+
+The build stops if the compiler isn't GCC 15.2.0, since the flags use Espressif's RISC-V extensions and picolibc. `t5 sdk` packages the SDK and proves it: `test/sdk/check_tarball.sh` extracts it outside the repo and, with only the compiler, CMake, Ninja and Python on `PATH`, builds the C template, the Python template and every example (CI runs it). The apps it builds are byte-identical to the ones built in the source tree. The tools' device constants (permission names, limits, the API level) come from `sdk/device.json`, which the release writes from the firmware sources (`tools/t5/t5const.py snapshot`). The packaging refuses to ship a file that names the machine it ran on.
 
 ## Developer mode and the t5 CLI
 

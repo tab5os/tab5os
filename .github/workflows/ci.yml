@@ -45,6 +45,9 @@ jobs:
       - name: Build the example apps against this firmware
         shell: bash
         run: . "$IDF_PATH/export.sh" && tools/t5/t5 examples
+      - name: Package the app SDK and build every example from the tarball alone
+        shell: bash
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 sdk
       - name: Build the recovery image (and check it fits its partition)
         shell: bash
         run: . "$IDF_PATH/export.sh" && tools/t5/t5 recovery-build

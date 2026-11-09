@@ -36,6 +36,8 @@ usage: t5 [--port PORT] [--docker] <command>
   shot [OUT.png]   screenshot over the console (tools/t5/t5shot.py; --cam for the camera)
   abi-check [REF]  check the struct layouts against sdk/abi/*.lock (needs a firmware build), and with
                    REF the symbol file against REF's
+  sdk [OUT]        package the app SDK (OUT, default dist/sdk) and prove it builds apps on its own
+                   (tools/sdk_release.sh, test/sdk/check_tarball.sh)
   recovery-build   build the recovery image (recovery/build/, plan 9.2); fails if it doesn't fit
   recovery-flash   write it to the recovery partition; the OS is untouched
   c6-build         build the ESP32-C6 radio firmware (c6/build/); fails if it doesn't fit c6fw
@@ -65,7 +67,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ $# -ge 1 ] || { usage; exit 1; }
-IDF_VER="$(tr -d '[:space:]' < "$FW/idf_version.txt")"
+# The repo's firmware/idf_version.txt, or the SDK release's copy of it.
+IDF_VER="$(tr -d '[:space:]' < "$([ -f "$FW/idf_version.txt" ] && echo "$FW" || echo "$ROOT/sdk")/idf_version.txt")"
 IDF_PYTHON="${IDF_PYTHON_ENV_PATH:+$IDF_PYTHON_ENV_PATH/bin/python}"
 IDF_PYTHON="${IDF_PYTHON:-python3}"
 export PYTHONPATH="$ROOT/tools/t5${PYTHONPATH:+:$PYTHONPATH}"
@@ -201,6 +204,10 @@ case "$cmd" in
         # The symbol file alone is checked by lint; against REF only here.
         [ $# -eq 0 ] || python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" --base "$1"
         "$IDF_PYTHON" "$ROOT/tools/abi/layout.py" check "$FW/build" ;;
+    sdk)
+        out="${1:-$ROOT/dist/sdk}"
+        tar="$("$ROOT/tools/sdk_release.sh" "$out" "$FW/build" | tail -1)"
+        "$ROOT/test/sdk/check_tarball.sh" "$tar" ;;
     hil)
         [ $# -ge 1 ] || { ls "$ROOT/test/hil" | sed -n 's/^\([a-z][a-z0-9_]*\)\.py$/  \1/p'; exit 1; }
         name="$1"; shift

@@ -46,22 +46,24 @@ LIBRARY_MACROS = re.compile(
     r"^(LV_VERSION_\w+|CONFIG_LV_USE_\w+|CONFIG_LV_COLOR_DEPTH\w*|CONFIG_LV_DRAW_BUF_\w+|CONFIG_LV_FONT_\w+|"
     r"CONFIG_FREERTOS_HZ|portTICK_PERIOD_MS|portMAX_DELAY|pdTRUE|pdFALSE|pdPASS|pdFAIL|tskNO_AFFINITY)$")
 FIRMWARE_INCLUDES = os.path.realpath(os.path.join(ROOT, "firmware", "components"))
-# The C library and lwIP headers behind exported functions.
-ABI_INCLUDES = os.path.join(ROOT, "firmware", "components", "t5_abi", "abi_includes.h")
+SYSROOT_PY = os.path.join(SDK, "cmake", "sysroot.py")
+sys.path.insert(0, os.path.dirname(SYSROOT_PY))
+import sysroot  # noqa: E402
 
 
 def system_headers():
-    with open(ABI_INCLUDES) as fh:
-        names = re.findall(r'^#include [<"]([^>"]+)[>"]', fh.read(), re.M)
-    return [n for n in names if "/" not in n or n.startswith(("sys/", "lwip/"))]
+    return sysroot.abi_system_headers()
 
 
-def app_flags(build):
-    out = subprocess.run([sys.executable, os.path.join(SDK, "cmake", "app_flags.py"), build],
-                         capture_output=True, text=True)
-    if out.returncode:
-        sys.exit(out.stderr.strip() or "can't read the firmware's compile flags")
-    return out.stdout.split("\n")[:-1] + ["-I" + os.path.join(SDK, "include")]
+def app_flags(build, tmp):
+    """Stage the SDK sysroot from the build, as the SDK release does, and
+    compile against that: a header the staging misses fails here."""
+    sr = os.path.join(tmp, "sysroot")
+    with open(os.devnull, "w") as null:
+        r = subprocess.run([sys.executable, SYSROOT_PY, "stage", build, sr], stdout=null)
+    if r.returncode:
+        sys.exit("can't stage the SDK headers from the firmware build")
+    return sysroot.flags(sr) + ["-I" + os.path.join(SDK, "include")], sr
 
 
 def public_headers():
@@ -248,15 +250,15 @@ def collect_macros(text):
             defs.pop(line.split()[1], None)
     items = {}
     for name, (args, value, path) in defs.items():
-        ours = path and os.path.realpath(path).startswith(FIRMWARE_INCLUDES + os.sep)
+        ours = path and "/sysroot/os/" in os.path.realpath(path)
         if value.strip() and (ours or LIBRARY_MACROS.match(name)):
             items[f"macro {name}{args}"] = " ".join(value.split())
     return items
 
 
 def snapshot(build):
-    flags = app_flags(build)
     with tempfile.TemporaryDirectory() as tmp:
+        flags, _ = app_flags(build, tmp)
         obj, macros = compile_all(flags, tmp)
         d = Dwarf(obj)
         items = collect_types(d)

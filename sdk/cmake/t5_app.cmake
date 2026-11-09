@@ -8,31 +8,59 @@
 #   t5_app(hello SRCS main.c MANIFEST manifest.toml [ICON icon.png] [ASSETS dir])
 #
 # Produces <name>.elf (position-independent, entry t5_app_entry, imports
-# only) and <name>.t5app (the installable package). T5_FIRMWARE_BUILD points
-# at the firmware build the app is compiled against (default: the repo's
-# firmware/build); it supplies the exact headers and LVGL config.
+# only) and <name>.t5app (the installable package).
+#
+# Headers and flags: the SDK release ships them in sdk/sysroot/ (the headers
+# the public SDK headers reach, and the firmware's compile flags with
+# relative paths; sdk/cmake/sysroot.py). Then nothing but the RISC-V
+# compiler from ESP-IDF v6.1 is needed. In the source tree there is no
+# sdk/sysroot/: it is staged into the build directory from the firmware
+# build, T5_FIRMWARE_BUILD (default: the repo's firmware/build).
 get_filename_component(T5_SDK "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 get_filename_component(T5_ROOT "${T5_SDK}/.." ABSOLUTE)
-if(NOT T5_FIRMWARE_BUILD)
-    set(T5_FIRMWARE_BUILD "${T5_ROOT}/firmware/build")
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+
+if(EXISTS "${T5_SDK}/sysroot/flags.cmake")
+    set(T5_SYSROOT "${T5_SDK}/sysroot")
+else()
+    if(NOT T5_FIRMWARE_BUILD)
+        set(T5_FIRMWARE_BUILD "${T5_ROOT}/firmware/build")
+    endif()
+    set(T5_SYSROOT "${CMAKE_BINARY_DIR}/t5_sysroot")
+    set(_db "${T5_FIRMWARE_BUILD}/compile_commands.json")
+    if(NOT EXISTS "${_db}")
+        message(FATAL_ERROR "t5_app: no sdk/sysroot and no firmware build at ${T5_FIRMWARE_BUILD} "
+                            "(use an SDK release, or run `t5 build` in the repo)")
+    endif()
+    if(NOT EXISTS "${T5_SYSROOT}/flags.cmake" OR "${_db}" IS_NEWER_THAN "${T5_SYSROOT}/flags.cmake")
+        execute_process(COMMAND ${Python3_EXECUTABLE} ${T5_SDK}/cmake/sysroot.py stage ${T5_FIRMWARE_BUILD} ${T5_SYSROOT}
+                        RESULT_VARIABLE rc)
+        if(NOT rc EQUAL 0)
+            message(FATAL_ERROR "t5_app: can't stage the SDK headers from ${T5_FIRMWARE_BUILD}")
+        endif()
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_db}")
 endif()
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include("${T5_SYSROOT}/flags.cmake")
+
+# The flags (-march with Espressif's extensions, picolibc) need the compiler
+# the OS was built with.
+execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpversion OUTPUT_VARIABLE _gcc OUTPUT_STRIP_TRAILING_WHITESPACE)
+string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" _want "${T5_TOOLCHAIN_VERSION}")
+if(NOT _gcc VERSION_EQUAL _want)
+    message(FATAL_ERROR "t5_app: ${CMAKE_C_COMPILER} is GCC ${_gcc}; Tab5 OS apps need the ESP-IDF v6.1 toolchain "
+                        "(${T5_TOOLCHAIN_VERSION}, GCC ${_want}). Source tools/env.sh or put that riscv32-esp-elf on PATH.")
+endif()
 
 function(t5_app name)
     cmake_parse_arguments(A "" "MANIFEST;ICON;ASSETS" "SRCS" ${ARGN})
     if(NOT A_MANIFEST)
         set(A_MANIFEST manifest.toml)
     endif()
-    execute_process(COMMAND ${Python3_EXECUTABLE} ${T5_SDK}/cmake/app_flags.py ${T5_FIRMWARE_BUILD}
-                    OUTPUT_VARIABLE flags RESULT_VARIABLE rc OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if(NOT rc EQUAL 0)
-        message(FATAL_ERROR "t5_app: can't read the firmware's compile flags (${T5_FIRMWARE_BUILD})")
-    endif()
-    string(REPLACE "\n" ";" flags "${flags}")
 
     add_executable(${name}.elf ${A_SRCS})
     target_include_directories(${name}.elf PRIVATE ${T5_SDK}/include)
-    target_compile_options(${name}.elf PRIVATE ${flags}
+    target_compile_options(${name}.elf PRIVATE ${T5_APP_FLAGS}
         -fPIC -O2 -g0 -ffunction-sections -fdata-sections -fvisibility=hidden
         -fno-common -fno-jump-tables -fno-tree-switch-conversion
         -D__PICOLIBC_ERRNO_FUNCTION=t5_errno   # errno is thread-local: see t5_errno()

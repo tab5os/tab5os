@@ -137,12 +137,15 @@ def build(app_dir, sign=None):
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"{m['id']}.t5app")
     if m.get("runtime") == "native":
-        fw = firmware_build()
-        if not os.path.isfile(os.path.join(fw, "compile_commands.json")):
-            raise CliError(f"no firmware build at {fw}: run `t5 build` in the repo first (apps compile against it)")
+        cmake = ["cmake", "-S", app_dir, "-B", out_dir, "-G", "Ninja", f"-DT5_SDK={SDK}"]
+        if not os.path.isfile(os.path.join(SDK, "sysroot", "flags.cmake")):
+            # The source tree: headers and flags come from the firmware build.
+            fw = firmware_build()
+            if not os.path.isfile(os.path.join(fw, "compile_commands.json")):
+                raise CliError(f"no firmware build at {fw}: run `t5 build` in the repo first (apps compile against it)")
+            cmake.append(f"-DT5_FIRMWARE_BUILD={fw}")
         if not shutil.which("riscv32-esp-elf-gcc"):
             raise CliError("the RISC-V compiler isn't on PATH: run `. tools/env.sh`")
-        cmake = ["cmake", "-S", app_dir, "-B", out_dir, "-G", "Ninja", f"-DT5_FIRMWARE_BUILD={fw}", f"-DT5_SDK={SDK}"]
         if subprocess.run(cmake, stdout=subprocess.DEVNULL).returncode:
             raise CliError("cmake configure failed")
         if subprocess.run(["cmake", "--build", out_dir]).returncode:

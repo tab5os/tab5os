@@ -9,7 +9,7 @@
 #   tab5os-<v>.t5os         the OS as an update (signed with KEY if given)
 #   tab5os-c6-<v>.bin       the ESP32-C6 radio image, if c6/ has been built
 #   apps/*.t5app            the example apps
-#   tab5os-sdk-<v>.tar.gz   SDK headers, CMake, templates, the t5 CLI, docs
+#   tab5os-sdk-<v>.tar.gz   the app SDK, self-contained (tools/sdk_release.sh)
 #   SHA256SUMS
 # It doesn't tag, push or publish anything: check the result, then
 #   git tag -a v<version> -m "Tab5 OS <version>" && git push --tags
@@ -77,32 +77,7 @@ for f in "$ROOT"/apps/examples/build/*.t5app; do
 done
 
 echo "== SDK and CLI"
-SDK="$OUT/tab5os-sdk-$VER"
-mkdir -p "$SDK/tools"
-cp -R "$ROOT/sdk" "$SDK/"
-cp -R "$ROOT/tools/t5" "$ROOT/tools/abi" "$ROOT/tools/ota" "$ROOT/tools/env.sh" "$SDK/tools/"
-rm -rf "$SDK"/tools/*/__pycache__ "$SDK"/tools/*/test_*.py
-# The tools read device constants from the firmware's headers and partition
-# table (tools/t5/t5const.py): ship those.
-mkdir -p "$SDK/firmware/components"
-cp "$ROOT/firmware/partitions.csv" "$ROOT/firmware/idf_version.txt" "$SDK/firmware/"
-for inc in "$ROOT"/firmware/components/*/include; do
-    c="$(basename "$(dirname "$inc")")"
-    mkdir -p "$SDK/firmware/components/$c"
-    cp -R "$inc" "$SDK/firmware/components/$c/"
-done
-cp "$ROOT/firmware/components/t5_pkg/manifest.c" "$SDK/firmware/components/t5_pkg/"   # the manifest's tables
-mkdir -p "$SDK/docs"
-cp "$ROOT"/docs/sdk.md "$ROOT"/docs/python.md "$ROOT"/docs/api-reference.md "$ROOT"/docs/flashing.md \
-   "$ROOT"/docs/security.md "$SDK/docs/"
-cp "$ROOT/LICENSE" "$SDK/"
-# Native apps compile against a firmware build's headers and config: ship
-# the compile database and generated config where t5 and t5_app.cmake look.
-mkdir -p "$SDK/firmware/build"
-cp "$FW/compile_commands.json" "$SDK/firmware/build/"
-cp -R "$FW/config" "$SDK/firmware/build/"
-tar -C "$OUT" -czf "$OUT/tab5os-sdk-$VER.tar.gz" "tab5os-sdk-$VER"
-rm -rf "$SDK"
+"$ROOT/tools/sdk_release.sh" "$OUT" "$FW" >/dev/null
 
 cp "$ROOT/LICENSE" "$ROOT/docs/flashing.md" "$OUT/"
 (cd "$OUT" && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256 > SHA256SUMS)

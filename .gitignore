@@ -39,3 +39,7 @@ __pycache__/
 .cache/
 .clangd
 compile_commands.json
+
+# SDK staging (sdk/cmake/sysroot.py, tools/sdk_release.sh): only in releases
+sdk/sysroot/
+sdk/device.json

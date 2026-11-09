@@ -1,9 +1,12 @@
 # Source this file: `. tools/env.sh`
-# Sets up ESP-IDF at the version in firmware/idf_version.txt, separate from
+# Sets up ESP-IDF at the version in firmware/idf_version.txt (sdk/ in the SDK
+# release), separate from
 # any other IDF install (e.g. ~/esp/esp-idf-v5.5.5).
 
 _t5_root="$(cd "$(dirname "${BASH_SOURCE[0]:-${(%):-%x}}")/.." && pwd)"
-_t5_idf_ver="$(tr -d '[:space:]' < "$_t5_root/firmware/idf_version.txt")"
+_t5_ver_file="$_t5_root/firmware/idf_version.txt"
+[ -f "$_t5_ver_file" ] || _t5_ver_file="$_t5_root/sdk/idf_version.txt"   # the SDK release
+_t5_idf_ver="$(tr -d '[:space:]' < "$_t5_ver_file")"
 export T5_ROOT="$_t5_root"
 export IDF_PATH="${T5_IDF_PATH:-$HOME/esp/esp-idf-$_t5_idf_ver}"
 
@@ -16,4 +19,4 @@ fi
 . "$IDF_PATH/export.sh" > /dev/null || return 1
 export PATH="$T5_ROOT/tools/t5:$PATH"
 echo "tab5os: ESP-IDF $(cd "$IDF_PATH" && git describe --tags 2>/dev/null) at $IDF_PATH"
-unset _t5_root _t5_idf_ver
+unset _t5_root _t5_idf_ver _t5_ver_file
