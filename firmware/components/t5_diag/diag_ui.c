@@ -382,9 +382,12 @@ static volatile uint32_t s_tap_until;     /* lv_tick while pressed; 0 = released
 
 static void tap_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
-    (void)indev;
-    data->point.x = s_tap_x;
-    data->point.y = s_tap_y;
+    /* Inside the screen: after a rotation the last point can be off it, and
+     * LVGL warns on every read. */
+    lv_display_t *d = lv_indev_get_display(indev);
+    int32_t w = lv_display_get_horizontal_resolution(d), h = lv_display_get_vertical_resolution(d);
+    data->point.x = s_tap_x < w ? s_tap_x : w - 1;
+    data->point.y = s_tap_y < h ? s_tap_y : h - 1;
     data->state = s_tap_until && lv_tick_get() < s_tap_until ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     if (data->state == LV_INDEV_STATE_RELEASED) s_tap_until = 0;
 }

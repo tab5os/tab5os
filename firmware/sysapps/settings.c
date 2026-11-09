@@ -338,7 +338,7 @@ static void page_ble(void)
     if (!b) return;
     lv_obj_t *body = sa_push(&s_nav, "Bluetooth");
     md_appbar_add_action(sa_bar(&s_nav), MD_ICON_REFRESH, ble_scan_clicked, NULL);
-    b->sw = switch_row(body, MD_ICON_BLUETOOTH, "Use Bluetooth", "Bluetooth LE central, through the C6", t5_ble_ready(),
+    b->sw = switch_row(body, MD_ICON_BLUETOOTH, "Use Bluetooth", "Bluetooth LE, through the C6", t5_ble_ready(),
                        ble_toggle);
     b->status = sa_note(body, "");
     md_section_create(body, "Devices");
