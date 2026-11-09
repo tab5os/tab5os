@@ -1,6 +1,8 @@
 # Struct layouts, enum values and macros that apps compile in, API level 1.
 # Do not edit: tools/abi/layout.py gen. See docs/abi-stability.md.
+enum ERR_OK = size=4
 enum LV_ALIGN_DEFAULT = size=4
+enum LV_ANIM_IMAGE_PART_MAIN = size=4
 enum LV_ARCLABEL_DIR_CLOCKWISE = size=4
 enum LV_ARCLABEL_OVERFLOW_VISIBLE = size=4
 enum LV_ARCLABEL_TEXT_ALIGN_DEFAULT = size=4
@@ -20,12 +22,16 @@ enum LV_COVER_RES_COVER = size=4
 enum LV_DIR_NONE = size=4
 enum LV_DISPLAY_RENDER_MODE_PARTIAL = size=4
 enum LV_DISPLAY_ROTATION_0 = size=4
+enum LV_DRAW_TASK_STATE_BLOCKED = size=4
 enum LV_DRAW_TASK_TYPE_NONE = size=4
 enum LV_EVENT_ALL = size=4
 enum LV_FLEX_ALIGN_START = size=4
 enum LV_FLEX_FLOW_ROW = size=4
+enum LV_FONT_FMT_TXT_CMAP_FORMAT0_FULL = size=4
+enum LV_FONT_FMT_TXT_PLAIN = size=4
 enum LV_FONT_GLYPH_FORMAT_NONE = size=4
 enum LV_FONT_KERNING_NORMAL = size=4
+enum LV_FONT_SUBPX_NONE = size=4
 enum LV_FS_MODE_WR = size=4
 enum LV_FS_RES_OK = size=4
 enum LV_FS_SEEK_SET = size=4
@@ -35,6 +41,7 @@ enum LV_GRID_ALIGN_START = size=4
 enum LV_GROUP_REFOCUS_POLICY_NEXT = size=4
 enum LV_IMAGEBUTTON_STATE_RELEASED = size=4
 enum LV_IMAGE_ALIGN_DEFAULT = size=4
+enum LV_IMAGE_COMPRESS_NONE = size=4
 enum LV_IMAGE_SRC_VARIABLE = size=4
 enum LV_INDEV_GESTURE_NONE = size=4
 enum LV_INDEV_MODE_NONE = size=4
@@ -43,6 +50,14 @@ enum LV_INDEV_TYPE_NONE = size=4
 enum LV_KEYBOARD_MODE_TEXT_LOWER = size=4
 enum LV_KEY_UP = size=4
 enum LV_LABEL_LONG_MODE_WRAP = size=4
+enum LV_LAYER_TYPE_NONE = size=4
+enum LV_LAYOUT_NONE = size=4
+enum LV_MENU_HEADER_TOP_FIXED = size=4
+enum LV_MENU_ROOT_BACK_BUTTON_DISABLED = size=4
+enum LV_OBJ_CLASS_EDITABLE_INHERIT = size=4
+enum LV_OBJ_CLASS_GROUP_DEF_INHERIT = size=4
+enum LV_OBJ_CLASS_THEME_INHERITABLE_FALSE = size=4
+enum LV_OBJ_FLAG_HIDDEN = size=4
 enum LV_OBJ_POINT_TRANSFORM_FLAG_NONE = size=4
 enum LV_OBJ_TREE_WALK_NEXT = size=4
 enum LV_PALETTE_RED = size=4
@@ -59,6 +74,7 @@ enum LV_SPAN_MODE_FIXED = size=4
 enum LV_SPAN_OVERFLOW_CLIP = size=4
 enum LV_STATE_DEFAULT = size=4
 enum LV_STYLE_RES_NOT_FOUND = size=4
+enum LV_STYLE_STATE_CMP_SAME = size=4
 enum LV_SUBJECT_TYPE_INVALID = size=4
 enum LV_SWITCH_ORIENTATION_AUTO = size=4
 enum LV_TABLE_CELL_CTRL_NONE = size=4
@@ -66,31 +82,78 @@ enum LV_TEXT_ALIGN_AUTO = size=4
 enum LV_TEXT_DECOR_NONE = size=4
 enum LV_TEXT_FLAG_NONE = size=4
 enum LV_TEXT_LEADING_TRIM_NONE = size=4
+enum LWIP_CORE_LOCK_QUERY_HOLDER = size=4
 enum MD_ACCENT_PURPLE = size=4
 enum MD_BUTTON_TEXT = size=4
 enum MD_CHIP_ACTION = size=4
 enum MD_CURVE_STANDARD = size=4
 enum MD_TYPE_HEADLINE4 = size=4
 enum MD_WEIGHT_REGULAR = size=4
+enum MEMP_RAW_PCB = size=4
+enum PBUF_RAM = size=4
+enum PBUF_TRANSPORT = size=4
+enum T5_ANT_INTERNAL = size=4
 enum T5_CHG_NO_USB = size=4
+enum T5_DIS_ACT_WARN = size=4
 enum T5_EV_ANY = size=4
 enum T5_IMU_OFF = size=4
 enum T5_LOCK_SCREEN = size=4
 enum T5_MODE_I2C = size=4
 enum T5_MQTT_EV_MESSAGE = size=4
 enum T5_NET_OFF = size=4
+enum T5_OFF_USER = size=4
 enum T5_OK = size=4
+enum T5_ORIENT_ANY = size=4
+enum T5_PANEL_UNKNOWN = size=4
+enum T5_PERM_CAMERA = size=4
+enum T5_PROFILE_HANDHELD = size=4
 enum T5_PWR_ACTIVE = size=4
+enum T5_PWR_CAUSE_BOOT = size=4
 enum T5_RAIL_USB5V = size=4
 enum T5_ROT_0 = size=4
+enum T5_RUNTIME_NATIVE = size=4
 enum T5_SD_ABSENT = size=4
 enum T5_SOCKOPT_NODELAY = size=4
 enum T5_SOUND_CLICK = size=4
+enum T5_TIME_SRC_NONE = size=4
+enum T5_USBC_CONSOLE = size=4
 enum T5_USB_OTHER = size=4
 enum T5_WAKE_COLD = size=4
 enum T5_WS_TEXT = size=4
+enum _lv_opacity_level_t = size=4
+enum _lv_str_symbol_id_t = size=4
+enum _lv_style_id_t = size=4
 enum _lvimage_flags_t = size=4
+enum eAbortSleep = size=4
 enum eNoAction = size=4
+enum eRunning = size=4
+enum lwip_internal_netif_client_data_index = size=4
+enum lwip_ip_addr_type = size=4
+enum lwip_ipv6_scope_type = size=4
+enum netif_mac_filter_action = size=4
+enumerator ERR_ABRT = -13
+enumerator ERR_ALREADY = -9
+enumerator ERR_ARG = -16
+enumerator ERR_BUF = -2
+enumerator ERR_CLSD = -15
+enumerator ERR_CONN = -11
+enumerator ERR_IF = -12
+enumerator ERR_INPROGRESS = -5
+enumerator ERR_ISCONN = -10
+enumerator ERR_MEM = -1
+enumerator ERR_OK = 0
+enumerator ERR_RST = -14
+enumerator ERR_RTE = -4
+enumerator ERR_TIMEOUT = -3
+enumerator ERR_USE = -8
+enumerator ERR_VAL = -6
+enumerator ERR_WOULDBLOCK = -7
+enumerator IP6_MULTICAST = 2
+enumerator IP6_UNICAST = 1
+enumerator IP6_UNKNOWN = 0
+enumerator IPADDR_TYPE_ANY = 46
+enumerator IPADDR_TYPE_V4 = 0
+enumerator IPADDR_TYPE_V6 = 6
 enumerator LV_ALIGN_BOTTOM_LEFT = 4
 enumerator LV_ALIGN_BOTTOM_MID = 5
 enumerator LV_ALIGN_BOTTOM_RIGHT = 6
@@ -113,6 +176,7 @@ enumerator LV_ALIGN_RIGHT_MID = 8
 enumerator LV_ALIGN_TOP_LEFT = 1
 enumerator LV_ALIGN_TOP_MID = 2
 enumerator LV_ALIGN_TOP_RIGHT = 3
+enumerator LV_ANIM_IMAGE_PART_MAIN = 0
 enumerator LV_ARCLABEL_DIR_CLOCKWISE = 0
 enumerator LV_ARCLABEL_DIR_COUNTER_CLOCKWISE = 1
 enumerator LV_ARCLABEL_OVERFLOW_CLIP = 2
@@ -253,6 +317,12 @@ enumerator LV_DISPLAY_ROTATION_0 = 0
 enumerator LV_DISPLAY_ROTATION_180 = 2
 enumerator LV_DISPLAY_ROTATION_270 = 3
 enumerator LV_DISPLAY_ROTATION_90 = 1
+enumerator LV_DRAW_TASK_STATE_BLOCKED = 0
+enumerator LV_DRAW_TASK_STATE_FAILED = 5
+enumerator LV_DRAW_TASK_STATE_FINISHED = 4
+enumerator LV_DRAW_TASK_STATE_IN_PROGRESS = 3
+enumerator LV_DRAW_TASK_STATE_QUEUED = 2
+enumerator LV_DRAW_TASK_STATE_WAITING = 1
 enumerator LV_DRAW_TASK_TYPE_ARC = 9
 enumerator LV_DRAW_TASK_TYPE_BLUR = 13
 enumerator LV_DRAW_TASK_TYPE_BORDER = 2
@@ -364,6 +434,13 @@ enumerator LV_FLEX_FLOW_ROW = 0
 enumerator LV_FLEX_FLOW_ROW_REVERSE = 8
 enumerator LV_FLEX_FLOW_ROW_WRAP = 4
 enumerator LV_FLEX_FLOW_ROW_WRAP_REVERSE = 12
+enumerator LV_FONT_FMT_TXT_CMAP_FORMAT0_FULL = 0
+enumerator LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY = 2
+enumerator LV_FONT_FMT_TXT_CMAP_SPARSE_FULL = 1
+enumerator LV_FONT_FMT_TXT_CMAP_SPARSE_TINY = 3
+enumerator LV_FONT_FMT_TXT_COMPRESSED = 1
+enumerator LV_FONT_FMT_TXT_COMPRESSED_NO_PREFILTER = 2
+enumerator LV_FONT_FMT_TXT_PLAIN = 0
 enumerator LV_FONT_GLYPH_FORMAT_A1 = 1
 enumerator LV_FONT_GLYPH_FORMAT_A2 = 2
 enumerator LV_FONT_GLYPH_FORMAT_A3 = 3
@@ -376,6 +453,10 @@ enumerator LV_FONT_GLYPH_FORMAT_SVG = 27
 enumerator LV_FONT_GLYPH_FORMAT_VECTOR = 26
 enumerator LV_FONT_KERNING_NONE = 1
 enumerator LV_FONT_KERNING_NORMAL = 0
+enumerator LV_FONT_SUBPX_BOTH = 3
+enumerator LV_FONT_SUBPX_HOR = 1
+enumerator LV_FONT_SUBPX_NONE = 0
+enumerator LV_FONT_SUBPX_VER = 2
 enumerator LV_FS_MODE_RD = 2
 enumerator LV_FS_MODE_WR = 1
 enumerator LV_FS_RES_BUSY = 7
@@ -435,6 +516,9 @@ enumerator LV_IMAGE_ALIGN_TILE = 12
 enumerator LV_IMAGE_ALIGN_TOP_LEFT = 1
 enumerator LV_IMAGE_ALIGN_TOP_MID = 2
 enumerator LV_IMAGE_ALIGN_TOP_RIGHT = 3
+enumerator LV_IMAGE_COMPRESS_LZ4 = 2
+enumerator LV_IMAGE_COMPRESS_NONE = 0
+enumerator LV_IMAGE_COMPRESS_RLE = 1
 enumerator LV_IMAGE_FLAGS_ALLOCATED = 16
 enumerator LV_IMAGE_FLAGS_COMPRESSED = 8
 enumerator LV_IMAGE_FLAGS_CUSTOM_DRAW = 64
@@ -494,6 +578,59 @@ enumerator LV_LABEL_LONG_MODE_DOTS = 1
 enumerator LV_LABEL_LONG_MODE_SCROLL = 2
 enumerator LV_LABEL_LONG_MODE_SCROLL_CIRCULAR = 3
 enumerator LV_LABEL_LONG_MODE_WRAP = 0
+enumerator LV_LAYER_TYPE_NONE = 0
+enumerator LV_LAYER_TYPE_SIMPLE = 1
+enumerator LV_LAYER_TYPE_TRANSFORM = 2
+enumerator LV_LAYOUT_FLEX = 1
+enumerator LV_LAYOUT_GRID = 2
+enumerator LV_LAYOUT_LAST = 3
+enumerator LV_LAYOUT_NONE = 0
+enumerator LV_MENU_HEADER_BOTTOM_FIXED = 2
+enumerator LV_MENU_HEADER_TOP_FIXED = 0
+enumerator LV_MENU_HEADER_TOP_UNFIXED = 1
+enumerator LV_MENU_ROOT_BACK_BUTTON_DISABLED = 0
+enumerator LV_MENU_ROOT_BACK_BUTTON_ENABLED = 1
+enumerator LV_OBJ_CLASS_EDITABLE_FALSE = 2
+enumerator LV_OBJ_CLASS_EDITABLE_INHERIT = 0
+enumerator LV_OBJ_CLASS_EDITABLE_TRUE = 1
+enumerator LV_OBJ_CLASS_GROUP_DEF_FALSE = 2
+enumerator LV_OBJ_CLASS_GROUP_DEF_INHERIT = 0
+enumerator LV_OBJ_CLASS_GROUP_DEF_TRUE = 1
+enumerator LV_OBJ_CLASS_THEME_INHERITABLE_FALSE = 0
+enumerator LV_OBJ_CLASS_THEME_INHERITABLE_TRUE = 1
+enumerator LV_OBJ_FLAG_ADV_HITTEST = 65536
+enumerator LV_OBJ_FLAG_CHECKABLE = 8
+enumerator LV_OBJ_FLAG_CLICKABLE = 2
+enumerator LV_OBJ_FLAG_CLICK_FOCUSABLE = 4
+enumerator LV_OBJ_FLAG_EVENT_BUBBLE = 16384
+enumerator LV_OBJ_FLAG_EVENT_TRICKLE = 2097152
+enumerator LV_OBJ_FLAG_FLEX_IN_NEW_TRACK = 8388608
+enumerator LV_OBJ_FLAG_FLOATING = 262144
+enumerator LV_OBJ_FLAG_GESTURE_BUBBLE = 32768
+enumerator LV_OBJ_FLAG_HIDDEN = 1
+enumerator LV_OBJ_FLAG_IGNORE_LAYOUT = 131072
+enumerator LV_OBJ_FLAG_LAYOUT_1 = 8388608
+enumerator LV_OBJ_FLAG_LAYOUT_2 = 16777216
+enumerator LV_OBJ_FLAG_OVERFLOW_VISIBLE = 1048576
+enumerator LV_OBJ_FLAG_PRESS_LOCK = 8192
+enumerator LV_OBJ_FLAG_SCROLLABLE = 16
+enumerator LV_OBJ_FLAG_SCROLL_CHAIN = 768
+enumerator LV_OBJ_FLAG_SCROLL_CHAIN_HOR = 256
+enumerator LV_OBJ_FLAG_SCROLL_CHAIN_VER = 512
+enumerator LV_OBJ_FLAG_SCROLL_ELASTIC = 32
+enumerator LV_OBJ_FLAG_SCROLL_MOMENTUM = 64
+enumerator LV_OBJ_FLAG_SCROLL_ONE = 128
+enumerator LV_OBJ_FLAG_SCROLL_ON_FOCUS = 1024
+enumerator LV_OBJ_FLAG_SCROLL_WITH_ARROW = 2048
+enumerator LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS = 524288
+enumerator LV_OBJ_FLAG_SNAPPABLE = 4096
+enumerator LV_OBJ_FLAG_STATE_TRICKLE = 4194304
+enumerator LV_OBJ_FLAG_USER_1 = 134217728
+enumerator LV_OBJ_FLAG_USER_2 = 268435456
+enumerator LV_OBJ_FLAG_USER_3 = 536870912
+enumerator LV_OBJ_FLAG_USER_4 = 1073741824
+enumerator LV_OBJ_FLAG_WIDGET_1 = 33554432
+enumerator LV_OBJ_FLAG_WIDGET_2 = 67108864
 enumerator LV_OBJ_POINT_TRANSFORM_FLAG_INVERSE = 2
 enumerator LV_OBJ_POINT_TRANSFORM_FLAG_INVERSE_RECURSIVE = 3
 enumerator LV_OBJ_POINT_TRANSFORM_FLAG_NONE = 0
@@ -501,6 +638,19 @@ enumerator LV_OBJ_POINT_TRANSFORM_FLAG_RECURSIVE = 1
 enumerator LV_OBJ_TREE_WALK_END = 2
 enumerator LV_OBJ_TREE_WALK_NEXT = 0
 enumerator LV_OBJ_TREE_WALK_SKIP_CHILDREN = 1
+enumerator LV_OPA_0 = 0
+enumerator LV_OPA_10 = 25
+enumerator LV_OPA_100 = 255
+enumerator LV_OPA_20 = 51
+enumerator LV_OPA_30 = 76
+enumerator LV_OPA_40 = 102
+enumerator LV_OPA_50 = 127
+enumerator LV_OPA_60 = 153
+enumerator LV_OPA_70 = 178
+enumerator LV_OPA_80 = 204
+enumerator LV_OPA_90 = 229
+enumerator LV_OPA_COVER = 255
+enumerator LV_OPA_TRANSP = 0
 enumerator LV_PALETTE_AMBER = 13
 enumerator LV_PALETTE_BLUE = 5
 enumerator LV_PALETTE_BLUE_GREY = 17
@@ -594,8 +744,208 @@ enumerator LV_STATE_USER_1 = 4096
 enumerator LV_STATE_USER_2 = 8192
 enumerator LV_STATE_USER_3 = 16384
 enumerator LV_STATE_USER_4 = 32768
+enumerator LV_STR_SYMBOL_AUDIO = 1
+enumerator LV_STR_SYMBOL_BACKSPACE = 58
+enumerator LV_STR_SYMBOL_BARS = 40
+enumerator LV_STR_SYMBOL_BATTERY_1 = 52
+enumerator LV_STR_SYMBOL_BATTERY_2 = 51
+enumerator LV_STR_SYMBOL_BATTERY_3 = 50
+enumerator LV_STR_SYMBOL_BATTERY_EMPTY = 53
+enumerator LV_STR_SYMBOL_BATTERY_FULL = 49
+enumerator LV_STR_SYMBOL_BELL = 44
+enumerator LV_STR_SYMBOL_BLUETOOTH = 55
+enumerator LV_STR_SYMBOL_BULLET = 0
+enumerator LV_STR_SYMBOL_CALL = 36
+enumerator LV_STR_SYMBOL_CHARGE = 42
+enumerator LV_STR_SYMBOL_CLOSE = 5
+enumerator LV_STR_SYMBOL_COPY = 38
+enumerator LV_STR_SYMBOL_CUT = 37
+enumerator LV_STR_SYMBOL_DIRECTORY = 34
+enumerator LV_STR_SYMBOL_DOWN = 32
+enumerator LV_STR_SYMBOL_DOWNLOAD = 9
+enumerator LV_STR_SYMBOL_DRIVE = 10
+enumerator LV_STR_SYMBOL_DUMMY = 61
+enumerator LV_STR_SYMBOL_EDIT = 57
+enumerator LV_STR_SYMBOL_EJECT = 22
+enumerator LV_STR_SYMBOL_ENVELOPE = 41
+enumerator LV_STR_SYMBOL_EYE_CLOSE = 28
+enumerator LV_STR_SYMBOL_EYE_OPEN = 27
+enumerator LV_STR_SYMBOL_FILE = 47
+enumerator LV_STR_SYMBOL_GPS = 46
+enumerator LV_STR_SYMBOL_HOME = 8
+enumerator LV_STR_SYMBOL_IMAGE = 15
+enumerator LV_STR_SYMBOL_KEYBOARD = 45
+enumerator LV_STR_SYMBOL_LEFT = 23
+enumerator LV_STR_SYMBOL_LIST = 3
+enumerator LV_STR_SYMBOL_LOOP = 33
+enumerator LV_STR_SYMBOL_MINUS = 26
+enumerator LV_STR_SYMBOL_MUTE = 12
+enumerator LV_STR_SYMBOL_NEW_LINE = 60
+enumerator LV_STR_SYMBOL_NEXT = 21
+enumerator LV_STR_SYMBOL_OK = 4
+enumerator LV_STR_SYMBOL_PASTE = 43
+enumerator LV_STR_SYMBOL_PAUSE = 19
+enumerator LV_STR_SYMBOL_PLAY = 18
+enumerator LV_STR_SYMBOL_PLUS = 25
+enumerator LV_STR_SYMBOL_POWER = 6
+enumerator LV_STR_SYMBOL_PREV = 17
+enumerator LV_STR_SYMBOL_REFRESH = 11
+enumerator LV_STR_SYMBOL_RIGHT = 24
+enumerator LV_STR_SYMBOL_SAVE = 39
+enumerator LV_STR_SYMBOL_SD_CARD = 59
+enumerator LV_STR_SYMBOL_SETTINGS = 7
+enumerator LV_STR_SYMBOL_SHUFFLE = 30
+enumerator LV_STR_SYMBOL_STOP = 20
+enumerator LV_STR_SYMBOL_TINT = 16
+enumerator LV_STR_SYMBOL_TRASH = 56
+enumerator LV_STR_SYMBOL_UP = 31
+enumerator LV_STR_SYMBOL_UPLOAD = 35
+enumerator LV_STR_SYMBOL_USB = 54
+enumerator LV_STR_SYMBOL_VIDEO = 2
+enumerator LV_STR_SYMBOL_VOLUME_MAX = 14
+enumerator LV_STR_SYMBOL_VOLUME_MID = 13
+enumerator LV_STR_SYMBOL_WARNING = 29
+enumerator LV_STR_SYMBOL_WIFI = 48
+enumerator LV_STYLE_ALIGN = 18
+enumerator LV_STYLE_ANIM = 116
+enumerator LV_STYLE_ANIM_DURATION = 117
+enumerator LV_STYLE_ARC_COLOR = 91
+enumerator LV_STYLE_ARC_IMAGE_SRC = 96
+enumerator LV_STYLE_ARC_OPA = 83
+enumerator LV_STYLE_ARC_ROUNDED = 111
+enumerator LV_STYLE_ARC_WIDTH = 76
+enumerator LV_STYLE_BASE_DIR = 129
+enumerator LV_STYLE_BG_COLOR = 73
+enumerator LV_STYLE_BG_GRAD = 40
+enumerator LV_STYLE_BG_GRAD_COLOR = 44
+enumerator LV_STYLE_BG_GRAD_DIR = 41
+enumerator LV_STYLE_BG_GRAD_OPA = 43
+enumerator LV_STYLE_BG_GRAD_STOP = 46
+enumerator LV_STYLE_BG_IMAGE_OPA = 49
+enumerator LV_STYLE_BG_IMAGE_RECOLOR = 52
+enumerator LV_STYLE_BG_IMAGE_RECOLOR_OPA = 50
+enumerator LV_STYLE_BG_IMAGE_SRC = 48
+enumerator LV_STYLE_BG_IMAGE_TILED = 51
+enumerator LV_STYLE_BG_MAIN_OPA = 42
+enumerator LV_STYLE_BG_MAIN_STOP = 45
+enumerator LV_STYLE_BG_OPA = 72
+enumerator LV_STYLE_BITMAP_MASK_SRC = 121
+enumerator LV_STYLE_BLEND_MODE = 122
+enumerator LV_STYLE_BLUR_BACKDROP = 137
+enumerator LV_STYLE_BLUR_QUALITY = 138
+enumerator LV_STYLE_BLUR_RADIUS = 136
+enumerator LV_STYLE_BORDER_COLOR = 57
+enumerator LV_STYLE_BORDER_OPA = 58
+enumerator LV_STYLE_BORDER_POST = 59
+enumerator LV_STYLE_BORDER_SIDE = 60
+enumerator LV_STYLE_BORDER_WIDTH = 56
+enumerator LV_STYLE_CLIP_CORNER = 128
+enumerator LV_STYLE_COLOR_FILTER_DSC = 114
+enumerator LV_STYLE_COLOR_FILTER_OPA = 115
+enumerator LV_STYLE_DROP_SHADOW_COLOR = 147
+enumerator LV_STYLE_DROP_SHADOW_OFFSET_X = 145
+enumerator LV_STYLE_DROP_SHADOW_OFFSET_Y = 146
+enumerator LV_STYLE_DROP_SHADOW_OPA = 148
+enumerator LV_STYLE_DROP_SHADOW_QUALITY = 149
+enumerator LV_STYLE_DROP_SHADOW_RADIUS = 144
+enumerator LV_STYLE_FLEX_CROSS_PLACE = 162
+enumerator LV_STYLE_FLEX_FLOW = 160
+enumerator LV_STYLE_FLEX_GROW = 164
+enumerator LV_STYLE_FLEX_MAIN_PLACE = 161
+enumerator LV_STYLE_FLEX_TRACK_PLACE = 163
+enumerator LV_STYLE_GRID_CELL_COLUMN_POS = 170
+enumerator LV_STYLE_GRID_CELL_COLUMN_SPAN = 171
+enumerator LV_STYLE_GRID_CELL_ROW_POS = 173
+enumerator LV_STYLE_GRID_CELL_ROW_SPAN = 174
+enumerator LV_STYLE_GRID_CELL_X_ALIGN = 172
+enumerator LV_STYLE_GRID_CELL_Y_ALIGN = 175
+enumerator LV_STYLE_GRID_COLUMN_ALIGN = 168
+enumerator LV_STYLE_GRID_COLUMN_DSC_ARRAY = 165
+enumerator LV_STYLE_GRID_ROW_ALIGN = 169
+enumerator LV_STYLE_GRID_ROW_DSC_ARRAY = 166
+enumerator LV_STYLE_HEIGHT = 2
+enumerator LV_STYLE_IMAGE_COLORKEY = 106
+enumerator LV_STYLE_IMAGE_OPA = 80
+enumerator LV_STYLE_IMAGE_RECOLOR = 89
+enumerator LV_STYLE_IMAGE_RECOLOR_OPA = 78
+enumerator LV_STYLE_LAST_BUILT_IN_PROP = 177
+enumerator LV_STYLE_LAYOUT = 132
+enumerator LV_STYLE_LENGTH = 3
+enumerator LV_STYLE_LINE_COLOR = 90
+enumerator LV_STYLE_LINE_DASH_GAP = 104
+enumerator LV_STYLE_LINE_DASH_WIDTH = 100
+enumerator LV_STYLE_LINE_OPA = 82
+enumerator LV_STYLE_LINE_ROUNDED = 105
+enumerator LV_STYLE_LINE_WIDTH = 75
+enumerator LV_STYLE_MARGIN_BOTTOM = 33
+enumerator LV_STYLE_MARGIN_LEFT = 34
+enumerator LV_STYLE_MARGIN_RIGHT = 35
+enumerator LV_STYLE_MARGIN_TOP = 32
+enumerator LV_STYLE_MAX_HEIGHT = 11
+enumerator LV_STYLE_MAX_WIDTH = 9
+enumerator LV_STYLE_MIN_HEIGHT = 10
+enumerator LV_STYLE_MIN_WIDTH = 8
+enumerator LV_STYLE_NUM_BUILT_IN_PROPS = 178
+enumerator LV_STYLE_OPA = 112
+enumerator LV_STYLE_OPA_LAYERED = 113
+enumerator LV_STYLE_OUTLINE_COLOR = 65
+enumerator LV_STYLE_OUTLINE_OPA = 66
+enumerator LV_STYLE_OUTLINE_PAD = 67
+enumerator LV_STYLE_OUTLINE_WIDTH = 64
+enumerator LV_STYLE_PAD_BOTTOM = 25
+enumerator LV_STYLE_PAD_COLUMN = 30
+enumerator LV_STYLE_PAD_LEFT = 26
+enumerator LV_STYLE_PAD_RADIAL = 28
+enumerator LV_STYLE_PAD_RIGHT = 27
+enumerator LV_STYLE_PAD_ROW = 29
+enumerator LV_STYLE_PAD_TOP = 24
+enumerator LV_STYLE_PROP_ANY = 255
+enumerator LV_STYLE_PROP_CONST = 255
+enumerator LV_STYLE_PROP_INV = 0
+enumerator LV_STYLE_RADIAL_OFFSET = 14
+enumerator LV_STYLE_RADIUS = 120
+enumerator LV_STYLE_RECOLOR = 130
+enumerator LV_STYLE_RECOLOR_OPA = 131
 enumerator LV_STYLE_RES_FOUND = 1
 enumerator LV_STYLE_RES_NOT_FOUND = 0
+enumerator LV_STYLE_ROTARY_SENSITIVITY = 123
+enumerator LV_STYLE_SHADOW_COLOR = 88
+enumerator LV_STYLE_SHADOW_OFFSET_X = 97
+enumerator LV_STYLE_SHADOW_OFFSET_Y = 98
+enumerator LV_STYLE_SHADOW_OPA = 81
+enumerator LV_STYLE_SHADOW_SPREAD = 99
+enumerator LV_STYLE_SHADOW_WIDTH = 74
+enumerator LV_STYLE_STATE_CMP_DIFF_DRAW_PAD = 2
+enumerator LV_STYLE_STATE_CMP_DIFF_LAYOUT = 3
+enumerator LV_STYLE_STATE_CMP_DIFF_REDRAW = 1
+enumerator LV_STYLE_STATE_CMP_SAME = 0
+enumerator LV_STYLE_TEXT_ALIGN = 101
+enumerator LV_STYLE_TEXT_COLOR = 92
+enumerator LV_STYLE_TEXT_DECOR = 110
+enumerator LV_STYLE_TEXT_FONT = 77
+enumerator LV_STYLE_TEXT_LEADING_TRIM = 176
+enumerator LV_STYLE_TEXT_LETTER_SPACE = 102
+enumerator LV_STYLE_TEXT_LINE_SPACE = 103
+enumerator LV_STYLE_TEXT_OPA = 84
+enumerator LV_STYLE_TEXT_OUTLINE_STROKE_COLOR = 109
+enumerator LV_STYLE_TEXT_OUTLINE_STROKE_OPA = 108
+enumerator LV_STYLE_TEXT_OUTLINE_STROKE_WIDTH = 107
+enumerator LV_STYLE_TRANSFORM_HEIGHT = 5
+enumerator LV_STYLE_TRANSFORM_PIVOT_X = 154
+enumerator LV_STYLE_TRANSFORM_PIVOT_Y = 155
+enumerator LV_STYLE_TRANSFORM_ROTATION = 156
+enumerator LV_STYLE_TRANSFORM_SCALE_X = 152
+enumerator LV_STYLE_TRANSFORM_SCALE_Y = 153
+enumerator LV_STYLE_TRANSFORM_SKEW_X = 157
+enumerator LV_STYLE_TRANSFORM_SKEW_Y = 158
+enumerator LV_STYLE_TRANSFORM_WIDTH = 4
+enumerator LV_STYLE_TRANSITION = 118
+enumerator LV_STYLE_TRANSLATE_RADIAL = 124
+enumerator LV_STYLE_TRANSLATE_X = 12
+enumerator LV_STYLE_TRANSLATE_Y = 13
+enumerator LV_STYLE_WIDTH = 1
+enumerator LV_STYLE_X = 16
+enumerator LV_STYLE_Y = 17
 enumerator LV_SUBJECT_TYPE_COLOR = 5
 enumerator LV_SUBJECT_TYPE_FLOAT = 3
 enumerator LV_SUBJECT_TYPE_GROUP = 6
@@ -631,6 +981,15 @@ enumerator LV_TEXT_LEADING_TRIM_CAPITAL_BASELINE = 1
 enumerator LV_TEXT_LEADING_TRIM_LOWER = 4
 enumerator LV_TEXT_LEADING_TRIM_LOWER_BASELINE = 2
 enumerator LV_TEXT_LEADING_TRIM_NONE = 0
+enumerator LWIP_CORE_IS_TCPIP_INITIALIZED = 4
+enumerator LWIP_CORE_LOCK_MARK_HOLDER = 1
+enumerator LWIP_CORE_LOCK_QUERY_HOLDER = 0
+enumerator LWIP_CORE_LOCK_UNMARK_HOLDER = 2
+enumerator LWIP_CORE_MARK_TCPIP_TASK = 3
+enumerator LWIP_NETIF_CLIENT_DATA_INDEX_DHCP = 0
+enumerator LWIP_NETIF_CLIENT_DATA_INDEX_IGMP = 1
+enumerator LWIP_NETIF_CLIENT_DATA_INDEX_MAX = 3
+enumerator LWIP_NETIF_CLIENT_DATA_INDEX_MLD6 = 2
 enumerator MD_ACCENT_AMBER = 6
 enumerator MD_ACCENT_BLUE = 2
 enumerator MD_ACCENT_COUNT = 10
@@ -665,12 +1024,49 @@ enumerator MD_TYPE_OVERLINE = 8
 enumerator MD_TYPE_SUBTITLE1 = 3
 enumerator MD_WEIGHT_MEDIUM = 1
 enumerator MD_WEIGHT_REGULAR = 0
+enumerator MEMP_ARP_QUEUE = 10
+enumerator MEMP_FRAG_PBUF = 5
+enumerator MEMP_IGMP_GROUP = 11
+enumerator MEMP_MAX = 18
+enumerator MEMP_MLD6_GROUP = 15
+enumerator MEMP_ND6_QUEUE = 14
+enumerator MEMP_NETBUF = 6
+enumerator MEMP_NETCONN = 7
+enumerator MEMP_NETDB = 13
+enumerator MEMP_PBUF = 16
+enumerator MEMP_PBUF_POOL = 17
+enumerator MEMP_RAW_PCB = 0
+enumerator MEMP_SYS_TIMEOUT = 12
+enumerator MEMP_TCPIP_MSG_API = 8
+enumerator MEMP_TCPIP_MSG_INPKT = 9
+enumerator MEMP_TCP_PCB = 2
+enumerator MEMP_TCP_PCB_LISTEN = 3
+enumerator MEMP_TCP_SEG = 4
+enumerator MEMP_UDP_PCB = 1
+enumerator NETIF_ADD_MAC_FILTER = 1
+enumerator NETIF_DEL_MAC_FILTER = 0
+enumerator PBUF_IP = 54
+enumerator PBUF_LINK = 14
+enumerator PBUF_POOL = 386
+enumerator PBUF_RAM = 640
+enumerator PBUF_RAW = 0
+enumerator PBUF_RAW_TX = 0
+enumerator PBUF_REF = 65
+enumerator PBUF_ROM = 1
+enumerator PBUF_TRANSPORT = 74
+enumerator T5_ANT_EXTERNAL = 1
+enumerator T5_ANT_INTERNAL = 0
 enumerator T5_CHG_CHARGING = 1
 enumerator T5_CHG_FULL = 2
 enumerator T5_CHG_NO_USB = 0
 enumerator T5_CHG_PAUSED_LIMIT = 3
 enumerator T5_CHG_PAUSED_TEMP = 4
 enumerator T5_CHG_STATE_COUNT = 5
+enumerator T5_DIS_ACT_EMERGENCY_OFF = 16
+enumerator T5_DIS_ACT_LOW_POWER_OFF = 4
+enumerator T5_DIS_ACT_LOW_POWER_ON = 2
+enumerator T5_DIS_ACT_SOFT_OFF = 8
+enumerator T5_DIS_ACT_WARN = 1
 enumerator T5_ERR_BUSY = -2
 enumerator T5_ERR_DENIED = -3
 enumerator T5_ERR_FAIL = -1
@@ -726,6 +1122,7 @@ enumerator T5_EV_SD_MOUNT_FAILED = 202
 enumerator T5_EV_SD_REMOVED = 201
 enumerator T5_EV_TIME_SET = 300
 enumerator T5_EV_TOUCH_FAILED = 501
+enumerator T5_EV_UI_INPUT_ADDED = 902
 enumerator T5_EV_UI_ROTATE = 900
 enumerator T5_EV_UI_STALL = 901
 enumerator T5_EV_USBC_MODE = 1205
@@ -764,8 +1161,42 @@ enumerator T5_NET_FAILED = 5
 enumerator T5_NET_IDLE = 2
 enumerator T5_NET_OFF = 0
 enumerator T5_NET_STARTING = 1
+enumerator T5_OFF_BATTERY = 2
+enumerator T5_OFF_BATTERY_CRITICAL = 3
+enumerator T5_OFF_CHARGE_UNPLUG = 4
+enumerator T5_OFF_IDLE = 1
+enumerator T5_OFF_USER = 0
 enumerator T5_OK = 0
+enumerator T5_ORIENT_ANY = 0
+enumerator T5_ORIENT_LANDSCAPE = 1
+enumerator T5_ORIENT_PORTRAIT = 2
+enumerator T5_PANEL_ILI9881C_GT911 = 1
+enumerator T5_PANEL_ST7121 = 3
+enumerator T5_PANEL_ST7123 = 2
+enumerator T5_PANEL_UNKNOWN = 0
+enumerator T5_PERM_ALL_FILES = 2048
+enumerator T5_PERM_BACKGROUND_WAKE = 128
+enumerator T5_PERM_BLE = 8
+enumerator T5_PERM_CAMERA = 1
+enumerator T5_PERM_MIC = 2
+enumerator T5_PERM_NET = 4
+enumerator T5_PERM_PORTS = 16
+enumerator T5_PERM_SHARED_READ = 512
+enumerator T5_PERM_SHARED_WRITE = 1024
+enumerator T5_PERM_STORAGE = 64
+enumerator T5_PERM_SYSTEM = 256
+enumerator T5_PERM_USB = 32
+enumerator T5_PROFILE_HANDHELD = 0
+enumerator T5_PROFILE_MOUNTED = 1
 enumerator T5_PWR_ACTIVE = 0
+enumerator T5_PWR_CAUSE_BATTERY = 7
+enumerator T5_PWR_CAUSE_BOOT = 0
+enumerator T5_PWR_CAUSE_IDLE = 1
+enumerator T5_PWR_CAUSE_INPUT = 2
+enumerator T5_PWR_CAUSE_LOCK = 3
+enumerator T5_PWR_CAUSE_REQUEST = 4
+enumerator T5_PWR_CAUSE_WAKE_NET = 5
+enumerator T5_PWR_CAUSE_WAKE_TIMER = 6
 enumerator T5_PWR_CHARGE_MODE = 5
 enumerator T5_PWR_DIM = 1
 enumerator T5_PWR_SCREEN_OFF = 2
@@ -782,6 +1213,9 @@ enumerator T5_ROT_0 = 0
 enumerator T5_ROT_180 = 2
 enumerator T5_ROT_270 = 3
 enumerator T5_ROT_90 = 1
+enumerator T5_RUNTIME_COUNT = 2
+enumerator T5_RUNTIME_MICROPYTHON = 1
+enumerator T5_RUNTIME_NATIVE = 0
 enumerator T5_SD_ABSENT = 0
 enumerator T5_SD_EJECTED = 3
 enumerator T5_SD_FAILED = 2
@@ -799,6 +1233,12 @@ enumerator T5_SOUND_ERROR = 2
 enumerator T5_SOUND_NOTIFY = 1
 enumerator T5_SOUND_SHUTTER = 3
 enumerator T5_SOUND_START = 4
+enumerator T5_TIME_SRC_NONE = 0
+enumerator T5_TIME_SRC_NTP = 3
+enumerator T5_TIME_SRC_RTC = 1
+enumerator T5_TIME_SRC_USER = 2
+enumerator T5_USBC_CONSOLE = 0
+enumerator T5_USBC_STORAGE = 1
 enumerator T5_USB_AUDIO = 8
 enumerator T5_USB_CAMERA = 7
 enumerator T5_USB_CLASS_COUNT = 9
@@ -824,11 +1264,65 @@ enumerator T5_WS_PING = 9
 enumerator T5_WS_PONG = 10
 enumerator T5_WS_TEXT = 1
 enumerator _LV_IMAGE_ALIGN_AUTO_TRANSFORM = 10
+enumerator eAbortSleep = 0
+enumerator eBlocked = 2
+enumerator eDeleted = 4
 enumerator eIncrement = 2
+enumerator eInvalid = 5
 enumerator eNoAction = 0
+enumerator eNoTasksWaitingTimeout = 2
+enumerator eReady = 1
+enumerator eRunning = 0
 enumerator eSetBits = 1
 enumerator eSetValueWithOverwrite = 3
 enumerator eSetValueWithoutOverwrite = 4
+enumerator eStandardSleep = 1
+enumerator eSuspended = 3
+macro ACCESSPERMS = 511 int4
+macro AF_INET = 2 int4
+macro AF_INET6 = 10 int4
+macro AF_UNSPEC = 0 int4
+macro AI_ADDRCONFIG = 64 int4
+macro AI_ALL = 32 int4
+macro AI_CANONNAME = 2 int4
+macro AI_NUMERICHOST = 4 int4
+macro AI_NUMERICSERV = 8 int4
+macro AI_PASSIVE = 1 int4
+macro AI_V4MAPPED = 16 int4
+macro ALIGN_D(size) = (1)=4 uint4; (100)=100 uint4
+macro ALIGN_H(size) = (1)=4 uint4; (100)=100 uint4
+macro ALLPERMS = 4095 int4
+macro ARG_MAX = 65536 int4
+macro ATEXIT_MAX = 32 int4
+macro AT_EACCESS = 1 int4
+macro AT_EMPTY_PATH = 16 int4
+macro AT_FDCWD = -2 int4
+macro AT_REMOVEDIR = 8 int4
+macro AT_SYMLINK_FOLLOW = 4 int4
+macro AT_SYMLINK_NOFOLLOW = 2 int4
+macro BIG_ENDIAN = 4321 int4
+macro BOOL_MAX = 1 int4
+macro BOOL_WIDTH = 1 int4
+macro BUFSIZ = 128 int4
+macro BYTE_ORDER = 1234 int4
+macro CHAR_BIT = 8 int4
+macro CHAR_MAX = 255 int4
+macro CHAR_MIN = 0 int4
+macro CHAR_WIDTH = 8 int4
+macro CHILD_MAX = 40 int4
+macro CLK_TCK = 1000000 int4
+macro CLOCKS_PER_SEC = 1000000 int4
+macro CLOCK_BOOTTIME = 7 int4
+macro CLOCK_BOOTTIME_ALARM = 9 int4
+macro CLOCK_MONOTONIC = 4 int4
+macro CLOCK_MONOTONIC_COARSE = 6 int4
+macro CLOCK_MONOTONIC_RAW = 5 int4
+macro CLOCK_REALTIME = 1 int4
+macro CLOCK_REALTIME_ALARM = 8 int4
+macro CLOCK_REALTIME_COARSE = 0 int4
+macro CMSG_LEN(length) = (1)=13 uint4; (100)=112 uint4
+macro CMSG_SPACE(length) = (1)=16 uint4; (100)=112 uint4
+macro COLL_WEIGHTS_MAX = 0 int4
 macro CONFIG_FREERTOS_HZ = 1000
 macro CONFIG_LV_COLOR_DEPTH = 16
 macro CONFIG_LV_COLOR_DEPTH_16 = 1
@@ -896,7 +1390,848 @@ macro CONFIG_LV_USE_THEME_DEFAULT = 1
 macro CONFIG_LV_USE_THEME_MONO = 1
 macro CONFIG_LV_USE_TILEVIEW = 1
 macro CONFIG_LV_USE_WIN = 1
+macro CORE_ID_SIZE = 4 int4
+macro DBL_DECIMAL_DIG = 17 int4
+macro DBL_DIG = 15 int4
+macro DBL_EPSILON = 2.220446049250313e-16 float8
+macro DBL_HAS_SUBNORM = 1 int4
+macro DBL_IS_IEC_60559 = 1 int4
+macro DBL_MANT_DIG = 53 int4
+macro DBL_MAX = 1.7976931348623157e+308 float8
+macro DBL_MAX_10_EXP = 308 int4
+macro DBL_MAX_EXP = 1024 int4
+macro DBL_MIN = 2.2250738585072014e-308 float8
+macro DBL_MIN_10_EXP = -307 int4
+macro DBL_MIN_EXP = -1021 int4
+macro DBL_NORM_MAX = 1.7976931348623157e+308 float8
+macro DBL_SNAN = nan float8
+macro DBL_TRUE_MIN = 5e-324 float8
+macro DECIMAL_DIG = 36 int4
+macro DEFFILEMODE = 438 int4
+macro DST_AUST = 2 int4
+macro DST_CAN = 6 int4
+macro DST_EET = 5 int4
+macro DST_MET = 4 int4
+macro DST_NONE = 0 int4
+macro DST_USA = 1 int4
+macro DST_WET = 3 int4
+macro DT_BLK = 6 int4
+macro DT_CHR = 4 int4
+macro DT_DIR = 2 int4
+macro DT_FIFO = 8 int4
+macro DT_LNK = 10 int4
+macro DT_REG = 1 int4
+macro DT_SOCK = 12 int4
+macro DT_UNKNOWN = 0 int4
+macro DT_WHT = 14 int4
+macro E2BIG = 7 int4
+macro EACCES = 13 int4
+macro EADDRINUSE = 112 int4
+macro EADDRNOTAVAIL = 125 int4
+macro EADV = 68 int4
+macro EAFNOSUPPORT = 106 int4
+macro EAGAIN = 11 int4
+macro EAI_AGAIN = 2 int4
+macro EAI_BADFLAGS = 3 int4
+macro EAI_FAIL = 202 int4
+macro EAI_FAMILY = 204 int4
+macro EAI_MEMORY = 203 int4
+macro EAI_NONAME = 200 int4
+macro EAI_SERVICE = 201 int4
+macro EAI_SOCKTYPE = 10 int4
+macro EALREADY = 120 int4
+macro EBADE = 50 int4
+macro EBADF = 9 int4
+macro EBADFD = 81 int4
+macro EBADMSG = 77 int4
+macro EBADR = 51 int4
+macro EBADRQC = 54 int4
+macro EBADSLT = 55 int4
+macro EBFONT = 57 int4
+macro EBUSY = 16 int4
+macro ECANCELED = 140 int4
+macro ECHILD = 10 int4
+macro ECHRNG = 37 int4
+macro ECOMM = 70 int4
+macro ECONNABORTED = 113 int4
+macro ECONNREFUSED = 111 int4
+macro ECONNRESET = 104 int4
+macro EDEADLK = 45 int4
+macro EDEADLOCK = 56 int4
+macro EDESTADDRREQ = 121 int4
+macro EDOM = 33 int4
+macro EDOTDOT = 76 int4
+macro EDQUOT = 132 int4
+macro EEXIST = 17 int4
+macro EFAULT = 14 int4
+macro EFBIG = 27 int4
+macro EFTYPE = 79 int4
+macro EHOSTDOWN = 117 int4
+macro EHOSTUNREACH = 118 int4
+macro EHWPOISON = 144 int4
+macro EIDRM = 36 int4
+macro EILSEQ = 138 int4
+macro EINPROGRESS = 119 int4
+macro EINTR = 4 int4
+macro EINVAL = 22 int4
+macro EIO = 5 int4
+macro EISCONN = 127 int4
+macro EISDIR = 21 int4
+macro EISNAM = 145 int4
+macro EKEYEXPIRED = 146 int4
+macro EKEYREJECTED = 147 int4
+macro EKEYREVOKED = 148 int4
+macro EL2HLT = 44 int4
+macro EL2NSYNC = 38 int4
+macro EL3HLT = 39 int4
+macro EL3RST = 40 int4
+macro ELBIN = 75 int4
+macro ELIBACC = 83 int4
+macro ELIBBAD = 84 int4
+macro ELIBEXEC = 87 int4
+macro ELIBMAX = 86 int4
+macro ELIBSCN = 85 int4
+macro ELNRNG = 41 int4
+macro ELOOP = 92 int4
+macro EMFILE = 24 int4
+macro EMLINK = 31 int4
+macro EMSGSIZE = 122 int4
+macro EMULTIHOP = 74 int4
+macro ENABLE_LOOPBACK = 1 int4
+macro ENAMETOOLONG = 91 int4
+macro ENETDOWN = 115 int4
+macro ENETRESET = 126 int4
+macro ENETUNREACH = 114 int4
+macro ENFILE = 23 int4
+macro ENOANO = 53 int4
+macro ENOBUFS = 105 int4
+macro ENOCSI = 43 int4
+macro ENODATA = 61 int4
+macro ENODEV = 19 int4
+macro ENOENT = 2 int4
+macro ENOEXEC = 8 int4
+macro ENOLCK = 46 int4
+macro ENOLINK = 67 int4
+macro ENOMEDIUM = 135 int4
+macro ENOMEM = 12 int4
+macro ENOMSG = 35 int4
+macro ENONET = 64 int4
+macro ENOPKG = 65 int4
+macro ENOPROTOOPT = 109 int4
+macro ENOSPC = 28 int4
+macro ENOSR = 63 int4
+macro ENOSTR = 60 int4
+macro ENOSYS = 88 int4
+macro ENOTBLK = 15 int4
+macro ENOTCONN = 128 int4
+macro ENOTDIR = 20 int4
+macro ENOTEMPTY = 90 int4
+macro ENOTRECOVERABLE = 141 int4
+macro ENOTSOCK = 108 int4
+macro ENOTSUP = 134 int4
+macro ENOTTY = 25 int4
+macro ENOTUNIQ = 80 int4
+macro ENXIO = 6 int4
+macro EOF = -1 int4
+macro EOPNOTSUPP = 95 int4
+macro EOVERFLOW = 139 int4
+macro EOWNERDEAD = 142 int4
+macro EPERM = 1 int4
+macro EPFNOSUPPORT = 96 int4
+macro EPIPE = 32 int4
+macro EPROCLIM = 130 int4
+macro EPROTO = 71 int4
+macro EPROTONOSUPPORT = 123 int4
+macro EPROTOTYPE = 107 int4
+macro ERANGE = 34 int4
+macro EREMCHG = 82 int4
+macro EREMOTE = 66 int4
+macro EROFS = 30 int4
+macro ERR_NEED_SCHED = 123 int4
+macro ESHUTDOWN = 110 int4
+macro ESOCKTNOSUPPORT = 124 int4
+macro ESPIPE = 29 int4
+macro ESRCH = 3 int4
+macro ESRMNT = 69 int4
+macro ESTALE = 133 int4
+macro ESTRPIPE = 143 int4
+macro ETIME = 62 int4
+macro ETIMEDOUT = 116 int4
+macro ETOOMANYREFS = 129 int4
+macro ETXTBSY = 26 int4
+macro EUNATCH = 42 int4
+macro EUSERS = 131 int4
+macro EWOULDBLOCK = 11 int4
+macro EXDEV = 18 int4
+macro EXFULL = 52 int4
+macro EXIT_FAILURE = 1 int4
+macro EXIT_SUCCESS = 0 int4
+macro EXPR_NEST_MAX = 32 int4
+macro FAPPEND = 1024 int4
+macro FASYNC = 8 int4
+macro FCLASS_INF = 129 int4
+macro FCLASS_NAN = 768 int4
+macro FCLASS_NEG_INF = 1 int4
+macro FCLASS_NEG_NORMAL = 2 int4
+macro FCLASS_NEG_SUBNORMAL = 4 int4
+macro FCLASS_NEG_ZERO = 8 int4
+macro FCLASS_NORMAL = 66 int4
+macro FCLASS_POS_INF = 128 int4
+macro FCLASS_POS_NORMAL = 64 int4
+macro FCLASS_POS_SUBNORMAL = 32 int4
+macro FCLASS_POS_ZERO = 16 int4
+macro FCLASS_QNAN = 512 int4
+macro FCLASS_SNAN = 256 int4
+macro FCLASS_SUBNORMAL = 36 int4
+macro FCLASS_ZERO = 24 int4
+macro FCREAT = 64 int4
+macro FDEFER = 32 int4
+macro FD_CLOEXEC = 1 int4
+macro FD_SETSIZE = 64 int4
+macro FEXCL = 2048 int4
+macro FEXLOCK = 256 int4
+macro FILENAME_MAX = 1024 int4
+macro FIONBIO = -2147195266 int4
+macro FIONREAD = 1074030207 int4
+macro FLT_DECIMAL_DIG = 9 int4
+macro FLT_DIG = 6 int4
+macro FLT_EPSILON = 1.1920928955078125e-07 float4
+macro FLT_EVAL_METHOD = 0 int4
+macro FLT_HAS_SUBNORM = 1 int4
+macro FLT_IS_IEC_60559 = 1 int4
+macro FLT_MANT_DIG = 24 int4
+macro FLT_MAX = 3.4028234663852886e+38 float4
+macro FLT_MAX_10_EXP = 38 int4
+macro FLT_MAX_EXP = 128 int4
+macro FLT_MIN = 1.1754943508222875e-38 float4
+macro FLT_MIN_10_EXP = -37 int4
+macro FLT_MIN_EXP = -125 int4
+macro FLT_NORM_MAX = 3.4028234663852886e+38 float4
+macro FLT_RADIX = 2 int4
+macro FLT_ROUNDS = 1 int4
+macro FLT_SNAN = nan float4
+macro FLT_TRUE_MIN = 1.401298464324817e-45 float4
+macro FMARK = 16 int4
+macro FNBIO = 4096 int4
+macro FNDELAY = 16384 int4
+macro FNOCTTY = 32768 int4
+macro FNONBIO = 16384 int4
+macro FNONBLOCK = 16384 int4
+macro FOPEN = -1 int4
+macro FOPEN_MAX = 32 int4
+macro FP_ILOGB0 = -2147483647 int4
+macro FP_ILOGBNAN = 2147483647 int4
+macro FP_INFINITE = 1 int4
+macro FP_NAN = 0 int4
+macro FP_NORMAL = 4 int4
+macro FP_SUBNORMAL = 3 int4
+macro FP_ZERO = 2 int4
+macro FREAD = 1 int4
+macro FSHLOCK = 128 int4
+macro FSYNC = 8192 int4
+macro FTRUNC = 512 int4
+macro FWRITE = 2 int4
+macro F_CNVT = 12 int4
+macro F_DUPFD = 0 int4
+macro F_DUPFD_CLOEXEC = 14 int4
+macro F_GETFD = 1 int4
+macro F_GETFL = 3 int4
+macro F_GETLK = 7 int4
+macro F_GETOWN = 5 int4
+macro F_LOCK = 1 int4
+macro F_OK = 0 int4
+macro F_RDLCK = 1 int4
+macro F_RGETLK = 10 int4
+macro F_RSETLK = 11 int4
+macro F_RSETLKW = 13 int4
+macro F_SETFD = 2 int4
+macro F_SETFL = 4 int4
+macro F_SETLK = 8 int4
+macro F_SETLKW = 9 int4
+macro F_SETOWN = 6 int4
+macro F_TEST = 3 int4
+macro F_TLOCK = 2 int4
+macro F_ULOCK = 0 int4
+macro F_UNLCK = 3 int4
+macro F_UNLKSYS = 4 int4
+macro F_WRLCK = 2 int4
+macro HOST_NOT_FOUND = 210 int4
+macro HUGE_VAL = inf float8
+macro HUGE_VALF = inf float4
+macro HUGE_VALL = inf float16
+macro HZ = 60 int4
+macro IFNAMSIZ = 6 int4
+macro IN6ADDR_ANY_INIT = "" str
+macro IN6ADDR_LOOPBACK_INIT = "" str
+macro INADDR_ANY = 0 uint4
+macro INADDR_BROADCAST = 4294967295 uint4
+macro INADDR_LOOPBACK = 2130706433 uint4
+macro INADDR_NONE = 4294967295 uint4
+macro INCLUDE_xQueueGetMutexHolder = 0 int4
+macro INET6_ADDRSTRLEN = 46 int4
+macro INET_ADDRSTRLEN = 16 int4
+macro INFINITY = inf float4
+macro INT16_C(x) = (1)=1 int4; (100)=100 int4
+macro INT16_MAX = 32767 int4
+macro INT16_MIN = -32768 int4
+macro INT32_C(x) = (1)=1 int4; (100)=100 int4
+macro INT32_MAX = 2147483647 int4
+macro INT32_MIN = -2147483648 int4
+macro INT64_C(x) = (1)=1 int8; (100)=100 int8
+macro INT64_MAX = 9223372036854775807 int8
+macro INT64_MIN = -9223372036854775808 int8
+macro INT8_C(x) = (1)=1 int4; (100)=100 int4
+macro INT8_MAX = 127 int4
+macro INT8_MIN = -128 int4
+macro INTMAX_C(x) = (1)=1 int8; (100)=100 int8
+macro INTMAX_MAX = 9223372036854775807 int8
+macro INTMAX_MIN = -9223372036854775808 int8
+macro INTPTR_MAX = 2147483647 int4
+macro INTPTR_MIN = -2147483648 int4
+macro INT_FAST16_MAX = 2147483647 int4
+macro INT_FAST16_MIN = -2147483648 int4
+macro INT_FAST32_MAX = 2147483647 int4
+macro INT_FAST32_MIN = -2147483648 int4
+macro INT_FAST64_MAX = 9223372036854775807 int8
+macro INT_FAST64_MIN = -9223372036854775808 int8
+macro INT_FAST8_MAX = 2147483647 int4
+macro INT_FAST8_MIN = -2147483648 int4
+macro INT_LEAST16_MAX = 32767 int4
+macro INT_LEAST16_MIN = -32768 int4
+macro INT_LEAST32_MAX = 2147483647 int4
+macro INT_LEAST32_MIN = -2147483648 int4
+macro INT_LEAST64_MAX = 9223372036854775807 int8
+macro INT_LEAST64_MIN = -9223372036854775808 int8
+macro INT_LEAST8_MAX = 127 int4
+macro INT_LEAST8_MIN = -128 int4
+macro INT_MAX = 2147483647 int4
+macro INT_MIN = -2147483648 int4
+macro INT_WIDTH = 32 int4
+macro IN_BADCLASS(a) = (1)=0 int4; (100)=0 int4
+macro IN_CLASSA(a) = (1)=1 int4; (100)=1 int4
+macro IN_CLASSA_HOST = 16777215 uint4
+macro IN_CLASSA_MAX = 128 int4
+macro IN_CLASSA_NET = 4278190080 uint4
+macro IN_CLASSA_NSHIFT = 24 int4
+macro IN_CLASSB(b) = (1)=0 int4; (100)=0 int4
+macro IN_CLASSB_HOST = 65535 uint4
+macro IN_CLASSB_MAX = 65536 int4
+macro IN_CLASSB_NET = 4294901760 uint4
+macro IN_CLASSB_NSHIFT = 16 int4
+macro IN_CLASSC(c) = (1)=0 int4; (100)=0 int4
+macro IN_CLASSC_HOST = 255 uint4
+macro IN_CLASSC_NET = 4294967040 uint4
+macro IN_CLASSC_NSHIFT = 8 int4
+macro IN_CLASSD(d) = (1)=0 int4; (100)=0 int4
+macro IN_CLASSD_HOST = 268435455 int4
+macro IN_CLASSD_NET = 4026531840 uint4
+macro IN_CLASSD_NSHIFT = 28 int4
+macro IN_EXPERIMENTAL(a) = (1)=0 int4; (100)=0 int4
+macro IN_LOOPBACKNET = 127 int4
+macro IN_MULTICAST(a) = (1)=0 int4; (100)=0 int4
+macro IOCPARM_MASK = 127 uint4
+macro IOC_IN = 2147483648 uint4
+macro IOC_INOUT = 3221225472 uint4
+macro IOC_OUT = 1073741824 uint4
+macro IOC_VOID = 536870912 uint4
+macro IOV_MAX = 1024 int4
+macro IP4ADDR_STRLEN_MAX = 16 int4
+macro IP6ADDR_STRLEN_MAX = 46 int4
+macro IP6_ADDR_DEPRECATED = 16 int4
+macro IP6_ADDR_DUPLICATED = 64 int4
+macro IP6_ADDR_INVALID = 0 int4
+macro IP6_ADDR_LIFE_INFINITE = 4294967295 uint4
+macro IP6_ADDR_LIFE_STATIC = 0 int4
+macro IP6_ADDR_PREFERRED = 48 int4
+macro IP6_ADDR_TENTATIVE = 8 int4
+macro IP6_ADDR_TENTATIVE_1 = 9 int4
+macro IP6_ADDR_TENTATIVE_2 = 10 int4
+macro IP6_ADDR_TENTATIVE_3 = 11 int4
+macro IP6_ADDR_TENTATIVE_4 = 12 int4
+macro IP6_ADDR_TENTATIVE_5 = 13 int4
+macro IP6_ADDR_TENTATIVE_6 = 14 int4
+macro IP6_ADDR_TENTATIVE_7 = 15 int4
+macro IP6_ADDR_TENTATIVE_COUNT_MASK = 7 int4
+macro IP6_ADDR_VALID = 16 int4
+macro IP6_MULTICAST_SCOPE_ADMIN_LOCAL = 4 int4
+macro IP6_MULTICAST_SCOPE_GLOBAL = 14 int4
+macro IP6_MULTICAST_SCOPE_INTERFACE_LOCAL = 1 int4
+macro IP6_MULTICAST_SCOPE_LINK_LOCAL = 2 int4
+macro IP6_MULTICAST_SCOPE_ORGANIZATION_LOCAL = 8 int4
+macro IP6_MULTICAST_SCOPE_RESERVED = 0 int4
+macro IP6_MULTICAST_SCOPE_RESERVED0 = 0 int4
+macro IP6_MULTICAST_SCOPE_RESERVED3 = 3 int4
+macro IP6_MULTICAST_SCOPE_RESERVEDF = 15 int4
+macro IP6_MULTICAST_SCOPE_SITE_LOCAL = 5 int4
+macro IP6_NO_ZONE = 0 int4
+macro IPADDR4_INIT(u32val) = (1)="\x01" str; (100)="d" str
+macro IPADDR4_INIT_BYTES(a,b,c,d) = (1, 2, 3, 4)="\x01" str
+macro IPADDR6_INIT(a,b,c,d) = (1, 2, 3, 4)="\x01" str
+macro IPADDR6_INIT_HOST(a,b,c,d) = (1, 2, 3, 4)="\x00" str
+macro IPADDR_ANY = 0 uint4
+macro IPADDR_ANY_TYPE_INIT = "\x00" str
+macro IPADDR_BROADCAST = 4294967295 uint4
+macro IPADDR_LOOPBACK = 2130706433 uint4
+macro IPADDR_NONE = 4294967295 uint4
+macro IPADDR_STRLEN_MAX = 46 int4
+macro IPPROTO_ICMP = 1 int4
+macro IPPROTO_ICMPV6 = 58 int4
+macro IPPROTO_IP = 0 int4
+macro IPPROTO_IPV6 = 41 int4
+macro IPPROTO_RAW = 255 int4
+macro IPPROTO_TCP = 6 int4
+macro IPPROTO_UDP = 17 int4
+macro IPPROTO_UDPLITE = 136 int4
+macro IPTOS_LOWCOST = 2 int4
+macro IPTOS_LOWDELAY = 16 int4
+macro IPTOS_MINCOST = 2 int4
+macro IPTOS_PREC(tos) = (1)=0 int4; (100)=96 int4
+macro IPTOS_PREC_CRITIC_ECP = 160 int4
+macro IPTOS_PREC_FLASH = 96 int4
+macro IPTOS_PREC_FLASHOVERRIDE = 128 int4
+macro IPTOS_PREC_IMMEDIATE = 64 int4
+macro IPTOS_PREC_INTERNETCONTROL = 192 int4
+macro IPTOS_PREC_MASK = 224 int4
+macro IPTOS_PREC_NETCONTROL = 224 int4
+macro IPTOS_PREC_PRIORITY = 32 int4
+macro IPTOS_PREC_ROUTINE = 0 int4
+macro IPTOS_RELIABILITY = 4 int4
+macro IPTOS_THROUGHPUT = 8 int4
+macro IPTOS_TOS(tos) = (1)=0 int4; (100)=4 int4
+macro IPTOS_TOS_MASK = 30 int4
+macro IPV6_ADD_MEMBERSHIP = 12 int4
+macro IPV6_CHECKSUM = 7 int4
+macro IPV6_CUSTOM_SCOPES = 0 int4
+macro IPV6_DROP_MEMBERSHIP = 13 int4
+macro IPV6_JOIN_GROUP = 12 int4
+macro IPV6_LEAVE_GROUP = 13 int4
+macro IPV6_MULTICAST_HOPS = 769 int4
+macro IPV6_MULTICAST_IF = 768 int4
+macro IPV6_MULTICAST_LOOP = 770 int4
+macro IPV6_V6ONLY = 27 int4
+macro IP_ADD_MEMBERSHIP = 3 int4
+macro IP_BADCLASS(a) = (1)=0 int4; (100)=0 int4
+macro IP_CLASSA(a) = (1)=1 int4; (100)=1 int4
+macro IP_CLASSA_HOST = 16777215 uint4
+macro IP_CLASSA_MAX = 128 int4
+macro IP_CLASSA_NET = 4278190080 uint4
+macro IP_CLASSA_NSHIFT = 24 int4
+macro IP_CLASSB(a) = (1)=0 int4; (100)=0 int4
+macro IP_CLASSB_HOST = 65535 uint4
+macro IP_CLASSB_MAX = 65536 int4
+macro IP_CLASSB_NET = 4294901760 uint4
+macro IP_CLASSB_NSHIFT = 16 int4
+macro IP_CLASSC(a) = (1)=0 int4; (100)=0 int4
+macro IP_CLASSC_HOST = 255 uint4
+macro IP_CLASSC_NET = 4294967040 uint4
+macro IP_CLASSC_NSHIFT = 8 int4
+macro IP_CLASSD(a) = (1)=0 int4; (100)=0 int4
+macro IP_CLASSD_HOST = 268435455 int4
+macro IP_CLASSD_NET = 4026531840 uint4
+macro IP_CLASSD_NSHIFT = 28 int4
+macro IP_DROP_MEMBERSHIP = 4 int4
+macro IP_EXPERIMENTAL(a) = (1)=0 int4; (100)=0 int4
+macro IP_LOOPBACKNET = 127 int4
+macro IP_MULTICAST(a) = (1)=0 int4; (100)=0 int4
+macro IP_MULTICAST_IF = 6 int4
+macro IP_MULTICAST_LOOP = 7 int4
+macro IP_MULTICAST_TTL = 5 int4
+macro IP_PKTINFO = 8 int4
+macro IP_TOS = 1 int4
+macro IP_TTL = 2 int4
+macro ITIMER_PROF = 2 int4
+macro ITIMER_REAL = 0 int4
+macro ITIMER_VIRTUAL = 1 int4
+macro LDBL_DECIMAL_DIG = 36 int4
+macro LDBL_DIG = 33 int4
+macro LDBL_EPSILON = 1.925929944387236e-34 float16
+macro LDBL_HAS_SUBNORM = 1 int4
+macro LDBL_IS_IEC_60559 = 1 int4
+macro LDBL_MANT_DIG = 113 int4
+macro LDBL_MAX = inf float16
+macro LDBL_MAX_10_EXP = 4932 int4
+macro LDBL_MAX_EXP = 16384 int4
+macro LDBL_MIN = 0.0 float16
+macro LDBL_MIN_10_EXP = -4931 int4
+macro LDBL_MIN_EXP = -16381 int4
+macro LDBL_NORM_MAX = inf float16
+macro LDBL_SNAN = nan float16
+macro LDBL_TRUE_MIN = 0.0 float16
+macro LINE_MAX = 2048 int4
+macro LINK_MAX = 32767 int4
+macro LITTLE_ENDIAN = 1234 int4
+macro LLONG_MAX = 9223372036854775807 int8
+macro LLONG_MIN = -9223372036854775808 int8
+macro LLONG_WIDTH = 64 int4
+macro LOCK_EX = 2 int4
+macro LOCK_NB = 4 int4
+macro LOCK_SH = 1 int4
+macro LOCK_UN = 8 int4
+macro LONG_LONG_MAX = 9223372036854775807 int8
+macro LONG_LONG_MIN = -9223372036854775808 int8
+macro LONG_MAX = 2147483647 int4
+macro LONG_MIN = -2147483648 int4
+macro LONG_WIDTH = 32 int4
+macro LVGL_VERSION_INFO = "" str
+macro LVGL_VERSION_MAJOR = 9 int4
+macro LVGL_VERSION_MINOR = 6 int4
+macro LVGL_VERSION_PATCH = 0 int4
+macro LV_ABS(x) = (1)=1 int4; (100)=100 int4
+macro LV_ALIGN_UP(x,align) = (1, 2)=2 int4
+macro LV_ANIM_OFF = 0 uint1
+macro LV_ANIM_ON = 1 uint1
+macro LV_ANIM_PAUSE_FOREVER = 4294967295 uint4
+macro LV_ANIM_PLAYTIME_INFINITE = 4294967295 uint4
+macro LV_ANIM_REPEAT_INFINITE = 4294967295 uint4
+macro LV_ANIM_TIMELINE_PROGRESS_MAX = 65535 int4
+macro LV_ARCLABEL_DEFAULT_TEXT = "Arced Text" str
+macro LV_ARCLABEL_DOT_NUM = 3 int4
+macro LV_BEZIER_VAL_FLOAT(f) = (1)=1024 int4; (100)=102400 int4
+macro LV_BEZIER_VAL_MAX = 1024 int4
+macro LV_BEZIER_VAL_SHIFT = 10 int4
+macro LV_BIDI_LRO = "\xe2\x80\xad" str
+macro LV_BIDI_RLO = "\xe2\x80\xae" str
+macro LV_BTNMATRIX_BTN_NONE = 65535 int4
+macro LV_BTNMATRIX_CTRL_CHECKABLE = 128 int4
+macro LV_BTNMATRIX_CTRL_CHECKED = 256 int4
+macro LV_BTNMATRIX_CTRL_CLICK_TRIG = 512 int4
+macro LV_BTNMATRIX_CTRL_CUSTOM_1 = 16384 int4
+macro LV_BTNMATRIX_CTRL_CUSTOM_2 = 32768 int4
+macro LV_BTNMATRIX_CTRL_DISABLED = 64 int4
+macro LV_BTNMATRIX_CTRL_HIDDEN = 16 int4
+macro LV_BTNMATRIX_CTRL_NO_REPEAT = 32 int4
+macro LV_BTNMATRIX_CTRL_POPOVER = 1024 int4
+macro LV_BUTTONMATRIX_BUTTON_NONE = 65535 int4
+macro LV_CANVAS_BUF_SIZE(w,h,bpp,stride) = (1, 2, 3, 4)=72 int4
+macro LV_CHART_POINT_NONE = 2147483647 int4
+macro LV_CLAMP(min,val,max) = (1, 2, 3)=2 int4
+macro LV_COLOR_FORMAT_GET_BPP(cf) = (1)=0 int4; (100)=0 int4
+macro LV_COLOR_FORMAT_GET_SIZE(cf) = (1)=0 int4; (100)=0 int4
+macro LV_COLOR_FORMAT_IS_ALPHA_ONLY(cf) = (1)=0 int4; (100)=0 int4
+macro LV_COLOR_FORMAT_IS_INDEXED(cf) = (1)=0 int4; (100)=0 int4
+macro LV_COLOR_FORMAT_IS_YUV(cf) = (1)=0 int4; (100)=0 int4
+macro LV_COLOR_FORMAT_NATIVE = 18 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA = 20 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_ARGB8888 = 16 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_ARGB8888_PREMULTIPLIED = 26 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_I1 = 7 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_L8 = 21 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_RGB565 = 20 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_RGB565_SWAPPED = 20 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_RGB888 = 16 int4
+macro LV_COLOR_FORMAT_NATIVE_WITH_ALPHA_OF_LV_COLOR_FORMAT_XRGB8888 = 16 int4
+macro LV_COLOR_INDEXED_PALETTE_SIZE(cf) = (1)=0 int4; (100)=0 int4
+macro LV_COLOR_MAKE(r8,g8,b8) = (1, 2, 3)="\x03\x02" str
+macro LV_COLOR_NATIVE_WITH_ALPHA_SIZE = 3 int4
+macro LV_COORD_GET_PCT(x) = (1)=1 int4; (100)=100 int4
+macro LV_COORD_IS_PCT(x) = (1)=0 int4; (100)=0 int4
+macro LV_COORD_IS_PX(x) = (1)=1 int4; (100)=1 int4
+macro LV_COORD_IS_SPEC(x) = (1)=0 int4; (100)=0 int4
+macro LV_COORD_MAX = 536870911 int4
+macro LV_COORD_MIN = -536870911 int4
+macro LV_COORD_PLAIN(x) = (1)=1 int4; (100)=100 int4
+macro LV_COORD_SET_SPEC(x) = (1)=536870913 int4; (100)=536871012 int4
+macro LV_COORD_TYPE(x) = (1)=0 int4; (100)=0 int4
+macro LV_COORD_TYPE_MASK = 1610612736 int4
+macro LV_COORD_TYPE_PX = 0 int4
+macro LV_COORD_TYPE_PX_NEG = 1610612736 int4
+macro LV_COORD_TYPE_SHIFT = 29 uint4
+macro LV_COORD_TYPE_SPEC = 536870912 int4
+macro LV_DISP_RENDER_MODE_DIRECT = 1 int4
+macro LV_DISP_RENDER_MODE_FULL = 2 int4
+macro LV_DISP_RENDER_MODE_PARTIAL = 0 int4
+macro LV_DISP_ROT_180 = 2 int4
+macro LV_DISP_ROT_270 = 3 int4
+macro LV_DISP_ROT_90 = 1 int4
+macro LV_DISP_ROT_NONE = 0 int4
+macro LV_DPX_CALC(dpi,n) = (1, 2)=1 int4
+macro LV_DRAW_BUF_SIZE(w,h,cf) = (1, 2, 3)=64 uint4
+macro LV_DRAW_BUF_STRIDE(w,cf) = (1, 2)=0 int4
+macro LV_DRAW_LABEL_NO_TXT_SEL = 65535 int4
+macro LV_DRAW_LINE_POINT_NONE = 3.4028234663852886e+38 float4
+macro LV_DRAW_UNIT_IDLE = -1 int4
+macro LV_DRAW_UNIT_NONE = 0 int4
+macro LV_DROPDOWN_POS_LAST = 65535 int4
+macro LV_FLEX_COLUMN = 1 int4
+macro LV_FLEX_REVERSE = 8 int4
+macro LV_FLEX_WRAP = 4 int4
+macro LV_FS_CACHE_FROM_BUFFER = 4294967295 uint4
+macro LV_FS_MAX_FN_LENGTH = 64 int4
+macro LV_FS_MAX_PATH_LEN = 256 int4
+macro LV_FS_MAX_PATH_LENGTH = 256 int4
+macro LV_GRAD_BOTTOM = 536871012 int4
+macro LV_GRAD_CENTER = 536870962 int4
+macro LV_GRAD_LEFT = 536870912 int4
+macro LV_GRAD_RIGHT = 536871012 int4
+macro LV_GRAD_TOP = 536870912 int4
+macro LV_GRID_CONTENT = 536870810 int4
+macro LV_GRID_FR(x) = (1)=536870812 int4; (100)=536870911 int4
+macro LV_GRID_TEMPLATE_LAST = 536870911 int4
+macro LV_IMAGE_FLAGS_USER_MASK = 65280 int4
+macro LV_IMAGE_HEADER_DEADBEEF = 29 int4
+macro LV_IMAGE_HEADER_LEGACY = 0 int4
+macro LV_IMAGE_HEADER_MAGIC = 25 int4
+macro LV_IMGBTN_STATE_CHECKED_DISABLED = 5 int4
+macro LV_IMGBTN_STATE_CHECKED_PRESSED = 4 int4
+macro LV_IMGBTN_STATE_CHECKED_RELEASED = 3 int4
+macro LV_IMGBTN_STATE_DISABLED = 2 int4
+macro LV_IMGBTN_STATE_PRESSED = 1 int4
+macro LV_IMGBTN_STATE_RELEASED = 0 int4
+macro LV_INDEV_STATE_PR = 1 int4
+macro LV_INDEV_STATE_REL = 0 int4
+macro LV_KEYBOARD_CTRL_BUTTON_FLAGS = 800 int4
+macro LV_LABEL_DEFAULT_TEXT = "Text" str
+macro LV_LABEL_DOT_NUM = 3 int4
+macro LV_LABEL_LONG_CLIP = 4 int4
+macro LV_LABEL_LONG_DOT = 1 int4
+macro LV_LABEL_LONG_SCROLL = 2 int4
+macro LV_LABEL_LONG_SCROLL_CIRCULAR = 3 int4
+macro LV_LABEL_LONG_WRAP = 0 int4
+macro LV_LABEL_POS_LAST = 65535 int4
+macro LV_LABEL_TEXT_SELECTION_OFF = 65535 int4
+macro LV_LED_BRIGHT_MAX = 255 int4
+macro LV_LED_BRIGHT_MIN = 80 int4
+macro LV_LIKELY(x) = (1)=1 int4; (100)=1 int4
+macro LV_LIST_DEPRECATED_MSG = "lv_list is deprecated; build a list from a flex column instead. See the lv_example_flex_list example." str
+macro LV_MAX(a,b) = (1, 2)=2 int4
+macro LV_MAX3(a,b,c) = (1, 2, 3)=3 int4
+macro LV_MAX4(a,b,c,d) = (1, 2, 3, 4)=4 int4
+macro LV_MENU_DEPRECATED_MSG = "lv_menu is deprecated; build menu navigation from base widgets instead. See the lv_example_menu_navigation example." str
+macro LV_MIN(a,b) = (1, 2)=1 int4
+macro LV_MIN3(a,b,c) = (1, 2, 3)=1 int4
+macro LV_MIN4(a,b,c,d) = (1, 2, 3, 4)=1 int4
+macro LV_NO_TIMER_READY = 4294967295 uint4
+macro LV_OPA_MAX = 253 int4
+macro LV_OPA_MIN = 2 int4
+macro LV_OPA_MIX2(a1,a2) = (1, 2)=0 uint1
+macro LV_OPA_MIX3(a1,a2,a3) = (1, 2, 3)=0 uint1
+macro LV_PART_TEXTAREA_PLACEHOLDER = 524288 int4
+macro LV_PCT(x) = (1)=536870913 int4; (100)=536871012 int4
+macro LV_PCT_POS_MAX = 268435455 int4
+macro LV_PCT_STORED_MAX = 536870910 int4
+macro LV_PRIX32 = "lX" str
+macro LV_PRIX64 = "llX" str
+macro LV_PRId32 = "ld" str
+macro LV_PRId64 = "lld" str
+macro LV_PRIu32 = "lu" str
+macro LV_PRIu64 = "llu" str
+macro LV_PRIuPTR = "u" str
+macro LV_PRIx32 = "lx" str
+macro LV_PRIx64 = "llx" str
+macro LV_RADIUS_CIRCLE = 32767 int4
+macro LV_RES_INV = 0 int4
+macro LV_RES_OK = 1 int4
+macro LV_ROUND_UP(x,round) = (1, 2)=2 int4
+macro LV_SCALE_LABEL_ENABLED_DEFAULT = 1 uint4
+macro LV_SCALE_LABEL_ROTATE_KEEP_UPRIGHT = 524288 int4
+macro LV_SCALE_LABEL_ROTATE_MATCH_TICKS = 1048576 int4
+macro LV_SCALE_MAJOR_TICK_EVERY_DEFAULT = 5 uint4
+macro LV_SCALE_NONE = 256 int4
+macro LV_SCALE_ROTATION_ANGLE_MASK = 524287 int4
+macro LV_SCALE_TOTAL_TICK_COUNT_DEFAULT = 11 uint4
+macro LV_SCR_LOAD_ANIM_FADE_IN = 9 int4
+macro LV_SCR_LOAD_ANIM_FADE_ON = 9 int4
+macro LV_SCR_LOAD_ANIM_FADE_OUT = 10 int4
+macro LV_SCR_LOAD_ANIM_MOVE_BOTTOM = 8 int4
+macro LV_SCR_LOAD_ANIM_MOVE_LEFT = 5 int4
+macro LV_SCR_LOAD_ANIM_MOVE_RIGHT = 6 int4
+macro LV_SCR_LOAD_ANIM_MOVE_TOP = 7 int4
+macro LV_SCR_LOAD_ANIM_NONE = 0 int4
+macro LV_SCR_LOAD_ANIM_OUT_BOTTOM = 14 int4
+macro LV_SCR_LOAD_ANIM_OUT_LEFT = 11 int4
+macro LV_SCR_LOAD_ANIM_OUT_RIGHT = 12 int4
+macro LV_SCR_LOAD_ANIM_OUT_TOP = 13 int4
+macro LV_SCR_LOAD_ANIM_OVER_BOTTOM = 4 int4
+macro LV_SCR_LOAD_ANIM_OVER_LEFT = 1 int4
+macro LV_SCR_LOAD_ANIM_OVER_RIGHT = 2 int4
+macro LV_SCR_LOAD_ANIM_OVER_TOP = 3 int4
+macro LV_SIZE_CONTENT = 1073741823 int4
+macro LV_SMAX_OF(t) = (1)=2147483647 uint8; (100)=2147483647 uint8
+macro LV_SPINBOX_MAX_DIGIT_COUNT = 10 int4
+macro LV_STRIDE_AUTO = 0 int4
+macro LV_STYLE_ANIM_TIME = 117 int4
+macro LV_STYLE_IMG_OPA = 80 int4
+macro LV_STYLE_IMG_RECOLOR = 89 int4
+macro LV_STYLE_IMG_RECOLOR_OPA = 78 int4
+macro LV_STYLE_PROP_FLAG_ALL = 63 int4
+macro LV_STYLE_PROP_FLAG_EXT_DRAW_UPDATE = 2 int4
+macro LV_STYLE_PROP_FLAG_INHERITABLE = 1 int4
+macro LV_STYLE_PROP_FLAG_LAYER_UPDATE = 16 int4
+macro LV_STYLE_PROP_FLAG_LAYOUT_UPDATE = 4 int4
+macro LV_STYLE_PROP_FLAG_NONE = 0 int4
+macro LV_STYLE_PROP_FLAG_PARENT_LAYOUT_UPDATE = 8 int4
+macro LV_STYLE_PROP_FLAG_TRANSFORM = 32 int4
+macro LV_STYLE_SENTINEL_OK(style_p) = (1)=1 uint1; (100)=1 uint1
+macro LV_STYLE_SENTINEL_VALUE = 2864434397 uint4
+macro LV_STYLE_SHADOW_OFS_X = 97 int4
+macro LV_STYLE_SHADOW_OFS_Y = 98 int4
+macro LV_STYLE_TRANSFORM_ANGLE = 156 int4
+macro LV_SWITCH_KNOB_EXT_AREA_CORRECTION = 2 int4
+macro LV_SYMBOL_AUDIO = "\xef\x80\x81" str
+macro LV_SYMBOL_BACKSPACE = "\xef\x95\x9a" str
+macro LV_SYMBOL_BARS = "\xef\x83\x89" str
+macro LV_SYMBOL_BATTERY_1 = "\xef\x89\x83" str
+macro LV_SYMBOL_BATTERY_2 = "\xef\x89\x82" str
+macro LV_SYMBOL_BATTERY_3 = "\xef\x89\x81" str
+macro LV_SYMBOL_BATTERY_EMPTY = "\xef\x89\x84" str
+macro LV_SYMBOL_BATTERY_FULL = "\xef\x89\x80" str
+macro LV_SYMBOL_BELL = "\xef\x83\xb3" str
+macro LV_SYMBOL_BLUETOOTH = "\xef\x8a\x93" str
+macro LV_SYMBOL_BULLET = "\xe2\x80\xa2" str
+macro LV_SYMBOL_CALL = "\xef\x82\x95" str
+macro LV_SYMBOL_CHARGE = "\xef\x83\xa7" str
+macro LV_SYMBOL_CLOSE = "\xef\x80\x8d" str
+macro LV_SYMBOL_COPY = "\xef\x83\x85" str
+macro LV_SYMBOL_CUT = "\xef\x83\x84" str
+macro LV_SYMBOL_DIRECTORY = "\xef\x81\xbb" str
+macro LV_SYMBOL_DOWN = "\xef\x81\xb8" str
+macro LV_SYMBOL_DOWNLOAD = "\xef\x80\x99" str
+macro LV_SYMBOL_DRIVE = "\xef\x80\x9c" str
+macro LV_SYMBOL_DUMMY = "\xef\xa3\xbf" str
+macro LV_SYMBOL_EDIT = "\xef\x8c\x84" str
+macro LV_SYMBOL_EJECT = "\xef\x81\x92" str
+macro LV_SYMBOL_ENVELOPE = "\xef\x83\xa0" str
+macro LV_SYMBOL_EYE_CLOSE = "\xef\x81\xb0" str
+macro LV_SYMBOL_EYE_OPEN = "\xef\x81\xae" str
+macro LV_SYMBOL_FILE = "\xef\x85\x9b" str
+macro LV_SYMBOL_GPS = "\xef\x84\xa4" str
+macro LV_SYMBOL_HOME = "\xef\x80\x95" str
+macro LV_SYMBOL_IMAGE = "\xef\x80\xbe" str
+macro LV_SYMBOL_KEYBOARD = "\xef\x84\x9c" str
+macro LV_SYMBOL_LEFT = "\xef\x81\x93" str
+macro LV_SYMBOL_LIST = "\xef\x80\x8b" str
+macro LV_SYMBOL_LOOP = "\xef\x81\xb9" str
+macro LV_SYMBOL_MINUS = "\xef\x81\xa8" str
+macro LV_SYMBOL_MUTE = "\xef\x80\xa6" str
+macro LV_SYMBOL_NEW_LINE = "\xef\xa2\xa2" str
+macro LV_SYMBOL_NEXT = "\xef\x81\x91" str
+macro LV_SYMBOL_OK = "\xef\x80\x8c" str
+macro LV_SYMBOL_PASTE = "\xef\x83\xaa" str
+macro LV_SYMBOL_PAUSE = "\xef\x81\x8c" str
+macro LV_SYMBOL_PLAY = "\xef\x81\x8b" str
+macro LV_SYMBOL_PLUS = "\xef\x81\xa7" str
+macro LV_SYMBOL_POWER = "\xef\x80\x91" str
+macro LV_SYMBOL_PREV = "\xef\x81\x88" str
+macro LV_SYMBOL_REFRESH = "\xef\x80\xa1" str
+macro LV_SYMBOL_RIGHT = "\xef\x81\x94" str
+macro LV_SYMBOL_SAVE = "\xef\x83\x87" str
+macro LV_SYMBOL_SD_CARD = "\xef\x9f\x82" str
+macro LV_SYMBOL_SETTINGS = "\xef\x80\x93" str
+macro LV_SYMBOL_SHUFFLE = "\xef\x81\xb4" str
+macro LV_SYMBOL_STOP = "\xef\x81\x8d" str
+macro LV_SYMBOL_TINT = "\xef\x81\x83" str
+macro LV_SYMBOL_TRASH = "\xef\x8b\xad" str
+macro LV_SYMBOL_UP = "\xef\x81\xb7" str
+macro LV_SYMBOL_UPLOAD = "\xef\x82\x93" str
+macro LV_SYMBOL_USB = "\xef\x8a\x87" str
+macro LV_SYMBOL_VIDEO = "\xef\x80\x88" str
+macro LV_SYMBOL_VOLUME_MAX = "\xef\x80\xa8" str
+macro LV_SYMBOL_VOLUME_MID = "\xef\x80\xa7" str
+macro LV_SYMBOL_WARNING = "\xef\x81\xb1" str
+macro LV_SYMBOL_WIFI = "\xef\x87\xab" str
+macro LV_TABLE_CELL_NONE = 65535 int4
+macro LV_TEXTAREA_CURSOR_LAST = 32767 int4
+macro LV_TRIGO_SHIFT = 15 int4
+macro LV_TRIGO_SIN_MAX = 32768 int4
+macro LV_UDIV255(x) = (1)=0 uint4; (100)=0 uint4
+macro LV_UMAX_OF(t) = (1)=4294967295 uint8; (100)=4294967295 uint8
+macro LV_UNLIKELY(x) = (1)=1 int4; (100)=1 int4
 macro LV_VERSION_CHECK(x,y,z) = (x == LVGL_VERSION_MAJOR && (y < LVGL_VERSION_MINOR || (y == LVGL_VERSION_MINOR && z <= LVGL_VERSION_PATCH)))
+macro LV_WIN_DEPRECATED_MSG = "lv_win is deprecated; build a window from a flex column instead. See the lv_example_flex_win example." str
+macro LV_ZOOM_NONE = 256 int4
+macro LWIP_COMPAT_MUTEX = 0 int4
+macro LWIP_DBG_FRESH = 16 uint4
+macro LWIP_DBG_HALT = 8 uint4
+macro LWIP_DBG_LEVEL_ALL = 0 int4
+macro LWIP_DBG_LEVEL_OFF = 0 int4
+macro LWIP_DBG_LEVEL_SERIOUS = 2 int4
+macro LWIP_DBG_LEVEL_SEVERE = 3 int4
+macro LWIP_DBG_LEVEL_WARNING = 1 int4
+macro LWIP_DBG_MASK_LEVEL = 3 int4
+macro LWIP_DBG_OFF = 0 uint4
+macro LWIP_DBG_ON = 128 uint4
+macro LWIP_DBG_STATE = 32 uint4
+macro LWIP_DBG_TRACE = 64 uint4
+macro LWIP_DEBUG_ENABLED(debug) = (1)=0 int4; (100)=0 int4
+macro LWIP_DNS_API_DECLARE_H_ERRNO = 1 int4
+macro LWIP_DNS_API_DECLARE_STRUCTS = 1 int4
+macro LWIP_DNS_API_DEFINE_ERRORS = 1 int4
+macro LWIP_DNS_API_DEFINE_FLAGS = 1 int4
+macro LWIP_HAVE_INT64 = 1 int4
+macro LWIP_MAKEU32(a,b,c,d) = (1, 2, 3, 4)=16909060 uint4
+macro LWIP_MAX(x,y) = (1, 2)=2 int4
+macro LWIP_MEM_ALIGN_BUFFER(size) = (1)=4 uint4; (100)=103 uint4
+macro LWIP_MEM_ALIGN_SIZE(size) = (1)=4 uint4; (100)=100 uint4
+macro LWIP_MIN(x,y) = (1, 2)=1 int4
+macro LWIP_NETIF_USE_HINTS = 0 int4
+macro LWIP_NO_CTYPE_H = 0 int4
+macro LWIP_NO_INTTYPES_H = 0 int4
+macro LWIP_NO_LIMITS_H = 0 int4
+macro LWIP_NO_STDDEF_H = 0 int4
+macro LWIP_NO_STDINT_H = 0 int4
+macro LWIP_NSC_IPV4_ADDRESS_CHANGED = 16 int4
+macro LWIP_NSC_IPV4_ADDR_VALID = 1024 int4
+macro LWIP_NSC_IPV4_GATEWAY_CHANGED = 32 int4
+macro LWIP_NSC_IPV4_NETMASK_CHANGED = 64 int4
+macro LWIP_NSC_IPV4_SETTINGS_CHANGED = 128 int4
+macro LWIP_NSC_IPV6_ADDR_STATE_CHANGED = 512 int4
+macro LWIP_NSC_IPV6_SET = 256 int4
+macro LWIP_NSC_LINK_CHANGED = 4 int4
+macro LWIP_NSC_NETIF_ADDED = 1 int4
+macro LWIP_NSC_NETIF_REMOVED = 2 int4
+macro LWIP_NSC_NONE = 0 int4
+macro LWIP_NSC_STATUS_CHANGED = 8 int4
+macro LWIP_SELECT_MAXNFDS = 64 int4
+macro LWIP_SOCKET_HAVE_SA_LEN = 1 int4
+macro LWIP_UINT32_MAX = 4294967295 uint4
+macro L_tmpnam = 8 int4
+macro MATH_ERREXCEPT = 2 int4
+macro MATH_ERRNO = 1 int4
+macro MAX(a,b) = (1, 2)=2 int4
+macro MAXFLOAT = 3.4028234663852886e+38 float4
+macro MAXNAMLEN = 255 int4
+macro MAXPATHLEN = 1024 int4
+macro MAX_CANON = 255 int4
+macro MAX_INPUT = 255 int4
+macro MB_LEN_MAX = 1 int4
+macro MD_APP_BAR_DENSE_DP = 48
+macro MD_APP_BAR_DP = 56
+macro MD_APP_BAR_PROMINENT_DP = 64
+macro MD_BUTTON_H_DP = 36
+macro MD_BUTTON_MIN_W_DP = 64
+macro MD_BUTTON_PAD_DP = 16
+macro MD_CHECKBOX_DP = 18
+macro MD_CHIP_H_DP = 32
+macro MD_DIALOG_MAX_W_DP = 560
+macro MD_DIALOG_MIN_W_DP = 280
+macro MD_DRAWER_W_DP = 256
+macro MD_DUR_DIALOG_IN_MS = 150
+macro MD_DUR_DIALOG_OUT_MS = 75
+macro MD_DUR_DRAWER_IN_MS = 250
+macro MD_DUR_DRAWER_OUT_MS = 200
+macro MD_DUR_ELEVATION_MS = 280
+macro MD_DUR_MENU_FADE_IN_MS = 30
+macro MD_DUR_MENU_FADE_OUT_MS = 75
+macro MD_DUR_MENU_SCALE_MS = 120
+macro MD_DUR_RIPPLE_EXPAND_MS = 225
+macro MD_DUR_RIPPLE_FADE_IN_MS = 75
+macro MD_DUR_RIPPLE_FADE_OUT_MS = 150
+macro MD_DUR_SCREEN_MS = 300
+macro MD_ELEV_APP_BAR = 4
+macro MD_ELEV_BUTTON_RAISED = 2
+macro MD_ELEV_CARD = 1
+macro MD_ELEV_DIALOG = 24
+macro MD_ELEV_DRAWER = 16
+macro MD_ELEV_FAB = 6
+macro MD_ELEV_MENU = 8
+macro MD_ELEV_SLIDER_THUMB = 1
+macro MD_ELEV_SNACKBAR = 6
+macro MD_ELEV_SWITCH_HANDLE = 1
+macro MD_FAB_DP = 56
+macro MD_FAB_MINI_DP = 40
+macro MD_GRID_DP = 8
+macro MD_GRID_HALF_DP = 4
+macro MD_GUTTER_DP = 8
 macro MD_ICON_ACCESS_TIME = "\xEE\x86\x92"
 macro MD_ICON_ACCOUNT_CIRCLE = "\xEE\xA1\x93"
 macro MD_ICON_AC_UNIT = "\xEE\xAC\xBB"
@@ -1061,18 +2396,497 @@ macro MD_ICON_WIFI_OFF = "\xEE\x99\x88"
 macro MD_LIST_ROW_1_DP = 48
 macro MD_LIST_ROW_2_DP = 64
 macro MD_LIST_ROW_3_DP = 72
+macro MD_MARGIN_DP = 16
 macro MD_PX_PER_DP = 2
+macro MD_SHAPE_LARGE_DP = 0
+macro MD_SHAPE_MEDIUM_DP = 4
+macro MD_SHAPE_SMALL_DP = 4
+macro MD_SLIDER_THUMB_DP = 20
+macro MD_SLIDER_TRACK_DP = 4
+macro MD_SNACKBAR_MAX_W_DP = 672
+macro MD_SNACKBAR_MIN_W_DP = 344
+macro MD_SWITCH_HANDLE_DP = 20
+macro MD_SWITCH_TRACK_H_DP = 14
+macro MD_SWITCH_TRACK_W_DP = 36
+macro MD_TABS_H_DP = 48
+macro MD_TABS_ICON_H_DP = 72
+macro MD_TEXT_FIELD_H_DP = 56
+macro MD_TOUCH_DP = 48
+macro MEMP_ALIGN_SIZE(x) = (1)=4 uint4; (100)=100 uint4
+macro MEMP_SIZE = 0 int4
+macro MEMP_STATS_GET(x,i) = (1, 2)=0 int4
+macro MEM_SIZE_F = "u" str
+macro MIN(a,b) = (1, 2)=1 int4
+macro MSG_CTRUNC = 8 int4
+macro MSG_DONTWAIT = 8 int4
+macro MSG_MORE = 16 int4
+macro MSG_NOSIGNAL = 32 int4
+macro MSG_OOB = 4 int4
+macro MSG_PEEK = 1 int4
+macro MSG_TRUNC = 4 int4
+macro MSG_WAITALL = 2 int4
+macro M_1_PI = 0.3183098861837907 float8
+macro M_2_PI = 0.6366197723675814 float8
+macro M_2_SQRTPI = 1.1283791670955126 float8
+macro M_3PI_4 = 2.356194490192345 float8
+macro M_E = 2.718281828459045 float8
+macro M_El = 2.718281828459045 float16
+macro M_INVLN2 = 1.4426950408889634 float8
+macro M_IVLN10 = 0.4342944819032518 float8
+macro M_LN10 = 2.302585092994046 float8
+macro M_LN2 = 0.6931471805599453 float8
+macro M_LN2HI = 0.6931471803691238 float8
+macro M_LN2LO = 1.9082149292705877e-10 float8
+macro M_LOG10E = 0.4342944819032518 float8
+macro M_LOG2E = 1.4426950408889634 float8
+macro M_LOG2_E = 0.6931471805599453 float8
+macro M_PI = 3.141592653589793 float8
+macro M_PI_2 = 1.5707963267948966 float8
+macro M_PI_2l = 1.5707963267948966 float16
+macro M_PI_4 = 0.7853981633974483 float8
+macro M_PI_4l = 0.7853981633974483 float16
+macro M_PIl = 3.141592653589793 float16
+macro M_SQRT1_2 = 0.7071067811865476 float8
+macro M_SQRT2 = 1.4142135623730951 float8
+macro M_SQRT3 = 1.7320508075688772 float8
+macro M_SQRTPI = 1.772453850905516 float8
+macro M_TWOPI = 6.283185307179586 float8
+macro NAME_MAX = 255 int4
+macro NAN = nan float4
+macro NBBY = 8 int4
+macro NETDB_ELEM_SIZE = 317 uint4
+macro NETIF_ADDR_IDX_MAX = 127 int4
+macro NETIF_CHECKSUM_ENABLED(netif,chksumflag) = (1, 2)=0 int4
+macro NETIF_FLAG_BROADCAST = 2 uint4
+macro NETIF_FLAG_ETHARP = 8 uint4
+macro NETIF_FLAG_ETHERNET = 16 uint4
+macro NETIF_FLAG_IGMP = 32 uint4
+macro NETIF_FLAG_LINK_UP = 4 uint4
+macro NETIF_FLAG_MLD6 = 64 uint4
+macro NETIF_FLAG_UP = 1 uint4
+macro NETIF_MAX_HWADDR_LEN = 6 uint4
+macro NETIF_NAMESIZE = 6 int4
+macro NETIF_NO_INDEX = 0 int4
+macro NFDBITS = 32 int4
+macro NL_ARGMAX = 32 int4
+macro NOFILE = 60 int4
+macro NO_DATA = 211 int4
+macro NO_RECOVERY = 212 int4
+macro NSIG_MAX = 32 int4
+macro OPEN_MAX = 64 int4
+macro O_ACCMODE = 3 int4
+macro O_APPEND = 1024 int4
+macro O_CLOEXEC = 262144 int4
+macro O_CREAT = 64 int4
+macro O_DIRECT = 524288 int4
+macro O_DIRECTORY = 2097152 int4
+macro O_DSYNC = 8192 int4
+macro O_EXCL = 2048 int4
+macro O_EXEC = 4194304 int4
+macro O_NDELAY = 16384 int4
+macro O_NOCTTY = 32768 int4
+macro O_NOFOLLOW = 1048576 int4
+macro O_NONBLOCK = 16384 int4
+macro O_RDONLY = 0 int4
+macro O_RDWR = 2 int4
+macro O_RSYNC = 8192 int4
+macro O_SEARCH = 4194304 int4
+macro O_SYNC = 8192 int4
+macro O_TRUNC = 512 int4
+macro O_WRONLY = 1 int4
+macro PACK_STRUCT_FIELD(x) = (1)=1 int4; (100)=100 int4
+macro PACK_STRUCT_FLD_8(x) = (1)=1 int4; (100)=100 int4
+macro PACK_STRUCT_FLD_S(x) = (1)=1 int4; (100)=100 int4
+macro PATHSIZE = 1024 int4
+macro PATH_MAX = 1024 int4
+macro PBUF_ALLOC_FLAG_DATA_CONTIGUOUS = 512 int4
+macro PBUF_ALLOC_FLAG_RX = 256 int4
+macro PBUF_FLAG_IS_CUSTOM = 2 uint4
+macro PBUF_FLAG_LLBCAST = 8 uint4
+macro PBUF_FLAG_LLMCAST = 16 uint4
+macro PBUF_FLAG_MCASTLOOP = 4 uint4
+macro PBUF_FLAG_PUSH = 1 uint4
+macro PBUF_FLAG_TCP_FIN = 32 uint4
+macro PBUF_IP_HLEN = 40 int4
+macro PBUF_POOL_FREE_OOSEQ = 1 int4
+macro PBUF_TRANSPORT_HLEN = 20 int4
+macro PBUF_TYPE_ALLOC_SRC_MASK = 15 int4
+macro PBUF_TYPE_ALLOC_SRC_MASK_APP_MAX = 15 int4
+macro PBUF_TYPE_ALLOC_SRC_MASK_APP_MIN = 3 int4
+macro PBUF_TYPE_ALLOC_SRC_MASK_STD_HEAP = 0 int4
+macro PBUF_TYPE_ALLOC_SRC_MASK_STD_MEMP_PBUF = 1 int4
+macro PBUF_TYPE_ALLOC_SRC_MASK_STD_MEMP_PBUF_POOL = 2 int4
+macro PBUF_TYPE_FLAG_DATA_VOLATILE = 64 int4
+macro PBUF_TYPE_FLAG_STRUCT_DATA_CONTIGUOUS = 128 int4
+macro PDP_ENDIAN = 3412 int4
+macro PF_INET = 2 int4
+macro PF_INET6 = 10 int4
+macro PF_UNSPEC = 0 int4
+macro PIPE_BUF = 512 int4
+macro POLLERR = 32 uint4
+macro POLLHUP = 64 uint4
+macro POLLIN = 1 uint4
+macro POLLNVAL = 128 uint4
+macro POLLOUT = 8 uint4
+macro POLLPRI = 4 uint4
+macro POLLRDBAND = 4 uint4
+macro POLLRDNORM = 2 uint4
+macro POLLWRBAND = 16 uint4
+macro POLLWRNORM = 8 uint4
+macro PORT_ALIGN_UP_TO_4(value) = (1)=4 int4; (100)=100 int4
+macro PORT_OFFSET_PX_END_OF_STACK = 72 int4
+macro PORT_OFFSET_PX_STACK = 48 int4
+macro PP_HTONL(x) = (1)=16777216 uint4; (100)=1677721600 uint4
+macro PP_HTONS(x) = (1)=256 uint2; (100)=25600 uint2
+macro PP_NTOHL(x) = (1)=16777216 uint4; (100)=1677721600 uint4
+macro PP_NTOHS(x) = (1)=256 uint2; (100)=25600 uint2
+macro PRIX16 = "hX" str
+macro PRIX32 = "lX" str
+macro PRIX64 = "llX" str
+macro PRIX8 = "hhX" str
+macro PRIXFAST16 = "X" str
+macro PRIXFAST32 = "X" str
+macro PRIXFAST64 = "llX" str
+macro PRIXFAST8 = "X" str
+macro PRIXLEAST16 = "hX" str
+macro PRIXLEAST32 = "lX" str
+macro PRIXLEAST64 = "llX" str
+macro PRIXLEAST8 = "hhX" str
+macro PRIXMAX = "llX" str
+macro PRIXPTR = "X" str
+macro PRId16 = "hd" str
+macro PRId32 = "ld" str
+macro PRId64 = "lld" str
+macro PRId8 = "hhd" str
+macro PRIdFAST16 = "d" str
+macro PRIdFAST32 = "d" str
+macro PRIdFAST64 = "lld" str
+macro PRIdFAST8 = "d" str
+macro PRIdLEAST16 = "hd" str
+macro PRIdLEAST32 = "ld" str
+macro PRIdLEAST64 = "lld" str
+macro PRIdLEAST8 = "hhd" str
+macro PRIdMAX = "lld" str
+macro PRIdPTR = "d" str
+macro PRIi16 = "hi" str
+macro PRIi32 = "li" str
+macro PRIi64 = "lli" str
+macro PRIi8 = "hhi" str
+macro PRIiFAST16 = "i" str
+macro PRIiFAST32 = "i" str
+macro PRIiFAST64 = "lli" str
+macro PRIiFAST8 = "i" str
+macro PRIiLEAST16 = "hi" str
+macro PRIiLEAST32 = "li" str
+macro PRIiLEAST64 = "lli" str
+macro PRIiLEAST8 = "hhi" str
+macro PRIiMAX = "lli" str
+macro PRIiPTR = "i" str
+macro PRIo16 = "ho" str
+macro PRIo32 = "lo" str
+macro PRIo64 = "llo" str
+macro PRIo8 = "hho" str
+macro PRIoFAST16 = "o" str
+macro PRIoFAST32 = "o" str
+macro PRIoFAST64 = "llo" str
+macro PRIoFAST8 = "o" str
+macro PRIoLEAST16 = "ho" str
+macro PRIoLEAST32 = "lo" str
+macro PRIoLEAST64 = "llo" str
+macro PRIoLEAST8 = "hho" str
+macro PRIoMAX = "llo" str
+macro PRIoPTR = "o" str
+macro PRIu16 = "hu" str
+macro PRIu32 = "lu" str
+macro PRIu64 = "llu" str
+macro PRIu8 = "hhu" str
+macro PRIuFAST16 = "u" str
+macro PRIuFAST32 = "u" str
+macro PRIuFAST64 = "llu" str
+macro PRIuFAST8 = "u" str
+macro PRIuLEAST16 = "hu" str
+macro PRIuLEAST32 = "lu" str
+macro PRIuLEAST64 = "llu" str
+macro PRIuLEAST8 = "hhu" str
+macro PRIuMAX = "llu" str
+macro PRIuPTR = "u" str
+macro PRIx16 = "hx" str
+macro PRIx32 = "lx" str
+macro PRIx64 = "llx" str
+macro PRIx8 = "hhx" str
+macro PRIxFAST16 = "x" str
+macro PRIxFAST32 = "x" str
+macro PRIxFAST64 = "llx" str
+macro PRIxFAST8 = "x" str
+macro PRIxLEAST16 = "hx" str
+macro PRIxLEAST32 = "lx" str
+macro PRIxLEAST64 = "llx" str
+macro PRIxLEAST8 = "hhx" str
+macro PRIxMAX = "llx" str
+macro PRIxPTR = "x" str
+macro PTHREAD_CREATE_DETACHED = 0 int4
+macro PTHREAD_CREATE_JOINABLE = 1 int4
+macro PTHREAD_EXPLICIT_SCHED = 2 int4
+macro PTHREAD_INHERIT_SCHED = 1 int4
+macro PTHREAD_MUTEX_DEFAULT = 3 int4
+macro PTHREAD_MUTEX_ERRORCHECK = 2 int4
+macro PTHREAD_MUTEX_NORMAL = 0 int4
+macro PTHREAD_MUTEX_RECURSIVE = 1 int4
+macro PTHREAD_SCOPE_PROCESS = 0 int4
+macro PTHREAD_SCOPE_SYSTEM = 1 int4
+macro PTRDIFF_MAX = 2147483647 int4
+macro PTRDIFF_MIN = -2147483648 int4
+macro P_tmpdir = "" str
+macro RAND_MAX = 2147483647 int4
+macro RE_DUP_MAX = 255 int4
+macro R_OK = 4 int4
+macro S16_F = "d" str
+macro S32_F = "ld" str
+macro SBT_1M = 257698037760 int8
+macro SBT_1MS = 4294967 int8
+macro SBT_1NS = 4 int8
+macro SBT_1S = 4294967296 int8
+macro SBT_1US = 4294 int8
+macro SBT_MAX = 9223372036854775807 int8
+macro SCHAR_MAX = 127 int4
+macro SCHAR_MIN = -128 int4
+macro SCHAR_WIDTH = 8 int4
+macro SCHED_BATCH = 6 int4
+macro SCHED_FIFO = 1 int4
+macro SCHED_IDLE = 5 int4
+macro SCHED_OTHER = 0 int4
+macro SCHED_RESET_ON_FORK = 1073741824 int4
+macro SCHED_RR = 2 int4
+macro SCNd16 = "hd" str
+macro SCNd32 = "ld" str
+macro SCNd64 = "lld" str
+macro SCNd8 = "hhd" str
+macro SCNdFAST16 = "d" str
+macro SCNdFAST32 = "d" str
+macro SCNdFAST64 = "lld" str
+macro SCNdFAST8 = "d" str
+macro SCNdLEAST16 = "hd" str
+macro SCNdLEAST32 = "ld" str
+macro SCNdLEAST64 = "lld" str
+macro SCNdLEAST8 = "hhd" str
+macro SCNdMAX = "lld" str
+macro SCNdPTR = "d" str
+macro SCNi16 = "hi" str
+macro SCNi32 = "li" str
+macro SCNi64 = "lli" str
+macro SCNi8 = "hhi" str
+macro SCNiFAST16 = "i" str
+macro SCNiFAST32 = "i" str
+macro SCNiFAST64 = "lli" str
+macro SCNiFAST8 = "i" str
+macro SCNiLEAST16 = "hi" str
+macro SCNiLEAST32 = "li" str
+macro SCNiLEAST64 = "lli" str
+macro SCNiLEAST8 = "hhi" str
+macro SCNiMAX = "lli" str
+macro SCNiPTR = "i" str
+macro SCNo16 = "ho" str
+macro SCNo32 = "lo" str
+macro SCNo64 = "llo" str
+macro SCNo8 = "hho" str
+macro SCNoFAST16 = "o" str
+macro SCNoFAST32 = "o" str
+macro SCNoFAST64 = "llo" str
+macro SCNoFAST8 = "o" str
+macro SCNoLEAST16 = "ho" str
+macro SCNoLEAST32 = "lo" str
+macro SCNoLEAST64 = "llo" str
+macro SCNoLEAST8 = "hho" str
+macro SCNoMAX = "llo" str
+macro SCNoPTR = "o" str
+macro SCNu16 = "hu" str
+macro SCNu32 = "lu" str
+macro SCNu64 = "llu" str
+macro SCNu8 = "hhu" str
+macro SCNuFAST16 = "u" str
+macro SCNuFAST32 = "u" str
+macro SCNuFAST64 = "llu" str
+macro SCNuFAST8 = "u" str
+macro SCNuLEAST16 = "hu" str
+macro SCNuLEAST32 = "lu" str
+macro SCNuLEAST64 = "llu" str
+macro SCNuLEAST8 = "hhu" str
+macro SCNuMAX = "llu" str
+macro SCNuPTR = "u" str
+macro SCNx16 = "hx" str
+macro SCNx32 = "lx" str
+macro SCNx64 = "llx" str
+macro SCNx8 = "hhx" str
+macro SCNxFAST16 = "x" str
+macro SCNxFAST32 = "x" str
+macro SCNxFAST64 = "llx" str
+macro SCNxFAST8 = "x" str
+macro SCNxLEAST16 = "hx" str
+macro SCNxLEAST32 = "lx" str
+macro SCNxLEAST64 = "llx" str
+macro SCNxLEAST8 = "hhx" str
+macro SCNxMAX = "llx" str
+macro SCNxPTR = "x" str
+macro SEEK_CUR = 1 int4
+macro SEEK_DATA = 3 int4
+macro SEEK_END = 2 int4
+macro SEEK_HOLE = 4 int4
+macro SEEK_SET = 0 int4
+macro SHRT_MAX = 32767 int4
+macro SHRT_MIN = -32768 int4
+macro SHRT_WIDTH = 16 int4
+macro SHUT_RD = 0 int4
+macro SHUT_RDWR = 2 int4
+macro SHUT_WR = 1 int4
+macro SIG_ATOMIC_MAX = 2147483647 int4
+macro SIG_ATOMIC_MIN = -2147483648 int4
+macro SIN_ZERO_LEN = 8 int4
+macro SIOCATMARK = 1074033415 int4
+macro SIOCGHIWAT = 1074033409 int4
+macro SIOCGLOWAT = 1074033411 int4
+macro SIOCSHIWAT = -2147192064 int4
+macro SIOCSLOWAT = -2147192062 int4
+macro SIZE_MAX = 4294967295 uint4
+macro SOCK_DGRAM = 2 int4
+macro SOCK_RAW = 3 int4
+macro SOCK_STREAM = 1 int4
+macro SOL_SOCKET = 4095 int4
+macro SO_ACCEPTCONN = 2 int4
+macro SO_BINDTODEVICE = 4107 int4
+macro SO_BROADCAST = 32 int4
+macro SO_CONTIMEO = 4105 int4
+macro SO_DEBUG = 1 int4
+macro SO_DONTLINGER = -129 int4
+macro SO_DONTROUTE = 16 int4
+macro SO_ERROR = 4103 int4
+macro SO_KEEPALIVE = 8 int4
+macro SO_LINGER = 128 int4
+macro SO_NO_CHECK = 4106 int4
+macro SO_OOBINLINE = 256 int4
+macro SO_RCVBUF = 4098 int4
+macro SO_RCVLOWAT = 4100 int4
+macro SO_RCVTIMEO = 4102 int4
+macro SO_REUSEADDR = 4 int4
+macro SO_REUSEPORT = 512 int4
+macro SO_SNDBUF = 4097 int4
+macro SO_SNDLOWAT = 4099 int4
+macro SO_SNDTIMEO = 4101 int4
+macro SO_TYPE = 4104 int4
+macro SO_USELOOPBACK = 64 int4
+macro SSIZE_MAX = 2147483647 int4
+macro STDERR_FILENO = 2 int4
+macro STDIN_FILENO = 0 int4
+macro STDOUT_FILENO = 1 int4
+macro SZT_F = "u" str
+macro S_BLKSIZE = 1024 int4
+macro S_ENFMT = 1024 int4
+macro S_IEXEC = 64 int4
+macro S_IFBLK = 24576 int4
+macro S_IFCHR = 8192 int4
+macro S_IFDIR = 16384 int4
+macro S_IFIFO = 4096 int4
+macro S_IFLNK = 40960 int4
+macro S_IFMT = 61440 int4
+macro S_IFREG = 32768 int4
+macro S_IFSOCK = 49152 int4
+macro S_IREAD = 256 int4
+macro S_IRGRP = 32 int4
+macro S_IROTH = 4 int4
+macro S_IRUSR = 256 int4
+macro S_IRWXG = 56 int4
+macro S_IRWXO = 7 int4
+macro S_IRWXU = 448 int4
+macro S_ISBLK(m) = (1)=0 int4; (100)=0 int4
+macro S_ISCHR(m) = (1)=0 int4; (100)=0 int4
+macro S_ISDIR(m) = (1)=0 int4; (100)=0 int4
+macro S_ISFIFO(m) = (1)=0 int4; (100)=0 int4
+macro S_ISGID = 1024 int4
+macro S_ISLNK(m) = (1)=0 int4; (100)=0 int4
+macro S_ISREG(m) = (1)=0 int4; (100)=0 int4
+macro S_ISSOCK(m) = (1)=0 int4; (100)=0 int4
+macro S_ISUID = 2048 int4
+macro S_ISVTX = 512 int4
+macro S_IWGRP = 16 int4
+macro S_IWOTH = 2 int4
+macro S_IWRITE = 128 int4
+macro S_IWUSR = 128 int4
+macro S_IXGRP = 8 int4
+macro S_IXOTH = 1 int4
+macro S_IXUSR = 64 int4
 macro T5_API_LEVEL = 1
 macro T5_APP(...) = static const t5_app_desc_t t5__app_desc = { .api = T5_API_LEVEL, __VA_ARGS__ }; __attribute__((visibility("default"))) int t5_app_entry(int argc, char **argv) { if (argc >= 1 && argv && argv[0]) *(const t5_app_desc_t **)argv[0] = &t5__app_desc; return T5_API_LEVEL; }
+macro T5_APPDATA_DIR = T5_DATA_PATH "/appdata"
+macro T5_APPS_BUILTIN_MAX = 24
+macro T5_APPS_DATA_DIR = T5_DATA_PATH "/apps"
+macro T5_APPS_MAX = 48
+macro T5_APPS_SD_DIR = T5_SD_PATH "/apps"
 macro T5_APP_ENTRY_SYMBOL = "t5_app_entry"
+macro T5_APP_ICON_LEN = 8
+macro T5_APP_ID_CAMERA = "com.t5.camera"
+macro T5_APP_ID_EDITOR = "com.t5.editor"
+macro T5_APP_ID_FILES = "com.t5.files"
+macro T5_APP_ID_LEN = 64
+macro T5_APP_ID_MANAGER = "com.t5.appmanager"
+macro T5_APP_ID_PORTS = "com.t5.ports"
+macro T5_APP_ID_POWER = "com.t5.power"
+macro T5_APP_ID_SETTINGS = "com.t5.settings"
+macro T5_APP_ID_TERMINAL = "com.t5.terminal"
+macro T5_APP_NAME_LEN = 48
+macro T5_APP_PATH_MAX = 192
 macro T5_APP_STATE_MAX = 8192
+macro T5_APP_VERSION_LEN = 16
+macro T5_ASSERT(cond) = do { if (__builtin_expect(!(cond), 0)) { t5_assert_fail(__FILE__, __LINE__, #cond); } } while (0)
+macro T5_AUDIO_CH = 2
+macro T5_AUDIO_RATE = 48000
+macro T5_BATTERY_PERIOD_MS = 1000
+macro T5_BAT_HIST_CHARGING = 0x01
+macro T5_BAT_HIST_LEN = 288
+macro T5_BAT_HIST_PERIOD_S = 300
+macro T5_BAT_HIST_USB = 0x02
+macro T5_BAT_HIST_VERSION = 1
+macro T5_CAMERA_FPS = 30
+macro T5_CAMERA_H = 720
+macro T5_CAMERA_PHOTO_H = 900
+macro T5_CAMERA_PHOTO_W = 1600
+macro T5_CAMERA_W = 1280
+macro T5_CHG_LIMIT_PCT = 80
+macro T5_CHG_LIMIT_RESTART_PCT = 75
+macro T5_CHG_TEMP_PAUSE_C10 = 500
+macro T5_CHG_TEMP_RESUME_C10 = 470
+macro T5_CHG_TEMP_UNKNOWN = INT16_MIN
 macro T5_CORE_ANY = (-1)
+macro T5_CRASH_DB_NAME = "crashes.bin"
+macro T5_DATA_PATH = "/data"
+macro T5_DCIM_DIR = T5_SD_PATH "/DCIM"
+macro T5_DIS_EMERGENCY_SAMPLES = 3
+macro T5_DIS_LOW_POWER_PCT = 10
+macro T5_DIS_OFF_PCT = 5
+macro T5_DIS_OFF_SAMPLES = 5
+macro T5_DIS_REARM_PCT = 20
+macro T5_DIS_WARN_PCT = 15
 macro T5_DP(n) = ((n) * MD_PX_PER_DP)
+macro T5_DUMP_DIR_NAME = "dumps"
+macro T5_ENERGY_DB_VERSION = 1
+macro T5_ENERGY_ID_LEN = 48
+macro T5_ENERGY_LAUNCHER = "launcher"
+macro T5_ENERGY_MAX = 32
+macro T5_ENERGY_SCREEN_OFF = "screen-off"
 macro T5_EVENT_MAX_DATA = 32
 macro T5_FILE_PICK_WRITE = 1u
 macro T5_HTTP_NO_REDIRECT = (1u << 0)
 macro T5_HTTP_TLS_NO_VERIFY = (1u << 1)
 macro T5_IGNORE(expr) = do { t5_err_t _t5_ignored = (expr); (void)_t5_ignored; } while (0)
+macro T5_IMU_INIT_ATTEMPTS = 3
+macro T5_IMU_INT1 = 0x01
+macro T5_IMU_INT2 = 0x02
+macro T5_MANIFEST_BG_DEFAULT_ENTRY = "on_alarm"
+macro T5_MANIFEST_BG_DEFAULT_SECONDS = 30
+macro T5_MANIFEST_BG_MAX_SECONDS = 300
+macro T5_MANIFEST_FILE_LEN = 64
+macro T5_MANIFEST_FUNC_LEN = 32
+macro T5_MANIFEST_MAX_HEAP_KB = (32u * 1024u)
+macro T5_MANIFEST_MAX_PORTS = 8
+macro T5_MANIFEST_PORT_LEN = 16
 macro T5_MODBUS_FN_READ_COILS = 0x01
 macro T5_MODBUS_FN_READ_DISCRETE = 0x02
 macro T5_MODBUS_FN_READ_HOLDING = 0x03
@@ -1080,38 +2894,325 @@ macro T5_MODBUS_FN_READ_INPUT = 0x04
 macro T5_MODBUS_FN_WRITE_COIL = 0x05
 macro T5_MODBUS_FN_WRITE_REGISTER = 0x06
 macro T5_MODBUS_FN_WRITE_REGISTERS = 0x10
+macro T5_MODBUS_MAX_BITS = 2000
+macro T5_MODBUS_MAX_FRAME = 256
+macro T5_MODBUS_MAX_READ = 125
+macro T5_MODBUS_MAX_WRITE = 123
 macro T5_MQTT_PERSISTENT = (1u << 2)
 macro T5_MQTT_TLS_NO_VERIFY = (1u << 0)
 macro T5_MQTT_V5 = (1u << 1)
+macro T5_MUST_CHECK = __attribute__((warn_unused_result))
 macro T5_NET_APP_MAX = 12
 macro T5_NET_FOREVER = 0xffffffffu
+macro T5_NET_MAX_SCAN = 24
 macro T5_NET_PASS_LEN = 65
 macro T5_NET_SSID_LEN = 33
+macro T5_PACK_CHARGED_MV = 8300
+macro T5_PACK_CRITICAL_MV = 6300
+macro T5_PACK_EMPTY_MV = 6500
+macro T5_PACK_FULL_MV = 8400
+macro T5_PACK_IDLE_MA10 = 500
+macro T5_PACK_LIGHT_LOAD_MA10 = 5000
+macro T5_PACK_MAX_MV = 9000
+macro T5_PACK_MIN_MV = 5000
+macro T5_PACK_NOMINAL_MAH = 2000
+macro T5_PACK_RINT_MOHM = 150
+macro T5_PACK_STANDBY_MA10 = 20
+macro T5_PACK_TAPER_MA10 = 1000
+macro T5_PANEL_H = T5_PANEL_NATIVE_H
+macro T5_PANEL_NATIVE_H = 1280
+macro T5_PANEL_NATIVE_W = 720
+macro T5_PANEL_W = T5_PANEL_NATIVE_W
 macro T5_PERM_ALL = 0xfffu
 macro T5_POLL_ERR = (1u << 2)
 macro T5_POLL_IN = (1u << 0)
 macro T5_POLL_OUT = (1u << 1)
 macro T5_PORT_FLAG_RISKY = 0x1u
+macro T5_PORT_MAX_PINS = 6
+macro T5_PORT_OWNER_LEN = 24
 macro T5_PORT_WHY_LEN = 64
+macro T5_PROFILES_DATA_DIR = T5_DATA_PATH "/profiles"
+macro T5_PROFILES_SD_DIR = T5_SD_PATH "/profiles"
 macro T5_RAIL_KEEP_IN_SLEEP = 0x01u
+macro T5_RAIL_MAX_HOLDS = 32
+macro T5_RAIL_OWNER_LEN = 16
 macro T5_RETURN_ON_ERR(expr) = do { t5_err_t _e = (expr); if (_e != T5_OK) return _e; } while (0)
+macro T5_SD_FAILED_RETRY_MS = 15000
+macro T5_SD_PATH = "/sd"
+macro T5_SD_POLL_MS = 1000
+macro T5_SD_RETRY_MS = 3000
+macro T5_SETTINGS_PAGE_ABOUT = "about"
+macro T5_SETTINGS_PAGE_BLE = "ble"
+macro T5_SETTINGS_PAGE_DEVELOPER = "developer"
+macro T5_SETTINGS_PAGE_DISPLAY = "display"
+macro T5_SETTINGS_PAGE_POWER = "power"
+macro T5_SETTINGS_PAGE_SOUND = "sound"
+macro T5_SETTINGS_PAGE_TIME = "time"
+macro T5_SETTINGS_PAGE_UPDATES = "updates"
+macro T5_SETTINGS_PAGE_USB = "usb"
+macro T5_SETTINGS_PAGE_WIFI = "wifi"
+macro T5_ST7123_MADCTL = 0x03
+macro T5_STACK_MARGIN = 512u
+macro T5_SUSPEND_MAX_HOOKS = 24
+macro T5_SUSPEND_PRIO_APPS = 100
+macro T5_SUSPEND_PRIO_MEDIA = 300
+macro T5_SUSPEND_PRIO_NET = 500
+macro T5_SUSPEND_PRIO_RAILS = 600
+macro T5_SUSPEND_PRIO_STORAGE = 200
+macro T5_SUSPEND_PRIO_SYSTEM = T5_SUSPEND_PRIO_STORAGE
+macro T5_SYS_DIR = T5_DATA_PATH "/sys"
 macro T5_TCP_NODELAY = (1u << 2)
 macro T5_TCP_TLS = (1u << 0)
 macro T5_TCP_TLS_NO_VERIFY = (1u << 1)
 macro T5_TLS_NO_NAME_CHECK = (1u << 2)
 macro T5_TLS_NO_VERIFY = (1u << 0)
 macro T5_TLS_SERVER = (1u << 1)
+macro T5_TMP_DIR = T5_DATA_PATH "/tmp"
 macro T5_UDP_BROADCAST = (1u << 0)
 macro T5_UDP_IPV6 = (1u << 2)
 macro T5_UDP_REUSE = (1u << 1)
+macro T5_UI_REFRESH_LOW_POWER_MS = 33
+macro T5_UI_REFRESH_MS = 16
 macro T5_USB_MAX_DEVICES = 8
+macro T5_USB_PATH = "/usb"
+macro T5_USER_DIR = T5_DATA_PATH "/user"
+macro T5_WAKELOCK_MAX = 32
+macro T5_WAKELOCK_OWNER_LEN = 16
+macro T5_WAKE_FLAG_BACKGROUND = 0x01
+macro TCP_KEEPALIVE = 2 int4
+macro TCP_KEEPCNT = 5 int4
+macro TCP_KEEPIDLE = 3 int4
+macro TCP_KEEPINTVL = 4 int4
+macro TCP_NODELAY = 1 int4
+macro TIMER_ABSTIME = 4 int4
+macro TIME_UTC = 1 int4
+macro TMP_MAX = 32 int4
+macro TRY_AGAIN = 213 int4
+macro TZNAME_MAX = 10 int4
+macro U16_F = "d" str
+macro U32_F = "lu" str
+macro UCHAR_MAX = 255 int4
+macro UCHAR_WIDTH = 8 int4
+macro UINT16_C(x) = (1)=1 int4; (100)=100 int4
+macro UINT16_MAX = 65535 int4
+macro UINT32_C(x) = (1)=1 uint4; (100)=100 uint4
+macro UINT32_MAX = 4294967295 uint4
+macro UINT64_C(x) = (1)=1 uint8; (100)=100 uint8
+macro UINT64_MAX = 18446744073709551615 uint8
+macro UINT8_C(x) = (1)=1 int4; (100)=100 int4
+macro UINT8_MAX = 255 int4
+macro UINTMAX_C(x) = (1)=1 uint8; (100)=100 uint8
+macro UINTMAX_MAX = 18446744073709551615 uint8
+macro UINTPTR_MAX = 4294967295 uint4
+macro UINT_FAST16_MAX = 4294967295 uint4
+macro UINT_FAST32_MAX = 4294967295 uint4
+macro UINT_FAST64_MAX = 18446744073709551615 uint8
+macro UINT_FAST8_MAX = 4294967295 uint4
+macro UINT_LEAST16_MAX = 65535 int4
+macro UINT_LEAST32_MAX = 4294967295 uint4
+macro UINT_LEAST64_MAX = 18446744073709551615 uint8
+macro UINT_LEAST8_MAX = 255 int4
+macro UINT_MAX = 4294967295 uint4
+macro UINT_WIDTH = 32 int4
+macro ULLONG_MAX = 18446744073709551615 uint8
+macro ULLONG_WIDTH = 64 int4
+macro ULONG_LONG_MAX = 18446744073709551615 uint8
+macro ULONG_MAX = 4294967295 uint4
+macro ULONG_WIDTH = 32 int4
+macro USHRT_MAX = 65535 int4
+macro USHRT_WIDTH = 16 int4
+macro WCHAR_MAX = 2147483647 int4
+macro WCHAR_MIN = -2147483648 int4
+macro WEXITSTATUS(w) = (1)=0 int4; (100)=0 int4
+macro WIFEXITED(w) = (1)=0 int4; (100)=0 int4
+macro WIFSIGNALED(w) = (1)=1 int4; (100)=1 int4
+macro WIFSTOPPED(w) = (1)=0 int4; (100)=0 int4
+macro WINT_MAX = 4294967295 uint4
+macro WINT_MIN = 0 uint4
+macro WNOHANG = 1 int4
+macro WTERMSIG(w) = (1)=1 int4; (100)=100 int4
+macro WUNTRACED = 2 int4
+macro W_OK = 2 int4
+macro X16_F = "x" str
+macro X32_F = "lx" str
+macro X8_F = "02hhx" str
+macro X_OK = 1 int4
+macro be16toh(_x) = (1)=256 uint2; (100)=25600 uint2
+macro be32toh(_x) = (1)=16777216 uint4; (100)=1677721600 uint4
+macro be64toh(_x) = (1)=72057594037927936 uint8; (100)=7205759403792793600 uint8
+macro configASSERT_DEFINED = 1 int4
+macro configENABLE_FPU = 1 int4
+macro configENABLE_MPU = 0 int4
+macro configENABLE_MVE = 0 int4
+macro configENABLE_TRUSTZONE = 1 int4
+macro configEXPECTED_IDLE_TIME_BEFORE_SLEEP = 2 int4
+macro configINCLUDE_APPLICATION_DEFINED_PRIVILEGED_FUNCTIONS = 0 int4
+macro configINITIAL_TICK_COUNT = 0 int4
+macro configMAX(a,b) = (1, 2)=2 int4
+macro configMIN(a,b) = (1, 2)=1 int4
+macro configPRECONDITION_DEFINED = 0 int4
+macro configRUN_ADDITIONAL_TESTS = 0 int4
+macro configRUN_FREERTOS_SECURE_ONLY = 0 int4
+macro configUSE_ALTERNATIVE_API = 0 int4
+macro configUSE_APPLICATION_TASK_TAG = 0 int4
+macro configUSE_C_RUNTIME_TLS_SUPPORT = 0 int4
+macro configUSE_DAEMON_TASK_STARTUP_HOOK = 0 int4
+macro configUSE_MALLOC_FAILED_HOOK = 0 int4
+macro configUSE_MINI_LIST_ITEM = 1 int4
+macro configUSE_POSIX_ERRNO = 0 int4
+macro configUSE_SB_COMPLETED_CALLBACK = 0 int4
+macro configUSE_TASK_FPU_SUPPORT = 1 int4
+macro errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY = -1 int4
+macro errQUEUE_BLOCKED = -4 int4
+macro errQUEUE_EMPTY = 0 int4
+macro errQUEUE_FULL = 0 int4
+macro errQUEUE_YIELD = -5 int4
+macro howmany(x,y) = (1, 2)=1 int4
+macro htobe16(_x) = (1)=256 uint2; (100)=25600 uint2
+macro htobe32(_x) = (1)=16777216 uint4; (100)=1677721600 uint4
+macro htobe64(_x) = (1)=72057594037927936 uint8; (100)=7205759403792793600 uint8
+macro htole16(_x) = (1)=1 uint2; (100)=100 uint2
+macro htole32(_x) = (1)=1 uint4; (100)=100 uint4
+macro htole64(_x) = (1)=1 uint8; (100)=100 uint8
+macro htonl(_x) = (1)=16777216 uint4; (100)=1677721600 uint4
+macro htons(_x) = (1)=256 uint2; (100)=25600 uint2
+macro ip6_addr_isdeprecated(addr_state) = (1)=0 int4; (100)=0 int4
+macro ip6_addr_isduplicated(addr_state) = (1)=0 int4; (100)=0 int4
+macro ip6_addr_isinvalid(addr_state) = (1)=0 int4; (100)=0 int4
+macro ip6_addr_ispreferred(addr_state) = (1)=0 int4; (100)=0 int4
+macro ip6_addr_istentative(addr_state) = (1)=0 int4; (100)=0 int4
+macro ip6_addr_isvalid(addr_state) = (1)=0 int4; (100)=0 int4
+macro ip6_addr_life_isinfinite(addr_life) = (1)=0 int4; (100)=0 int4
+macro ip6_addr_life_isstatic(addr_life) = (1)=0 int4; (100)=0 int4
+macro isascii(__c) = (1)=1 int4; (100)=1 int4
+macro isfinitef(x) = (1)=1 int4; (100)=1 int4
+macro isfinitel(x) = (1)=1 int4; (100)=1 int4
+macro isinff(x) = (1)=0 int4; (100)=0 int4
+macro isinfl(x) = (1)=0 int4; (100)=0 int4
+macro isnanf(x) = (1)=0 int4; (100)=0 int4
+macro isnanl(x) = (1)=0 int4; (100)=0 int4
+macro isnormall(x) = (1)=1 int4; (100)=1 int4
+macro le16toh(_x) = (1)=1 uint2; (100)=100 uint2
+macro le32toh(_x) = (1)=1 uint4; (100)=100 uint4
+macro le64toh(_x) = (1)=1 uint8; (100)=100 uint8
+macro log2(x) = (1)=0.0 float8; (100)=6.643856189774725 float8
+macro lwip_strerr(x) = (1)="" str; (100)="" str
+macro math_errhandling = 2 int4
+macro ntohl(_x) = (1)=16777216 uint4; (100)=1677721600 uint4
+macro ntohs(_x) = (1)=256 uint2; (100)=25600 uint2
+macro os_task_switch_is_pended(_cpu_) = (1)=0 uint1; (100)=0 uint1
+macro pdBIG_ENDIAN = 1 int4
 macro pdFAIL = ( pdFALSE )
 macro pdFALSE = ( ( BaseType_t ) 0 )
+macro pdFREERTOS_BIG_ENDIAN = 1 int4
+macro pdFREERTOS_ERRNO_EACCES = 13 int4
+macro pdFREERTOS_ERRNO_EADDRINUSE = 112 int4
+macro pdFREERTOS_ERRNO_EADDRNOTAVAIL = 125 int4
+macro pdFREERTOS_ERRNO_EAGAIN = 11 int4
+macro pdFREERTOS_ERRNO_EALREADY = 120 int4
+macro pdFREERTOS_ERRNO_EBADE = 50 int4
+macro pdFREERTOS_ERRNO_EBADF = 9 int4
+macro pdFREERTOS_ERRNO_EBUSY = 16 int4
+macro pdFREERTOS_ERRNO_ECANCELED = 140 int4
+macro pdFREERTOS_ERRNO_EEXIST = 17 int4
+macro pdFREERTOS_ERRNO_EFAULT = 14 int4
+macro pdFREERTOS_ERRNO_EFTYPE = 79 int4
+macro pdFREERTOS_ERRNO_EILSEQ = 138 int4
+macro pdFREERTOS_ERRNO_EINPROGRESS = 119 int4
+macro pdFREERTOS_ERRNO_EINTR = 4 int4
+macro pdFREERTOS_ERRNO_EINVAL = 22 int4
+macro pdFREERTOS_ERRNO_EIO = 5 int4
+macro pdFREERTOS_ERRNO_EISCONN = 127 int4
+macro pdFREERTOS_ERRNO_EISDIR = 21 int4
+macro pdFREERTOS_ERRNO_ENAMETOOLONG = 91 int4
+macro pdFREERTOS_ERRNO_ENMFILE = 89 int4
+macro pdFREERTOS_ERRNO_ENOBUFS = 105 int4
+macro pdFREERTOS_ERRNO_ENODEV = 19 int4
+macro pdFREERTOS_ERRNO_ENOENT = 2 int4
+macro pdFREERTOS_ERRNO_ENOMEDIUM = 135 int4
+macro pdFREERTOS_ERRNO_ENOMEM = 12 int4
+macro pdFREERTOS_ERRNO_ENOPROTOOPT = 109 int4
+macro pdFREERTOS_ERRNO_ENOSPC = 28 int4
+macro pdFREERTOS_ERRNO_ENOTCONN = 128 int4
+macro pdFREERTOS_ERRNO_ENOTDIR = 20 int4
+macro pdFREERTOS_ERRNO_ENOTEMPTY = 90 int4
+macro pdFREERTOS_ERRNO_ENXIO = 6 int4
+macro pdFREERTOS_ERRNO_EOPNOTSUPP = 95 int4
+macro pdFREERTOS_ERRNO_EROFS = 30 int4
+macro pdFREERTOS_ERRNO_ESPIPE = 29 int4
+macro pdFREERTOS_ERRNO_ETIMEDOUT = 116 int4
+macro pdFREERTOS_ERRNO_EUNATCH = 42 int4
+macro pdFREERTOS_ERRNO_EWOULDBLOCK = 11 int4
+macro pdFREERTOS_ERRNO_EXDEV = 18 int4
+macro pdFREERTOS_ERRNO_NONE = 0 int4
+macro pdFREERTOS_LITTLE_ENDIAN = 0 int4
+macro pdINTEGRITY_CHECK_VALUE = 1515870810 uint4
+macro pdLITTLE_ENDIAN = 0 int4
+macro pdMS_TO_TICKS(xTimeInMs) = (1)=1 uint4; (100)=100 uint4
 macro pdPASS = ( pdTRUE )
+macro pdTICKS_TO_MS(xTicks) = (1)=1 uint4; (100)=100 uint4
 macro pdTRUE = ( ( BaseType_t ) 1 )
+macro portBYTE_ALIGNMENT = 16 int4
+macro portBYTE_ALIGNMENT_MASK = 15 int4
+macro portCRITICAL_NESTING_IN_TCB = 0 int4
+macro portHAS_STACK_OVERFLOW_CHECKING = 0 int4
 macro portMAX_DELAY = (TickType_t) 0xffffffffUL
+macro portMUX_FREE_VAL = 3007315967 uint4
+macro portMUX_NO_TIMEOUT = -1 int4
+macro portMUX_TRY_LOCK = 0 int4
+macro portNUM_CONFIGURABLE_REGIONS = 1 int4
+macro portPRIVILEGE_BIT = 0 uint4
+macro portSTACK_GROWTH = -1 int4
 macro portTICK_PERIOD_MS = ((TickType_t) (1000 / configTICK_RATE_HZ))
+macro portTICK_TYPE_IS_ATOMIC = 1 int4
+macro portTICK_TYPE_SET_INTERRUPT_MASK_FROM_ISR() = ()=0 int4
+macro portUSING_MPU_WRAPPERS = 0 int4
+macro printf_float(x) = (1)=1.0 float8; (100)=100.0 float8
+macro queueOVERWRITE = 2 int4
+macro queueQUEUE_TYPE_BASE = 0 uint1
+macro queueQUEUE_TYPE_BINARY_SEMAPHORE = 3 uint1
+macro queueQUEUE_TYPE_COUNTING_SEMAPHORE = 2 uint1
+macro queueQUEUE_TYPE_MUTEX = 1 uint1
+macro queueQUEUE_TYPE_RECURSIVE_MUTEX = 4 uint1
+macro queueQUEUE_TYPE_SET = 0 uint1
+macro queueSEND_TO_BACK = 0 int4
+macro queueSEND_TO_FRONT = 1 int4
+macro semBINARY_SEMAPHORE_QUEUE_LENGTH = 1 uint1
+macro semGIVE_BLOCK_TIME = 0 uint4
+macro semSEMAPHORE_QUEUE_ITEM_LENGTH = 0 uint1
+macro signbit(__x) = (1)=0 int4; (100)=0 int4
+macro sys_mutex_valid_val(mutex) = (1)=1 int4; (100)=1 int4
+macro taskSCHEDULER_NOT_STARTED = 1 int4
+macro taskSCHEDULER_RUNNING = 2 int4
+macro taskSCHEDULER_SUSPENDED = 0 int4
+macro taskVALID_CORE_ID(xCoreID) = (1)=1 int4; (100)=0 int4
+macro tmrCOMMAND_CHANGE_PERIOD = 4 int4
+macro tmrCOMMAND_CHANGE_PERIOD_FROM_ISR = 9 int4
+macro tmrCOMMAND_DELETE = 5 int4
+macro tmrCOMMAND_EXECUTE_CALLBACK = -1 int4
+macro tmrCOMMAND_EXECUTE_CALLBACK_FROM_ISR = -2 int4
+macro tmrCOMMAND_RESET = 2 int4
+macro tmrCOMMAND_RESET_FROM_ISR = 7 int4
+macro tmrCOMMAND_START = 1 int4
+macro tmrCOMMAND_START_DONT_TRACE = 0 int4
+macro tmrCOMMAND_START_FROM_ISR = 6 int4
+macro tmrCOMMAND_STOP = 3 int4
+macro tmrCOMMAND_STOP_FROM_ISR = 8 int4
+macro tmrFIRST_FROM_ISR_COMMAND = 6 int4
+macro toascii(__c) = (1)=1 int4; (100)=100 int4
+macro tskDEFAULT_INDEX_TO_NOTIFY = 0 int4
+macro tskIDLE_PRIORITY = 0 uint4
+macro tskKERNEL_VERSION_BUILD = 1 int4
+macro tskKERNEL_VERSION_MAJOR = 10 int4
+macro tskKERNEL_VERSION_MINOR = 5 int4
+macro tskKERNEL_VERSION_NUMBER = "V10.5.1" str
+macro tskMPU_REGION_DEVICE_MEMORY = 16 uint4
+macro tskMPU_REGION_EXECUTE_NEVER = 4 uint4
+macro tskMPU_REGION_NORMAL_MEMORY = 8 uint4
+macro tskMPU_REGION_READ_ONLY = 1 uint4
+macro tskMPU_REGION_READ_WRITE = 2 uint4
 macro tskNO_AFFINITY = ( ( BaseType_t ) 0x7FFFFFFF )
+macro tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE = 1 int4
 struct __file = size=24 unget@+0:__ungetc_t; flags@+4:__uint8_t; put@+8:fn(char, struct __file *) -> int *; get@+12:fn(struct __file *) -> int *; flush@+16:fn(struct __file *) -> int *; lock@+20:_LOCK_T
 struct __lock = size=92 reserved@+0:int[23]
 struct _lv_anim_t = size=96 var@+0:void *; exec_cb@+4:lv_anim_exec_xcb_t; custom_exec_cb@+8:lv_anim_custom_exec_cb_t; start_cb@+12:lv_anim_start_cb_t; completed_cb@+16:lv_anim_completed_cb_t; deleted_cb@+20:lv_anim_deleted_cb_t; get_value_cb@+24:lv_anim_get_value_cb_t; user_data@+28:void *; path_cb@+32:lv_anim_path_cb_t; start_value@+36:int32_t; current_value@+40:int32_t; end_value@+44:int32_t; duration@+48:int32_t; act_time@+52:int32_t; reverse_delay@+56:uint32_t; reverse_duration@+60:uint32_t; repeat_delay@+64:uint32_t; repeat_cnt@+68:uint32_t; parameter@+72:union _lv_anim_path_para_t; last_timer_run@+80:uint32_t; pause_time@+84:uint32_t; pause_duration@+88:uint32_t; is_paused@bit736:1:uint8_t; reverse_play_in_progress@bit737:1:uint8_t; run_round@bit738:1:uint8_t; start_cb_called@bit739:1:uint8_t; early_apply@bit740:1:uint8_t
@@ -1125,6 +3226,7 @@ struct _lv_font_t = size=44 dsc@+0:const void *; fallback@+4:const lv_font_t *; 
 struct _lv_fs_drv_t = size=56 letter@+0:char; cache_size@+4:uint32_t; ready_cb@+8:fn(lv_fs_drv_t *) -> _Bool *; remove_cb@+12:fn(lv_fs_drv_t *) -> void *; open_cb@+16:fn(lv_fs_drv_t *, const char *, lv_fs_mode_t) -> void * *; close_cb@+20:fn(lv_fs_drv_t *, void *) -> lv_fs_res_t *; read_cb@+24:fn(lv_fs_drv_t *, void *, void *, uint32_t, uint32_t *) -> lv_fs_res_t *; write_cb@+28:fn(lv_fs_drv_t *, void *, const void *, uint32_t, uint32_t *) -> lv_fs_res_t *; seek_cb@+32:fn(lv_fs_drv_t *, void *, uint32_t, lv_fs_whence_t) -> lv_fs_res_t *; tell_cb@+36:fn(lv_fs_drv_t *, void *, uint32_t *) -> lv_fs_res_t *; dir_open_cb@+40:fn(lv_fs_drv_t *, const char *) -> void * *; dir_read_cb@+44:fn(lv_fs_drv_t *, void *, char *, uint32_t) -> lv_fs_res_t *; dir_close_cb@+48:fn(lv_fs_drv_t *, void *) -> lv_fs_res_t *; user_data@+52:void *
 struct _lv_layer_t = size=88 draw_buf@+0:lv_draw_buf_t *; draw_task_head@+4:lv_draw_task_t *; display@+8:lv_display_t *; parent@+12:lv_layer_t *; next@+16:lv_layer_t *; user_data@+20:void *; buf_area@+24:lv_area_t; phy_clip_area@+40:lv_area_t; _clip_area@+56:lv_area_t; partial_y_offset@+72:int32_t; recolor@+76:lv_color32_t; color_format@+80:lv_color_format_t; all_tasks_added@+84:_Bool; opa@+85:lv_opa_t; buffer_owned@+86:_Bool
 struct _lv_matrix_t = size=36 m@+0:float[3][3]
+struct _lv_obj_class_t = size=36 base_class@+0:const lv_obj_class_t *; constructor_cb@+4:fn(const lv_obj_class_t *, lv_obj_t *) -> void *; destructor_cb@+8:fn(const lv_obj_class_t *, lv_obj_t *) -> void *; event_cb@+12:fn(const lv_obj_class_t *, lv_event_t *) -> void *; user_data@+16:void *; name@+20:const char *; width_def@+24:int32_t; height_def@+28:int32_t; editable@bit256:2:uint32_t; group_def@bit258:2:uint32_t; instance_size@bit260:16:uint32_t; theme_inheritable@bit276:1:uint32_t
 struct _lv_span_coords_t = size=48 heading@+0:lv_area_t; middle@+16:lv_area_t; trailing@+32:lv_area_t
 struct _lv_subject_t = size=36 subs_ll@+0:lv_ll_t; value@+12:lv_subject_value_t; prev_value@+16:lv_subject_value_t; min_value@+20:lv_subject_value_t; max_value@+24:lv_subject_value_t; user_data@+28:void *; type@bit256:4:uint32_t; size@bit260:24:uint32_t; notify_restart_query@bit284:1:uint32_t
 struct addrinfo = size=32 ai_flags@+0:int; ai_family@+4:int; ai_socktype@+8:int; ai_protocol@+12:int; ai_addrlen@+16:socklen_t; ai_addr@+20:struct sockaddr *; ai_canonname@+24:char *; ai_next@+28:struct addrinfo *
@@ -1316,6 +3418,7 @@ typedef lv_log_print_g_cb_t = fn(lv_log_level_t, const char *) -> void *
 typedef lv_matrix_t = struct _lv_matrix_t
 typedef lv_mem_monitor_t = struct{total_size@+0:size_t; free_cnt@+4:size_t; free_size@+8:size_t; free_biggest_size@+12:size_t; used_cnt@+16:size_t; max_used@+20:size_t; used_pct@+24:uint8_t; frag_pct@+25:uint8_t}
 typedef lv_mem_pool_t = void *
+typedef lv_obj_class_t = struct _lv_obj_class_t
 typedef lv_obj_point_transform_flag_t = enum{LV_OBJ_POINT_TRANSFORM_FLAG_NONE}
 typedef lv_obj_set_bool_t = fn(lv_obj_t *, _Bool) -> void *
 typedef lv_obj_set_color_t = fn(lv_obj_t *, lv_color_t) -> void *

@@ -4,8 +4,10 @@
 
 Apps compile struct layouts, enum values and macro constants into their own
 code, so changing one breaks every app already built, with no error anywhere.
-This tool compiles the public SDK headers exactly as an app would, reads the
-types back from the debug information, and records them with the macros:
+This tool compiles the public SDK headers exactly as an app would (against
+the headers sdk/cmake/sysroot.py stages from the build, as the SDK release
+ships them), reads the types back from the debug information, evaluates the
+library macros with the compiler, and records them all:
 
     layout.py gen   FIRMWARE_BUILD        write sdk/abi/layout_v1.lock
     layout.py check FIRMWARE_BUILD        fail if anything recorded changed
@@ -15,6 +17,7 @@ fine. See docs/abi-stability.md. Needs the RISC-V compiler on PATH and
 pyelftools (both come with ESP-IDF: `. tools/env.sh`).
 """
 import argparse
+import struct
 import glob
 import os
 import re
@@ -34,18 +37,38 @@ LOCK = os.path.join(SDK, "abi", "layout_v1.lock")
 CC = "riscv32-esp-elf-gcc"
 
 # Beyond the types named in a prototype: the ones an app reaches through a
-# void pointer, an event payload or a callback.
+# void pointer, an event payload or a callback. lv_obj_class_t: custom
+# widgets fill one in (lv_obj_class_create_obj is exported).
 EXTRA_ROOTS = re.compile(
     r"^(t5_app_desc_t|t5_ev_\w+_t|t5_port_\w+_cfg_t|t5_event_handler_t|lv_image_dsc_t|lv_image_header_t|"
+    r"lv_obj_class_t|_lv_obj_class_t|"
     r"stat|tm|timeval|dirent|addrinfo|sockaddr|sockaddr_in|sockaddr_in6|sockaddr_storage|in_addr|fd_set|msghdr|iovec)$")
 
-# Every macro of the firmware headers the SDK headers reach is compiled into
-# apps; from the libraries, these: the LVGL configuration and FreeRTOS
-# constants an app's code uses.
-LIBRARY_MACROS = re.compile(
-    r"^(LV_VERSION_\w+|CONFIG_LV_USE_\w+|CONFIG_LV_COLOR_DEPTH\w*|CONFIG_LV_DRAW_BUF_\w+|CONFIG_LV_FONT_\w+|"
-    r"CONFIG_FREERTOS_HZ|portTICK_PERIOD_MS|portMAX_DELAY|pdTRUE|pdFALSE|pdPASS|pdFAIL|tskNO_AFFINITY)$")
-FIRMWARE_INCLUDES = os.path.realpath(os.path.join(ROOT, "firmware", "components"))
+# Macros. Every macro of the OS's own headers that the SDK headers reach is
+# compiled into apps, and recorded as written. From the sdkconfig, the
+# settings below. From the libraries apps call (the ext symbols in
+# api_v1.sym), every macro their headers define that an app could compile in
+# as a value: the compiler evaluates each one (as a constant, a string, or
+# a function-like macro at sample arguments) and the value and type are
+# recorded. Names reserved for the implementation (a leading underscore) are
+# left out. LIBRARY_TEXT_MACROS were locked as text before values were
+# probed; they stay that way so their lock entries don't change.
+CONFIG_MACROS = re.compile(
+    r"^(CONFIG_LV_USE_\w+|CONFIG_LV_COLOR_DEPTH\w*|CONFIG_LV_DRAW_BUF_\w+|CONFIG_LV_FONT_\w+|CONFIG_FREERTOS_HZ)$")
+LIBRARY_TEXT_MACROS = re.compile(
+    r"^(LV_VERSION_\w+|portTICK_PERIOD_MS|portMAX_DELAY|pdTRUE|pdFALSE|pdPASS|pdFAIL|tskNO_AFFINITY)$")
+# Where each library's headers are, as staged in the SDK sysroot
+# (sdk/cmake/sysroot.py), plus the compiler's own headers (picolibc, GCC's
+# <stdint.h>, <limits.h>...), which count as the C library.
+LIBRARIES = (("libc", "idf/components/esp_libc/"), ("lwip", "idf/components/lwip/"),
+             ("freertos", "idf/components/freertos/"), ("lvgl", "managed/lvgl__lvgl/"))
+OURS = ("os/",)
+# The libraries' tuning headers. Their options reach apps through values that
+# are recorded (FD_SETSIZE, pdMS_TO_TICKS(x), LV_DPX(x), the CONFIG_LV_*
+# settings), so tuning lwIP or FreeRTOS doesn't trip the check by itself.
+CONFIG_HEADERS = re.compile(r"(/lv_conf\w*|/lwipopts|/lwip/opt|/FreeRTOSConfig\w*)\.h$")
+# Values that depend on where the macro is expanded, not on the library.
+WHERE_MACROS = re.compile(r"\b(__FILE__|__FILE_NAME__|__LINE__|__COUNTER__|__DATE__|__TIME__|__func__)\b")
 SYSROOT_PY = os.path.join(SDK, "cmake", "sysroot.py")
 sys.path.insert(0, os.path.dirname(SYSROOT_PY))
 import sysroot  # noqa: E402
@@ -82,25 +105,66 @@ def compile_all(flags, tmp):
             bad += 1
     if bad:
         sys.exit(1)
-    src = "".join(f"#include <{h}>\n" for h in public_headers() + system_headers())
-    # Linked, because pyelftools can't apply RISC-V relocations to an object file.
-    obj = os.path.join(tmp, "layout.so")
-    subprocess.run([CC] + flags + ["-g", "-O0", "-fno-eliminate-unused-debug-types", "-w", "-fPIC", "-shared", "-nostdlib",
-                                   "-Wl,--no-warn-rwx-segments", "-x", "c", "-", "-o", obj],
-                   input=src, text=True, check=True, cwd=ROOT)
+    src = all_headers()
+    obj = link(flags, src, os.path.join(tmp, "layout.so"))
     macros = subprocess.run([CC] + flags + ["-E", "-dD", "-x", "c", "-"], input=src, capture_output=True, text=True,
                             check=True, cwd=ROOT).stdout
     return obj, macros
 
 
+def all_headers():
+    return "".join(f"#include <{h}>\n" for h in public_headers() + system_headers())
+
+
+def link(flags, src, out, check=True):
+    """Compile src with debug info into a shared object (linked, because
+    pyelftools can't apply RISC-V relocations to an object file)."""
+    path = out[:-3] + ".c"
+    with open(path, "w") as fh:
+        fh.write(src)
+    r = subprocess.run([CC] + flags + ["-g", "-O0", "-fno-eliminate-unused-debug-types", "-w", "-fmax-errors=0",
+                                       "-fPIC", "-shared", "-nostdlib", "-Wl,--no-warn-rwx-segments", path, "-o", out],
+                       capture_output=True, text=True, cwd=ROOT)
+    if check and r.returncode:
+        sys.exit(r.stderr)
+    return out if not r.returncode else r.stderr
+
+
+class Origin:
+    """Which library a header belongs to, by where it is in the staged
+    sysroot (or the compiler's own include directories)."""
+
+    def __init__(self, sr):
+        self.sr = os.path.realpath(sr) + os.sep
+        self.tc = sysroot.toolchain_root() + os.sep
+
+    def of(self, path):
+        path = os.path.realpath(path)
+        if path.startswith(self.tc):
+            return "libc"
+        if not path.startswith(self.sr):
+            return None
+        rel = path[len(self.sr):]
+        if rel.startswith(OURS):
+            return "os"
+        return next((name for name, prefix in LIBRARIES if rel.startswith(prefix)), None)
+
+
 class Dwarf:
     def __init__(self, path):
         self.fh = open(path, "rb")
-        elf = ELFFile(self.fh)
+        self.elf = elf = ELFFile(self.fh)
         self.dies = {}
         self.named = {}
-        for cu in elf.get_dwarf_info().iter_CUs():
+        self.enums = []
+        self.files = {}
+        dwarf = elf.get_dwarf_info()
+        for cu in dwarf.iter_CUs():
+            self.files[cu.cu_offset] = self.file_table(dwarf, cu)
             for die in cu.iter_DIEs():
+                if die.tag == "DW_TAG_enumeration_type" and die.get_parent() is not None \
+                        and die.get_parent().tag == "DW_TAG_compile_unit":
+                    self.enums.append(die)
                 self.dies[die.offset] = die
                 if die.tag in ("DW_TAG_structure_type", "DW_TAG_union_type", "DW_TAG_enumeration_type", "DW_TAG_typedef"):
                     n = self.name(die)
@@ -108,6 +172,30 @@ class Dwarf:
                         # A complete definition beats a forward declaration.
                         if n not in self.named or "DW_AT_declaration" in self.named[n].attributes:
                             self.named[n] = die
+
+    @staticmethod
+    def file_table(dwarf, cu):
+        """DW_AT_decl_file index -> path, for this CU's line program."""
+        lp = dwarf.line_program_for_CU(cu)
+        if lp is None:
+            return {}
+        v5 = lp.header.version >= 5
+        dirs = [d.decode() if isinstance(d, bytes) else d for d in lp.header.include_directory]
+        comp_dir = cu.get_top_DIE().attributes.get("DW_AT_comp_dir")
+        comp_dir = comp_dir.value.decode() if comp_dir else ""
+        out = {}
+        for i, fe in enumerate(lp.header.file_entry):
+            name = fe.name.decode() if isinstance(fe.name, bytes) else fe.name
+            if v5:
+                d = dirs[fe.dir_index]
+            else:
+                d = dirs[fe.dir_index - 1] if fe.dir_index else comp_dir
+            out[i if v5 else i + 1] = os.path.join(comp_dir, d, name)
+        return out
+
+    def decl_file(self, die):
+        a = die.attributes.get("DW_AT_decl_file")
+        return self.files[die.cu.cu_offset].get(a.value) if a else None
 
     @staticmethod
     def name(die):
@@ -221,11 +309,7 @@ def collect_types(d):
                 if c.tag == "DW_TAG_member":
                     visit(d.target(c))
         elif die.tag == "DW_TAG_enumeration_type":
-            label = name or d.enum_key(die)
-            items[f"enum {label}"] = f"size={d.size(die)}"
-            for c in die.iter_children():
-                if c.tag == "DW_TAG_enumerator":
-                    items[f"enumerator {d.name(c)}"] = str(d.attr(c, "DW_AT_const_value"))
+            add_enum(d, die, items)
         elif die.tag == "DW_TAG_subroutine_type":
             visit(d.target(die))
             for c in die.iter_children():
@@ -234,9 +318,30 @@ def collect_types(d):
     return items
 
 
-def collect_macros(text):
+def add_enum(d, die, items):
+    label = d.name(die) or d.enum_key(die)
+    items[f"enum {label}"] = f"size={d.size(die)}"
+    for c in die.iter_children():
+        if c.tag == "DW_TAG_enumerator":
+            items[f"enumerator {d.name(c)}"] = str(d.attr(c, "DW_AT_const_value"))
+
+
+def collect_enums(d, origin):
+    """Every enumeration the OS's headers and the libraries' headers define,
+    reachable from a prototype or not: an app can name any enumerator and
+    compile its value in (LV_OPA_COVER, LV_ALIGN_CENTER...)."""
+    items = {}
+    for die in d.enums:
+        path = d.decl_file(die)
+        if path and origin.of(path) and is_complete(die):
+            add_enum(d, die, items)
+    return items
+
+
+def collect_macros(text, origin):
     """From -dD output: the definitions in force at the end, each with the
-    file that made it (the line markers say which)."""
+    file that made it (the line markers say which). Returns (macros recorded
+    as text, library macros to probe)."""
     defs, where = {}, None
     for line in text.splitlines():
         mark = re.match(r'# \d+ "([^"]+)"', line)
@@ -248,22 +353,118 @@ def collect_macros(text):
             defs[m.group(1)] = (m.group(2) or "", m.group(3), where)
         elif line.startswith("#undef "):
             defs.pop(line.split()[1], None)
-    items = {}
+    items, probe = {}, []
     for name, (args, value, path) in defs.items():
-        ours = path and "/sysroot/os/" in os.path.realpath(path)
-        if value.strip() and (ours or LIBRARY_MACROS.match(name)):
+        if not value.strip():
+            continue
+        lib = origin.of(path) if path else None
+        if lib == "os" or CONFIG_MACROS.match(name) or LIBRARY_TEXT_MACROS.match(name):
             items[f"macro {name}{args}"] = " ".join(value.split())
+        elif lib and not name.startswith("_") and "..." not in args and not CONFIG_HEADERS.search(path) \
+                and not WHERE_MACROS.search(value):
+            probe.append((name, args))
+    return items, probe
+
+
+# Function-like macros are probed at these arguments (LV_PCT(x) -> LV_PCT(1), LV_PCT(100)).
+SAMPLE_ARGS = ((1,), (100,))
+PROBE_TYPES = """
+struct t5_probe { unsigned long long v; double d; unsigned int size; unsigned char sign, flt; };
+#define T5_NUM(N, E) __attribute__((used)) static const struct t5_probe N = { (unsigned long long)(E), (double)(E), \\
+    sizeof(E), (__typeof__(E))-1 < 0, _Generic((E), float: 1, double: 1, long double: 1, default: 0) };
+#define T5_STR(N, E) __attribute__((used)) static const char N[] = E;
+"""
+
+
+def probe_exprs(name, args):
+    """[(label, expression)]: the macro itself, or a call at sample arguments
+    (one argument: SAMPLE_ARGS; more: 1, 2, 3...)."""
+    if not args:
+        return [("", name)]
+    n = len([a for a in args[1:-1].split(",") if a.strip()])
+    samples = list(SAMPLE_ARGS) if n == 1 else [tuple(range(1, n + 1))]
+    out = []
+    for s in samples:
+        call = "(" + ", ".join(map(str, s)) + ")"
+        out.append((call, name + call))
+    return out
+
+
+def probe_values(flags, tmp, cands):
+    """Compile every candidate as a constant; the ones that aren't drop out.
+    Returns {key: recorded value}."""
+    exprs = []
+    for name, args in cands:
+        for label, e in probe_exprs(name, args):
+            exprs.append((name, args, label, e))
+    found = {}
+    for kind in ("num", "str"):
+        live = [i for i in range(len(exprs)) if i not in found]
+        for _ in range(12):                      # each pass drops at least one line
+            lines = [f"T5_{'NUM' if kind == 'num' else 'STR'}(t5_p{i}, {exprs[i][3]})" for i in live]
+            head = all_headers() + PROBE_TYPES
+            base = head.count("\n") + 1
+            out = link(flags, head + "\n".join(lines) + "\n", os.path.join(tmp, f"probe_{kind}.so"), check=False)
+            if not out.endswith(".so"):
+                bad = {int(m) - base for m in re.findall(r"probe_%s\.c:(\d+):" % kind, out)}
+                bad = {live[b] for b in bad if 0 <= b < len(live)}
+                if not bad:
+                    sys.exit("macro probe failed outside the probes:\n" + out[:2000])
+                live = [i for i in live if i not in bad]
+                continue
+            found.update(read_probes(out, kind, live))
+            break
+        else:
+            sys.exit("macro probe didn't converge")
+    items = {}
+    for i, (name, args, label, _) in enumerate(exprs):
+        if i in found:
+            key = f"macro {name}{args}"
+            val = f"{label}={found[i]}" if label else found[i]
+            items[key] = items[key] + "; " + val if key in items else val
     return items
+
+
+def read_probes(path, kind, live):
+    with open(path, "rb") as fh:
+        elf = ELFFile(fh)
+        syms = {s.name: s for s in elf.get_section_by_name(".symtab").iter_symbols() if s.name.startswith("t5_p")}
+        out = {}
+        for i in live:
+            s = syms.get(f"t5_p{i}")
+            if s is None:
+                continue
+            sec = elf.get_section(s["st_shndx"])
+            off = s["st_value"] - sec["sh_addr"]
+            data = sec.data()[off:off + s["st_size"]]
+            if kind == "str":
+                if b"probe_" in data:
+                    continue             # expands to the file name through another macro
+                text ="".join(chr(b) if 32 <= b < 127 and b not in (34, 92) else f"\\x{b:02x}" for b in data[:-1])
+                out[i] = f'"{text}" str'
+                continue
+            v, dbl, size, sign, flt = struct.unpack("<QdIBB", data[:22])
+            if flt:
+                out[i] = f"{dbl!r} float{size}"
+            else:
+                if sign and v >= 1 << 63:
+                    v -= 1 << 64
+                out[i] = f"{v} {'int' if sign else 'uint'}{size}"
+        return out
 
 
 def snapshot(build):
     with tempfile.TemporaryDirectory() as tmp:
-        flags, _ = app_flags(build, tmp)
+        flags, sr = app_flags(build, tmp)
+        origin = Origin(sr)
         obj, macros = compile_all(flags, tmp)
         d = Dwarf(obj)
-        items = collect_types(d)
+        items = collect_enums(d, origin)
+        items.update(collect_types(d))
         d.fh.close()
-    items.update(collect_macros(macros))
+        text, probe = collect_macros(macros, origin)
+        items.update(text)
+        items.update(probe_values(flags, tmp, probe))
     return items
 
 

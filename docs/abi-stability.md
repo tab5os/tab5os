@@ -14,13 +14,28 @@ An app depends on more than function names. All of this is covered:
 | --- | --- | --- |
 | Which functions and data exist, with their prototypes and permissions | `sdk/abi/api_v1.lock` | `tools/abi/abi.py check` |
 | Struct layouts, enum values, the types behind every exported function | `sdk/abi/layout_v1.lock` | `tools/abi/layout.py check` |
-| Macro constants compiled into apps, and the LVGL configuration | `sdk/abi/layout_v1.lock` | `tools/abi/layout.py check` |
-| Every public header compiles by itself | | `tools/abi/layout.py check` |
+| Macro constants and enumerators compiled into apps, from the OS and from the libraries, and the LVGL configuration | `sdk/abi/layout_v1.lock` | `tools/abi/layout.py check` |
+| Every public header compiles by itself, against the headers the SDK release ships | | `tools/abi/layout.py check` |
 | Each exported prototype matches its header | `sdk/abi/api_v1.sym` | The firmware build (`abi_table.c`) |
 
 `t5 abi-check` runs both checks locally. CI runs them on every push and pull request. The check compares against the lock files in the tree, so it works on direct pushes to `main` too.
 
 Python apps depend on the `t5` module rather than this ABI.
+
+### What the layout lock records
+
+`layout.py` compiles the public headers the way an app does, against the staged SDK headers (`sdk/cmake/sysroot.py`), and records:
+
+- **Types:** every struct, union, enum and typedef named in an exported prototype, the types they reach, and a few an app reaches another way (`EXTRA_ROOTS`: event payloads, `t5_app_desc_t`, `lv_image_dsc_t`, the BSD socket structs, and `lv_obj_class_t` for custom widgets).
+- **Enumerators:** every enumeration defined in the OS's headers and in the libraries' headers, whether or not a prototype names it: an app can write `LV_OPA_COVER` or `LV_ALIGN_CENTER` and the value is compiled in.
+- **The OS's macros:** every macro defined in a Tab5 OS header the SDK reaches, as written.
+- **Library macros:** for the libraries apps call into (picolibc and GCC's own headers, lwIP, FreeRTOS, LVGL: the `ext` symbols in `api_v1.sym`), every macro their headers define that an app could compile in as a value. Nobody lists them by hand: the compiler evaluates each candidate as an integer or floating constant, a string literal, or for a function-like macro at sample arguments (`LV_PCT(1)`, `LV_PCT(100)`), and the value and its type are recorded, such as `macro EACCES = 13 int4` or `macro LV_SYMBOL_OK = "\xef\x80\x8c" str`. Candidates that don't evaluate to a constant (function aliases, statements, pointers) drop out. Left out on purpose: names with a leading underscore (reserved for the implementation), macros built from `__FILE__`/`__LINE__`, and the libraries' tuning headers (`lv_conf*.h`, `lwipopts.h`, `lwip/opt.h`, `FreeRTOSConfig.h`). Their options reach apps through values that are recorded (`FD_SETSIZE`, `pdMS_TO_TICKS(x)`, `LV_DPX(x)`) and the `CONFIG_LV_*` settings.
+
+That covers errno values, socket and `fcntl` constants (`AF_*`, `SOCK_*`, `SOL_SOCKET`, `SO_*`, `IPPROTO_*`, `MSG_*`, `O_*`, `F_*`), `SEEK_*`, `FD_SETSIZE`, `<limits.h>`, `<math.h>`, `LV_SIZE_CONTENT`, `LV_COORD_MAX`, `LV_RADIUS_CIRCLE`, `LV_ANIM_REPEAT_INFINITE`, `LV_OPA_*`, `LV_SYMBOL_*` and the rest: about 3,600 items in all.
+
+### Custom widgets
+
+`lv_obj_class_create_obj` and `lv_obj_class_init_obj` are exported and `lv_obj_class_t`'s layout is locked, so an app can define its own widget class ([UI guide](wiki/UI-Guide.md#custom-widgets)). `lv_obj_t`'s layout is **not** part of the ABI, so a class must leave `instance_size` at 0 (the base class's size) and keep its own data outside the object, for example in a block it allocates in `constructor_cb`, points to with `lv_obj_set_user_data` and frees in `destructor_cb`. A widget that embeds `lv_obj_t` in a bigger struct compiles, but isn't promised to run on a later OS.
 
 ## What you can and can't change
 
@@ -75,4 +90,4 @@ The app's manifest `api` key says the level it needs, and an OS with a lower lev
 ## What isn't covered
 
 - **Functions declared in headers but not exported.** The headers come from the firmware and show more than the ABI, so calling one of these compiles; `t5 pack` then refuses the app (it checks the ELF's imports against `api_v1.sym`), as the installer would. Only `api_v1.sym` counts.
-- **Internals of opaque types** such as `lv_obj_t` and `t5_app_t`. Apps hold pointers and never see inside them.
+- **Internals of opaque types** such as `lv_obj_t`, `lv_event_t` and `t5_app_t`. Apps hold pointers and never see inside them. That includes custom widget classes, which must not embed `lv_obj_t` (see above).
