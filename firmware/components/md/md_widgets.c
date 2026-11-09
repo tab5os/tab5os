@@ -318,10 +318,9 @@ typedef struct {
     lv_draw_buf_t *box_snap;
     bool baked;                  /* the scrim and shadow are in the backdrop's pixels */
     int shadow_dp;               /* the box's shadow, while it's baked */
-    lv_timer_t *settle;          /* waiting to start the fade (open_when_settled) */
+    md_settle_t settle;          /* waiting to start the fade (open_when_settled) */
     bool deleting;
     bool waiting_frame, prepare_queued;   /* dialog_first_frame, dialog_prepare pending */
-    uint32_t settle_ticks;
     lv_opa_t box_opa;
     lv_opa_t scrim_opa;          /* the scrim's opacity, wherever it is drawn */
     md_dialog_cb_t cb;
@@ -493,24 +492,13 @@ static void dialog_deleted(lv_anim_t *a)
     lv_obj_delete(anim_scrim(a));
 }
 
-static void stop_settle(dialog_t *d)
-{
-    if (d->settle) {
-        lv_timer_delete(d->settle);
-        d->settle = NULL;
-    }
-}
-
 static void dialog_anim(dialog_t *d, lv_opa_t box_from, lv_opa_t box_to, lv_opa_t scrim_from, lv_opa_t scrim_to,
                         uint32_t ms, md_curve_t curve, lv_anim_completed_cb_t done);
 
-/* Waits for the scrim's frame to reach every framebuffer (at most ~120 ms),
- * then starts the box's fade. */
-static void open_when_settled(lv_timer_t *t)
+/* The scrim's frame is in every framebuffer: the box's fade. */
+static void open_when_settled(void *arg)
 {
-    dialog_t *d = lv_timer_get_user_data(t);
-    if (!md_freeze_settled() && ++d->settle_ticks < 30) return;
-    stop_settle(d);
+    dialog_t *d = arg;
     dialog_anim(d, LV_OPA_TRANSP, LV_OPA_COVER, MD_DIALOG_SCRIM_OPA, MD_DIALOG_SCRIM_OPA, MD_DUR_DIALOG_IN_MS,
                 MD_CURVE_DECELERATION, dialog_opened);
 }
@@ -541,7 +529,7 @@ static void dialog_prepare(void *arg)
         lv_display_enable_invalidation(disp, inv);
         if (d->box_snap) lv_obj_invalidate(d->box);   /* drawn from its snapshot now */
     }
-    d->settle = lv_timer_create(open_when_settled, 4, d);
+    md_settle_start(&d->settle, open_when_settled, d);
 }
 
 static void dialog_first_frame(lv_event_t *e)
@@ -555,7 +543,7 @@ static void dialog_first_frame(lv_event_t *e)
 static void dialog_free(lv_event_t *e)
 {
     dialog_t *d = lv_event_get_user_data(e);
-    stop_settle(d);
+    md_settle_stop(&d->settle);
     if (d->waiting_frame) lv_display_remove_event_cb_with_user_data(lv_obj_get_display(d->scrim), dialog_first_frame, d);
     if (d->prepare_queued) lv_async_call_cancel(dialog_prepare, d);
     lv_display_remove_event_cb_with_user_data(lv_obj_get_display(d->scrim), dialog_resized, d);
@@ -596,7 +584,7 @@ void md_dialog_close(lv_obj_t *scrim)
     dialog_t *d = lv_obj_get_user_data(scrim);
     if (!d || d->closing) return;
     d->closing = true;
-    stop_settle(d);
+    md_settle_stop(&d->settle);
     if (d->waiting_frame) {
         lv_display_remove_event_cb_with_user_data(lv_obj_get_display(scrim), dialog_first_frame, d);
         d->waiting_frame = false;

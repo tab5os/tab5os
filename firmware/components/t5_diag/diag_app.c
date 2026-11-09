@@ -10,7 +10,7 @@
  *   app dump <id>                its saved core dump, base64 between DUMP and END
  *   app abi <file.elf>           check an ELF's imports against the ABI
  *   app alarm <id>               run its on_alarm headless now
- *   app fetch <url> [sd|data]    download a .t5app over HTTP and install it
+ *   app fetch <url> [sd|data]    download a .t5app over HTTP(S) and install it
  *   app stress <id> <n>          open and close n times; heap, claims, locks
  *                                and rails must return to baseline (5 exit test)
  */
@@ -19,31 +19,38 @@
 #include <string.h>
 #include "esp_console.h"
 #include "esp_heap_caps.h"
-#include <sys/stat.h>
-#include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
 #include "t5_core/crc.h"
+#include "t5_core/fault.h"
 #include "t5_app/abi.h"
+#include "t5_app/anr_test.h"
 #include "t5_app/apps.h"
+#include "t5_app/registry.h"
 #include "t5_core/os.h"
+#include "t5_core/res.h"
+#include "t5_dev/control.h"
+#include "t5_diag/t5_diag.h"
 #include "t5_power/power.h"
 #include "t5_power/rail.h"
+#include "t5_net/download.h"
 #include "t5_ports/ports.h"
+#include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 #include "md/md.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_ui/ui_diag.h"
 #include "diag_priv.h"
 
 static void list(void)
 {
-    t5_app_entry_t *e = calloc(48, sizeof *e);
+    t5_app_entry_t *e = calloc(T5_APPS_MAX, sizeof *e);
     if (!e) return;
-    int n = t5_apps_list(e, 48);
+    int n = t5_apps_list(e, T5_APPS_MAX);
     char cur[64];
     t5_apps_current(cur, sizeof cur);
-    printf("API level %d, %u exported symbols; foreground: %s\n", T5_API_LEVEL, (unsigned)t5_abi_count,
+    printf("API level %d, %u exported symbols; foreground: %s\n", T5_API_LEVEL, (unsigned)t5_abi_size(),
            cur[0] ? cur : "(launcher)");
     for (int i = 0; i < n; i++) {
         printf("  %-32s %-10s %s%s%s\n", e[i].id, e[i].version, e[i].builtin ? "built-in " : "",
@@ -59,10 +66,9 @@ static void usage_print(void)
         printf("no foreground app\n");
         return;
     }
-    static const char *const k[] = { "tasks", "timers", "anims", "ui", "ports", "rails", "locks", "other" };
     printf("heap %u bytes in %u blocks (peak %u)", (unsigned)u.heap_bytes, (unsigned)u.heap_blocks,
            (unsigned)u.heap_peak);
-    for (int i = 0; i < T5_RES_KIND_COUNT; i++) printf(", %s %u", k[i], (unsigned)u.res[i]);
+    for (int i = 0; i < T5_RES_KIND_COUNT; i++) printf(", %s %u", t5_res_kind_name((t5_res_kind_t)i), (unsigned)u.res[i]);
     printf(", untracked %u, denied imports %u\n", (unsigned)u.dropped, (unsigned)u.denied_symbols);
 }
 
@@ -173,63 +179,26 @@ static int abi_file(const char *path)
     return e != T5_OK;
 }
 
-/* Download url to path. Outgoing only: nothing listens on the device. */
-static t5_err_t fetch(const char *url, const char *path)
-{
-    esp_http_client_config_t cfg = { .url = url, .timeout_ms = 10000, .buffer_size = 4096 };
-    esp_http_client_handle_t c = esp_http_client_init(&cfg);
-    if (!c) return T5_ERR_NO_MEM;
-    t5_err_t r = T5_ERR_IO;
-    FILE *f = NULL;
-    char *buf = malloc(8192);
-    if (buf && esp_http_client_open(c, 0) == ESP_OK) {
-        int64_t len = esp_http_client_fetch_headers(c);
-        int status = esp_http_client_get_status_code(c);
-        if (status != 200) {
-            printf("HTTP %d\n", status);
-        } else if ((f = fopen(path, "wb")) != NULL) {
-            int64_t got = 0;
-            int n;
-            while ((n = esp_http_client_read(c, buf, 8192)) > 0) {
-                if (fwrite(buf, 1, (size_t)n, f) != (size_t)n) { got = -1; break; }
-                got += n;
-            }
-            if (fclose(f) == 0 && n == 0 && got >= 0 && (len <= 0 || got == len)) {
-                printf("%lld bytes -> %s\n", (long long)got, path);
-                r = T5_OK;
-            }
-        }
-    }
-    free(buf);
-    esp_http_client_close(c);
-    esp_http_client_cleanup(c);
-    return r;
-}
-
-/* app put PATH SIZE: receive a file over the console (the t5 CLI's USB
- * fallback, plan 8.6). The sender writes base64 lines after READY, one at a
- * time: each is acknowledged with "@ok" once written. Only under /data/tmp
- * or /sd. About 14 KB/s. */
+/* app put PATH SIZE: receive a file over the console (plan 8.6), as
+ * t5_diag.h describes. Only under the temp folder or the SD card. About
+ * 14 KB/s. */
 static int put_file(const char *path, size_t size)
 {
-    if (strncmp(path, "/data/tmp/", 10) && strncmp(path, "/sd/", 4)) {
-        printf("put: only under /data/tmp or /sd\n");
+    if (strncmp(path, T5_TMP_DIR "/", sizeof T5_TMP_DIR) && strncmp(path, T5_SD_PATH "/", sizeof T5_SD_PATH)) {
+        printf("put: only under %s or %s\n", T5_TMP_DIR, T5_SD_PATH);
         return 1;
     }
-    if (strstr(path, "..") || size == 0 || size > 16u * 1024u * 1024u) {
+    if (strstr(path, "..") || size == 0 || size > T5_DEV_PUSH_MAX) {
         printf("put: bad path or size\n");
         return 1;
     }
-    mkdir("/data/tmp", 0755);
     FILE *f = fopen(path, "wb");
     if (!f) {
         printf("put: can't create %s\n", path);
         return 1;
     }
-    /* Lines carry 150 bytes (200 base64 characters and a CRC): they fit the
-     * USB console's 256-byte receive ring, which drops overflow. */
-    static char line[300];
-    static unsigned char bin[224];
+    static char line[(T5_DIAG_PUT_CHUNK + 2) / 3 * 4 + 16];
+    static unsigned char bin[T5_DIAG_PUT_CHUNK];
     size_t got = 0;
     uint32_t crc = 0;
     bool ok = true;
@@ -264,8 +233,6 @@ static int put_file(const char *path, size_t size)
             ok = false;
             break;
         }
-        /* "BASE64 CRC32HEX": a damaged line (the console can drop bytes)
-         * is answered "@re" and sent again. */
         size_t n = 0;
         char *sp = strchr(line, ' ');
         uint32_t want = sp ? (uint32_t)strtoul(sp + 1, NULL, 16) : 0;
@@ -301,17 +268,11 @@ static int put_file(const char *path, size_t size)
     return 0;
 }
 
-typedef struct {
-    const char *id;
-    t5_err_t e;
-    volatile bool done;
-} alarm_req_t;
-
-static void alarm_cmd_task(void *arg)
+static int alarm_job(void *id)
 {
-    alarm_req_t *r = arg;
-    r->e = t5_apps_run_alarm(r->id);
-    r->done = true;
+    t5_err_t e = t5_apps_run_alarm(id);
+    printf("%s\n", t5_err_str(e));
+    return e != T5_OK;
 }
 
 static int cmd_app(int argc, char **argv)
@@ -338,9 +299,9 @@ static int cmd_app(int argc, char **argv)
     }
     if (!strcmp(c, "put") && argc == 4) return put_file(argv[2], (size_t)strtoul(argv[3], NULL, 10));
     if (!strcmp(c, "install") && argc >= 3) {
-        int dest = argc >= 4 ? (!strcmp(argv[3], "sd") ? 1 : !strcmp(argv[3], "data") ? 2 : 0) : 0;
+        t5_pkg_dest_t dest = t5_apps_dest_parse(argc >= 4 ? argv[3] : NULL);
         char err[256] = "";
-        t5_err_t e = t5_apps_install(argv[2], dest, err, sizeof err);
+        t5_err_t e = t5_apps_install(argv[2], dest, NULL, err, sizeof err);
         printf("%s%s%s\n", t5_err_str(e), err[0] ? ": " : "", err);
         if (e == T5_OK) printf("%s\n", T5_NATIVE_APP_WARNING);
         return e != T5_OK;
@@ -348,16 +309,20 @@ static int cmd_app(int argc, char **argv)
     if (!strcmp(c, "fetch") && argc >= 3) {
         const char *name = strrchr(argv[2], '/');
         char path[160];
-        snprintf(path, sizeof path, "%s/%.60s", t5_storage_sd_state() == T5_SD_MOUNTED ? "/sd" : "/data",
+        snprintf(path, sizeof path, "%s/%.60s", t5_storage_sd_state() == T5_SD_MOUNTED ? T5_SD_PATH : T5_DATA_PATH,
                  name ? name + 1 : "download.t5app");
-        t5_err_t e = fetch(argv[2], path);
+        char err[256] = "";
+        int64_t bytes = 0;
+        t5_err_t e = t5_download_file(argv[2], path, &bytes, err, sizeof err);
         if (e != T5_OK) {
-            printf("download failed: %s\n", t5_err_str(e));
+            printf("%s: %s\n", t5_err_str(e), err);
+            remove(path);
             return 1;
         }
-        int dest = argc >= 4 ? (!strcmp(argv[3], "sd") ? 1 : !strcmp(argv[3], "data") ? 2 : 0) : 0;
-        char err[256] = "";
-        e = t5_apps_install(path, dest, err, sizeof err);
+        printf("%lld bytes -> %s\n", (long long)bytes, path);
+        t5_pkg_dest_t dest = t5_apps_dest_parse(argc >= 4 ? argv[3] : NULL);
+        e = t5_apps_install(path, dest, NULL, err, sizeof err);
+        remove(path);
         printf("install: %s%s%s\n", t5_err_str(e), err[0] ? ": " : "", err);
         return e != T5_OK;
     }
@@ -373,7 +338,7 @@ static int cmd_app(int argc, char **argv)
     if (!strcmp(c, "crashes")) {
         t5_crash_rec_t r[T5_CRASH_MAX_APPS];
         int n = t5_apps_crashes(r, T5_CRASH_MAX_APPS);
-        printf("faults survived since boot: %u\n", (unsigned)t5_apps_faults_survived());
+        printf("faults survived since boot: %u\n", (unsigned)t5_fault_recovered());
         if (!n) printf("no crash records\n");
         for (int i = 0; i < n; i++) {
             char dump[96] = "";
@@ -421,13 +386,8 @@ static int cmd_app(int argc, char **argv)
         return e != T5_OK;
     }
     if (!strcmp(c, "alarm") && argc == 3) {
-        /* Loading an ELF disables the cache, which IDF forbids on the console's
-         * PSRAM stack. A real alarm runs on the boot task. */
-        alarm_req_t r = { .id = argv[2], .e = T5_ERR_FAIL, .done = false };
-        if (t5_task_create("t5_alarmcmd", alarm_cmd_task, &r, 8192, 5, 0, NULL) != T5_OK) return 1;
-        while (!r.done) t5_delay_ms(20);
-        printf("%s\n", t5_err_str(r.e));
-        return r.e != T5_OK;
+        /* Loading an ELF disables the cache. A real alarm runs on the boot task. */
+        return diag_run_internal("t5_alarmcmd", 8192, alarm_job, argv[2]);
     }
     if (!strcmp(c, "stress") && argc == 4) {
         uint32_t n;

@@ -2,8 +2,9 @@
 #pragma once
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_bootfmt/espimg.h"
 
-#define T5_C6_CHIP_ID 13   /* ESP_CHIP_ID_ESP32C6 */
+#define T5_C6_CHIP_ID T5_IMG_CHIP_ESP32C6
 
 typedef t5_err_t (*t5_c6img_read_t)(void *ctx, uint32_t off, void *buf, uint32_t len);
 

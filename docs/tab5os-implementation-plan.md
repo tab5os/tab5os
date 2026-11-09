@@ -102,12 +102,14 @@ Install ESP-IDF v6.1 natively on macOS with the standard installer, in its own d
 
 ```sh
 docker run --rm -v "$PWD":/project -w /project/firmware espressif/idf:v6.1 \
-  idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.rev1" build
+  idf.py -B build build
 ```
 
 The `espressif/idf:v6.1` image has a native arm64 build, so it runs at full speed on Apple Silicon. Docker on macOS can't reach USB serial ports, so flashing and the monitor always run on the Mac. Use host `esptool` (v5 is already installed), or `idf.py flash monitor` from a native install. `tools/t5` wraps both paths so the commands are the same either way.
 
 ### Chip revision
+
+**Status:** the two variants below were the plan. Unit A turned out to be v1.3, and the rev3 variant was dropped: there is one build (`firmware/build`, `firmware/sdkconfig`) with the pre-v3 options in `firmware/sdkconfig.board`, for v1.x silicon only. The rest of this section is the original plan.
 
 ESP-IDF v6.1 treats ESP32-P4 revisions below 3.0 and 3.0 or later as incompatible. `ESP32P4_SELECTS_REV_LESS_V3` picks one family, and the bootloader refuses to boot an image built for the other. NuttX reports v1.0 on early Tab5 units, but newer units may ship with v3.x, so the OS supports both:
 
@@ -145,7 +147,7 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 
 | # | Work item | Detail |
 | --- | --- | --- |
-| 0.0 | Read the chip revision | `esptool chip-id` with the Tab5 connected. This picks the `rev1` or `rev3` build variant for everything that follows |
+| 0.0 | Read the chip revision | `esptool chip-id` with the Tab5 connected. This picks the `rev1` or `rev3` build variant for everything that follows [now one build, for v1.x: see "Chip revision"] |
 | 0.1 | Repo, CI, toolchain | Layout above. ESP-IDF v6.1 natively, or in Docker if that fails. CI builds an empty `firmware/` for both variants and runs one host test |
 | 0.2 | Minimal boot | Console on USB-C (USB Serial/JTAG), PSRAM test, chip revision and reset reason printed, partition table flashed, and the highest stable CPU and PSRAM clocks for this revision |
 | 0.3 | I2C scan tool | A console command that scans G31/G32 and decodes known addresses. Answers bench check 1 (panel variant) and finds the camera address |
@@ -272,7 +274,7 @@ Phases 3 and 4 can run in parallel with Phase 2 once Phase 1 is done. The simula
 | 5.11 | Crash guard | Running app ID kept in RTC no-init memory, checked against the reset reason at boot, back to the launcher, auto-launch blocked after two crashes, core dump kept and linked to the app | M |
 | 5.12 | UI watchdog | 2 s UI-task watchdog with the "App not responding" dialog | S |
 
-**Status (2026-11-05):** all items implemented (`t5_app`, `t5_pkg`, `t5_ports`, `sdk/`, `tools/abi/`, test apps in `test/apps/`, guide in [sdk.md](sdk.md)). Host tests cover the tracker, crash guard, ELF import scanner, ABI resolution, packages, manifests, the ports broker and Modbus framing. API level 1 exports 2,142 symbols (1,903 of them LVGL). **Complete: exit criteria met on Unit A** (bench-results, "Phase 5"): 500 open/close cycles back to baseline, the crash guard, and apps surviving firmware rebuilds. Only `rev1` (v1.x silicon) is targeted; `rev3` is not tested. Not yet run: real Grove, RS-485 and profile hardware for the ports broker.
+**Status (2026-11-05):** all items implemented (`t5_app`, `t5_pkg`, `t5_ports`, `sdk/`, `tools/abi/`, test apps in `test/apps/`, guide in [sdk.md](sdk.md)). Host tests cover the tracker, crash guard, ELF import scanner, ABI resolution, packages, manifests, the ports broker and Modbus framing. API level 1 exports 2,142 symbols (1,903 of them LVGL). **Complete: exit criteria met on Unit A** (bench-results, "Phase 5"): 500 open/close cycles back to baseline, the crash guard, and apps surviving firmware rebuilds. Only v1.x silicon is targeted (the rev3 variant has since been dropped). Not yet run: real Grove, RS-485 and profile hardware for the ports broker.
 
 **Update (2026-11-08): app isolation.** Misbehaving installed apps no longer take the OS down (`t5_app/isolate.h`, `t5_core/fault.h`): CPU faults blamed on an app close it instead of rebooting, Close app on the ANR dialog no longer restarts, app heaps keep out of the OS's internal-RAM and PSRAM reserves, a PSRAM watchdog closes the app in front, and app tasks that hog a core are demoted. Verified on Unit A with `test/apps/crasher` (every mode) and `test/apps/hang` (both modes): no reboot, records written, launcher back; leaky stress still passes. See bench-results, "App isolation".
 
@@ -390,7 +392,7 @@ Suggested bench kit: a second Tab5 for HIL, a logging bench supply or Joulescope
 ## First two weeks
 
 1. Answer the open decisions, or accept the defaults in the gaps table.
-2. Read the chip revision (0.0). Install ESP-IDF v6.1 natively (Docker `espressif/idf:v6.1` if that fails), create the repo layout with both `rev1`/`rev3` configs, pin the components, commit `partitions.csv`, set up CI (0.1).
+2. Read the chip revision (0.0). Install ESP-IDF v6.1 natively (Docker `espressif/idf:v6.1` if that fails), create the repo layout with both `rev1`/`rev3` configs [now one build, for v1.x], pin the components, commit `partitions.csv`, set up CI (0.1).
 3. Start the simulator and `md_tokens` (4.1, 4.5), which need no hardware.
 4. On the Tab5: minimal boot, I2C scan, expander map (0.2–0.4).
 5. Start the bench checks that can change the architecture: power button, interrupt routing, light sleep, ELF in PSRAM (0.6–0.8, 0.10).

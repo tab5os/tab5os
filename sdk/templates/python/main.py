@@ -2,7 +2,7 @@
 # Hardware is reached through the t5 module only (docs/sdk.md, "Python").
 import t5
 
-screen = t5.ui.screen("Hello")          # the back arrow closes the app
+screen = t5.ui.screen("@APP_NAME@")          # the back arrow closes the app
 label = screen.label("Hello, Tab5", role="h5")
 taps = 0
 

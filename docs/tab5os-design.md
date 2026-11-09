@@ -33,7 +33,7 @@ The Tab5 is not a generic ESP32 board, and seven details decide most of this des
 | USB-A uses the high-speed pair. USB-C and the MX1.25 connector share a GPIO24/25 pair, which is full speed. | Put fast peripherals on USB-A. Use Wi-Fi for large transfers to a PC. | Schematic |
 | The panel is natively 720×1280 portrait, with ILI9881C/GT911 and ST7123/ST7121 variants. | Probe the variant at boot and rotate efficiently for landscape. | Docs, NuttX |
 
-Two chip-level limits matter as well. NuttX reports that early Tab5s ship with ESP32-P4 revision v1.0, which needs ESP-IDF's pre-v3 silicon option and runs at the board's 360 MHz. Newer units may have v3.x, which can't run the same image, so the OS builds one variant for each revision family (see the implementation plan). We build on ESP-IDF v6.1. The chip also has memory protection but no per-process virtual memory, so a native app shares one address space with the OS.
+Two chip-level limits matter as well. NuttX reports that early Tab5s ship with ESP32-P4 revision v1.0, which needs ESP-IDF's pre-v3 silicon option and runs at the board's 360 MHz. Newer units may have v3.x, which can't run the same image; the OS builds for v1.x only (`firmware/sdkconfig.board`). We build on ESP-IDF v6.1. The chip also has memory protection but no per-process virtual memory, so a native app shares one address space with the OS.
 
 ## Base platform decision
 
@@ -222,7 +222,7 @@ The OS can't turn the button into a screen-off or sleep key on this hardware. Sc
 
 If the PMS150G cuts power on a double press without warning, the OS cannot run a clean shutdown. Autosave settings and session state regularly so that case loses little.
 
-G35 is wired to the PMS150G as well as the P4. If its pad changes state in sleep (ESP-IDF isolates pads by default, and arming it as a wake source changes its sleep config), the PMS150G reads a key press and resets the board. `t5_bsp_board_init()` therefore keeps G35's active config through sleep (`gpio_sleep_sel_dis`). With that rule, arming G35 as a light-sleep wake source is safe (bench check 4).
+G35 is wired to the PMS150G as well as the P4. If its pad changes state in sleep (ESP-IDF isolates pads by default, and arming it as a wake source changes its sleep config), the PMS150G reads a key press and resets the board. `t5_bsp_bringup()` therefore keeps G35's active config through sleep (`gpio_sleep_sel_dis`). With that rule, arming G35 as a light-sleep wake source is safe (bench check 4).
 
 ### Power API
 

@@ -12,6 +12,7 @@
 #include "sdmmc_cmd.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "t5_storage/storage_diag.h"
 #include "t5_storage_hw.h"
 
 #define DATA_LABEL "data"
@@ -32,6 +33,11 @@ t5_err_t t5_storage_hw_data_mount(void)
     return e == ESP_OK ? T5_OK : (e == ESP_ERR_NOT_FOUND ? T5_ERR_NOT_FOUND : T5_ERR_IO);
 }
 
+t5_err_t t5_storage_hw_data_format(void)
+{
+    return esp_littlefs_format(DATA_LABEL) == ESP_OK ? T5_OK : T5_ERR_IO;
+}
+
 t5_err_t t5_storage_hw_data_usage(uint64_t *total, uint64_t *used)
 {
     size_t t = 0, u = 0;
@@ -43,7 +49,8 @@ t5_err_t t5_storage_hw_data_usage(uint64_t *total, uint64_t *used)
     return T5_OK;
 }
 
-t5_err_t t5_storage_hw_sd_mount(void)
+/* Slot 0 only: the C6 owns slot 1 of the same controller. */
+static t5_err_t sd_config(sdmmc_host_t *host, sdmmc_slot_config_t *slot)
 {
     if (!s_sd_pwr) {
         sd_pwr_ctrl_ldo_config_t ldo = { .ldo_chan_id = SD_LDO_CHAN };
@@ -51,12 +58,20 @@ t5_err_t t5_storage_hw_sd_mount(void)
             return T5_ERR_IO;
         }
     }
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.slot = SDMMC_HOST_SLOT_0;
-    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
-    host.pwr_ctrl_handle = s_sd_pwr;
-    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot.width = 4;
+    *host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
+    host->slot = SDMMC_HOST_SLOT_0;
+    host->max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+    host->pwr_ctrl_handle = s_sd_pwr;
+    *slot = (sdmmc_slot_config_t)SDMMC_SLOT_CONFIG_DEFAULT();
+    slot->width = 4;
+    return T5_OK;
+}
+
+t5_err_t t5_storage_hw_sd_mount(void)
+{
+    sdmmc_host_t host;
+    sdmmc_slot_config_t slot;
+    T5_RETURN_ON_ERR(sd_config(&host, &slot));
     const esp_vfs_fat_sdmmc_mount_config_t mount = {
         .format_if_mount_failed = false,
         .max_files = 8,
@@ -108,7 +123,6 @@ t5_err_t t5_storage_hw_sd_info(t5_sd_info_t *out)
     return T5_OK;
 }
 
-/* Diagnostics: raw sector read speed, bypassing FAT. Returns KB/s. */
 int t5_storage_hw_sd_raw_bench(uint32_t sectors_per_io, uint32_t total_sectors)
 {
     if (!s_card) return -1;
@@ -124,7 +138,6 @@ int t5_storage_hw_sd_raw_bench(uint32_t sectors_per_io, uint32_t total_sectors)
 }
 
 #include "ff.h"
-/* Diagnostics: FAT type and cluster size of the mounted card. */
 int t5_storage_hw_sd_fat_info(int *fs_type, int *cluster_bytes)
 {
     FATFS *fs = NULL;
@@ -141,20 +154,12 @@ t5_err_t t5_storage_hw_sd_format(void)
     return esp_vfs_fat_sdcard_format(T5_SD_PATH, s_card) == ESP_OK ? T5_OK : T5_ERR_IO;
 }
 
-/* Raw card for USB mass storage (t5_usb): no filesystem, our slot only (the
- * C6 owns slot 1 of the same controller). */
+/* Raw card for USB mass storage (t5_usb): no filesystem. */
 t5_err_t t5_storage_hw_sd_raw_open(void **card_out)
 {
-    if (!s_sd_pwr) {
-        sd_pwr_ctrl_ldo_config_t ldo = { .ldo_chan_id = SD_LDO_CHAN };
-        if (sd_pwr_ctrl_new_on_chip_ldo(&ldo, &s_sd_pwr) != ESP_OK) return T5_ERR_IO;
-    }
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.slot = SDMMC_HOST_SLOT_0;
-    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
-    host.pwr_ctrl_handle = s_sd_pwr;
-    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot.width = 4;
+    sdmmc_host_t host;
+    sdmmc_slot_config_t slot;
+    T5_RETURN_ON_ERR(sd_config(&host, &slot));
     esp_err_t e = sdmmc_host_init();
     if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return T5_ERR_IO;
     if (sdmmc_host_init_slot(SDMMC_HOST_SLOT_0, &slot) != ESP_OK) return T5_ERR_IO;

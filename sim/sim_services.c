@@ -9,7 +9,7 @@
 #include "md/md_icons.h"
 #include "sim.h"
 
-sim_state_t g_sim = { .battery = 76, .charging = false, .wifi = true, .rssi = -58, .grove_claimed = false };
+sim_state_t g_sim = { .battery = 76, .charging = false, .wifi = true, .rssi = -58, .mic = false };
 
 static lv_obj_t *s_panel, *s_bat_label;
 
@@ -66,5 +66,5 @@ void sim_services_toggle(void)
     lv_obj_add_event_cb(s, bat_changed, LV_EVENT_VALUE_CHANGED, NULL);
     row(s_panel, MD_ICON_BATTERY_CHARGING_FULL, "Charging", &g_sim.charging);
     row(s_panel, MD_ICON_WIFI, "Wi-Fi \"Workshop\"", &g_sim.wifi);
-    row(s_panel, MD_ICON_CABLE, "grove claimed (I2C)", &g_sim.grove_claimed);
+    row(s_panel, MD_ICON_MIC, "Microphone in use", &g_sim.mic);
 }

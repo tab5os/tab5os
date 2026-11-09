@@ -26,18 +26,12 @@
 #include "py_priv.h"
 
 /* Callables the OS calls back on the UI task (lifecycle, permission
- * answers). LVGL and the OS only ever hold a slot number and the VM
- * generation; py_ui_detach_all() bumps the generation, so a late callback
- * finds nothing. */
+ * answers), held by tag (py_tag). */
 #define CB_SLOTS 16
 MP_REGISTER_ROOT_POINTER(mp_obj_t t5_py_cb[16]);
 MP_REGISTER_ROOT_POINTER(mp_obj_t t5_py_on_suspend);
 MP_REGISTER_ROOT_POINTER(mp_obj_t t5_py_on_resume);
 MP_REGISTER_ROOT_POINTER(mp_obj_t t5_py_on_rotate);
-
-extern volatile uint32_t py_gen;     /* mod_ui.c */
-void py_ui_reset(void);              /* mod_ui.c */
-void py_port_reset(void);            /* mod_port.c */
 
 void py_modules_reset(void)
 {
@@ -46,7 +40,6 @@ void py_modules_reset(void)
     MP_STATE_VM(t5_py_on_resume) = mp_const_none;
     MP_STATE_VM(t5_py_on_rotate) = mp_const_none;
     py_ui_reset();
-    py_port_reset();
     py_net_reset();
 }
 
@@ -55,24 +48,21 @@ uintptr_t py_slot_put(mp_obj_t fn)
     for (int i = 0; i < CB_SLOTS; i++) {
         if (MP_STATE_VM(t5_py_cb)[i] == mp_const_none) {
             MP_STATE_VM(t5_py_cb)[i] = fn;
-            return ((uintptr_t)(py_gen & 0xffff) << 16) | (uintptr_t)i;
+            return py_tag((uint32_t)i);
         }
     }
     mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("too many pending callbacks"));
 }
 
-/* UI task: the callable for a slot (and free the slot), or NULL. */
 mp_obj_t py_slot_take(uintptr_t h)
 {
-    if ((h >> 16) != (py_gen & 0xffff) || !py_vm || py_vm->closing) return MP_OBJ_NULL;
-    int i = (int)(h & 0xffff);
-    if (i >= CB_SLOTS) return MP_OBJ_NULL;
+    int i = py_untag(h);
+    if (i < 0 || i >= CB_SLOTS) return MP_OBJ_NULL;
     mp_obj_t fn = MP_STATE_VM(t5_py_cb)[i];
     MP_STATE_VM(t5_py_cb)[i] = mp_const_none;
     return fn == mp_const_none ? MP_OBJ_NULL : fn;
 }
 
-/* ---- t5 (root) ------------------------------------------------------------------------- */
 static mp_obj_t t5_sleep_ms(mp_obj_t ms)
 {
     mp_int_t v = mp_obj_get_int(ms);
@@ -93,7 +83,6 @@ static mp_obj_t t5_os_version(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(t5_os_version_obj, t5_os_version);
 
-/* ---- t5.app ------------------------------------------------------------------------------ */
 static void *need_app(void)
 {
     if (!py_vm || !py_vm->app) mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("only inside an app"));
@@ -228,21 +217,18 @@ static const mp_rom_map_elem_t app_globals_table[] = {
 static MP_DEFINE_CONST_DICT(app_globals, app_globals_table);
 static const mp_obj_module_t mod_app = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&app_globals };
 
-/* ---- t5.power ---------------------------------------------------------------------------- */
 static mp_obj_t power_battery(void)
 {
     t5_battery_status_t b;
     t5_battery_status(&b);
     mp_obj_t d = mp_obj_new_dict(8);
-    static const char *const chg[] = { "no_usb", "charging", "full", "paused_limit", "paused_temp" };
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_percent), MP_OBJ_NEW_SMALL_INT(b.percent));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_mv), MP_OBJ_NEW_SMALL_INT(b.mv));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_ma), mp_obj_new_float((mp_float_t)b.ma10 / 10));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_mw), mp_obj_new_int(b.mw));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_minutes_left), mp_obj_new_int(b.minutes_left));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_usb), mp_obj_new_bool(b.usb));
-    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_charge),
-                      mp_obj_new_str_from_cstr((unsigned)b.charge < MP_ARRAY_SIZE(chg) ? chg[b.charge] : "?"));
+    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_charge), t5g_enum_out_t5_charge_state_t(b.charge));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_cycles), MP_OBJ_NEW_SMALL_INT(b.cycles));
     return d;
 }
@@ -281,11 +267,10 @@ static MP_DEFINE_CONST_OBJ_TYPE(py_type_lock, MP_QSTR_WakeLock, MP_TYPE_FLAG_NON
 
 static mp_obj_t power_lock(mp_obj_t kind)
 {
-    static const char *const names[] = { "screen", "cpu", "audio", "net", "rail" };
     const char *k = mp_obj_str_get_str(kind);
     int t = -1;
-    for (int i = 0; i < (int)MP_ARRAY_SIZE(names); i++) {
-        if (!strcmp(k, names[i])) t = i;
+    for (int i = 0; i < T5_LOCK_TYPE_COUNT; i++) {
+        if (!strcmp(k, t5_lock_type_name((t5_lock_type_t)i))) t = i;
     }
     if (t < 0) mp_raise_ValueError(MP_ERROR_TEXT("lock is one of screen, cpu, audio, net, rail"));
     py_lock_t *o = mp_obj_malloc_with_finaliser(py_lock_t, &py_type_lock);
@@ -306,7 +291,6 @@ static const mp_rom_map_elem_t power_globals_table[] = {
 static MP_DEFINE_CONST_DICT(power_globals, power_globals_table);
 static const mp_obj_module_t mod_power = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&power_globals };
 
-/* ---- t5.time ----------------------------------------------------------------------------- */
 static mp_obj_t time_local(void)
 {
     struct tm tm;
@@ -330,7 +314,6 @@ static const mp_rom_map_elem_t time_globals_table[] = {
 static MP_DEFINE_CONST_DICT(time_globals, time_globals_table);
 static const mp_obj_module_t mod_time = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&time_globals };
 
-/* ---- t5.audio ---------------------------------------------------------------------------- */
 typedef struct {
     mp_obj_base_t base;
     t5_audio_out_t *out;
@@ -399,7 +382,6 @@ static const mp_rom_map_elem_t audio_globals_table[] = {
 static MP_DEFINE_CONST_DICT(audio_globals, audio_globals_table);
 static const mp_obj_module_t mod_audio = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&audio_globals };
 
-/* ---- t5.imu -------------------------------------------------------------------------------- */
 static mp_obj_t imu_accel(void)
 {
     t5_imu_accel_t a;
@@ -417,7 +399,6 @@ static const mp_rom_map_elem_t imu_globals_table[] = {
 static MP_DEFINE_CONST_DICT(imu_globals, imu_globals_table);
 static const mp_obj_module_t mod_imu = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&imu_globals };
 
-/* ---- t5.usb ---------------------------------------------------------------------------------- */
 static const mp_rom_map_elem_t usb_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_usb) },
     T5_GEN_USB_GLOBALS
@@ -425,7 +406,6 @@ static const mp_rom_map_elem_t usb_globals_table[] = {
 static MP_DEFINE_CONST_DICT(usb_globals, usb_globals_table);
 static const mp_obj_module_t mod_usb = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&usb_globals };
 
-/* ---- t5 ------------------------------------------------------------------------------------- */
 extern const mp_obj_module_t py_mod_port, py_mod_ui, py_mod_net;
 
 static const mp_rom_map_elem_t t5_globals_table[] = {
@@ -459,5 +439,6 @@ const char t5_py_help_text[] =
     "  t5.audio  tone(), play(), out()\n"
     "  t5.app    running(), exit(), data_dir(), state_save(), on_suspend()\n"
     "  t5.imu    accel()\n"
-    "Files: open() works in the app's own folders (and /sd, /usb, /data/user\n"
-    "with the storage permission). help('modules') lists every module.\n";
+    "Files: open() works in the app's own folders, and in shared folders\n"
+    "with shared_read, shared_write or all_files. help('modules') lists\n"
+    "every module.\n";

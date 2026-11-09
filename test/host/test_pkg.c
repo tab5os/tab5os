@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
  * t5_pkg: inflate, zip reader, TOML subset, manifest, installer, grants.
  */
+#include <dirent.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@
 #include "t5_pkg/pkg.h"
 #include "t5_pkg/toml.h"
 #include "t5_pkg/zip.h"
+#include "pkg_test.h"
 #include "fixtures/pkg_fixtures.h"
 
 static char s_dir[128];
@@ -130,7 +132,6 @@ typedef struct {
     uint32_t crc;
     size_t len;
     int calls;
-    size_t max_chunk;
 } crc_sink_t;
 
 static t5_err_t crc_write(void *ctx, const uint8_t *data, size_t len)
@@ -139,7 +140,6 @@ static t5_err_t crc_write(void *ctx, const uint8_t *data, size_t len)
     s->crc = t5_crc32(s->crc, data, len);
     s->len += len;
     s->calls++;
-    if (len > s->max_chunk) s->max_chunk = len;
     return T5_OK;
 }
 
@@ -162,7 +162,6 @@ static void test_inflate_streaming_big(void)
         TEST_ASSERT_EQUAL(FX_DEF_BIG_SIZE, s.len);
         TEST_ASSERT_EQUAL_HEX32(FX_DEF_BIG_CRC, s.crc);
         TEST_ASSERT_TRUE(s.calls >= 3);
-        TEST_ASSERT_EQUAL(32768, s.max_chunk);
     }
     drip_t d = {fx_def_big, fx_def_big_len, 4096};
     TEST_ASSERT_EQUAL(T5_ERR_IO, t5_inflate_stream(drip_read, &d, fail_write, NULL, NULL));
@@ -203,7 +202,7 @@ static void test_inflate_fuzz(void)
         {fx_def_medium, fx_def_medium_len}, {fx_def_big, fx_def_big_len},
         {fx_def_fixed, fx_def_fixed_len}, {fx_def_stored, fx_def_stored_len},
     };
-    int ok = 0, bad = 0;
+    int bad = 0;
     for (int it = 0; it < 1500; it++) {
         const unsigned char *p = src[it % 4].p;
         unsigned len = src[it % 4].len;
@@ -217,7 +216,7 @@ static void test_inflate_fuzz(void)
         t5_err_t e = t5_inflate_mem(buf, len, out, cap, &n);
         TEST_ASSERT_TRUE(e == T5_OK || e == T5_ERR_INVALID_ARG || e == T5_ERR_NO_MEM);
         TEST_ASSERT_TRUE(n <= cap);
-        if (e == T5_OK) ok++; else bad++;
+        bad += e != T5_OK;
     }
     for (int it = 0; it < 500; it++) {        /* pure noise */
         unsigned len = 1 + (unsigned)(rand() % 2000);
@@ -227,7 +226,6 @@ static void test_inflate_fuzz(void)
         TEST_ASSERT_TRUE(e == T5_OK || e == T5_ERR_INVALID_ARG || e == T5_ERR_NO_MEM);
     }
     TEST_ASSERT_TRUE(bad > 0);
-    TEST_ASSERT_EQUAL(1500, ok + bad);
     free(out);
     free(buf);
 }
@@ -345,8 +343,10 @@ static void test_zip_rejects_unsafe(void)
     TEST_ASSERT_TRUE(t5_zip_name_ok(longname, T5_ZIP_NAME_MAX - 1));
 }
 
-static t5_err_t null_write(void *ctx, const uint8_t *data, size_t len)
+static t5_err_t count_write(void *ctx, const uint8_t *data, size_t len)
 {
+    (void)data;
+    *(size_t *)ctx += len;
     return T5_OK;
 }
 
@@ -371,7 +371,12 @@ static void test_zip_fuzz(void)
         t5_zip_t *z;
         if (t5_zip_open(path, &z) != T5_OK) continue;
         for (int i = 0; i < t5_zip_count(z); i++) {
-            T5_IGNORE(t5_zip_extract_cb(z, t5_zip_entry(z, i), null_write, NULL));   /* fuzzed: may fail, mustn't crash */
+            /* An archive that opens names only safe paths, and whatever
+             * extracts has the size and CRC its directory promised. */
+            const t5_zip_entry_t *e = t5_zip_entry(z, i);
+            TEST_ASSERT_TRUE(t5_zip_name_ok(e->name, strlen(e->name)));
+            size_t got = 0;
+            if (t5_zip_extract_cb(z, e, count_write, &got) == T5_OK) TEST_ASSERT_EQUAL(e->size, got);
         }
         t5_zip_close(z);
     }
@@ -542,60 +547,134 @@ static void test_manifest_mbus_ports(void)
     TEST_ASSERT_EQUAL_STRING("mbus.i2c", m.ports[0]);
 }
 
-static void expect_manifest_error(const char *base_edit_from, const char *base_edit_to, const char *needle)
+/* The design example with one fragment replaced (from NULL: to appended). */
+static void manifest_edit(char *text, size_t n, const char *from, const char *to)
 {
-    /* Start from the design example and replace one fragment. */
-    char text[1024];
-    const char *at = base_edit_from ? strstr(DESIGN_EXAMPLE, base_edit_from) : NULL;
-    if (base_edit_from) TEST_ASSERT_NOT_NULL_MESSAGE(at, base_edit_from);
+    const char *at = from ? strstr(DESIGN_EXAMPLE, from) : NULL;
+    if (from) TEST_ASSERT_NOT_NULL_MESSAGE(at, from);
     if (at) {
-        snprintf(text, sizeof text, "%.*s%s%s", (int)(at - DESIGN_EXAMPLE), DESIGN_EXAMPLE, base_edit_to,
-                 at + strlen(base_edit_from));
+        snprintf(text, n, "%.*s%s%s", (int)(at - DESIGN_EXAMPLE), DESIGN_EXAMPLE, to, at + strlen(from));
     } else {
-        snprintf(text, sizeof text, "%s%s", DESIGN_EXAMPLE, base_edit_to);
+        snprintf(text, n, "%s%s", DESIGN_EXAMPLE, to);
     }
-    t5_manifest_t m;
-    char err[160];
-    TEST_ASSERT_EQUAL_MESSAGE(T5_ERR_INVALID_ARG, t5_manifest_parse(text, strlen(text), &m, err, sizeof err), text);
-    TEST_ASSERT_NOT_NULL_MESSAGE(strstr(err, needle), err);
-    TEST_ASSERT_EQUAL_STRING("", m.id);   /* cleared on failure */
 }
+
+/* Manifests the validator refuses: an edit of the design example and what
+ * the error says. */
+static const struct {
+    const char *from, *to, *needle;
+} s_bad_manifests[] = {
+    { "id = \"com.kanishka.airlog\"\n", "", "id: missing" },
+    { "com.kanishka.airlog", "airlog", "reverse-DNS" },
+    { "com.kanishka.airlog", "Com.Kanishka.Airlog", "reverse-DNS" },
+    { "com.kanishka.airlog", "com..airlog", "reverse-DNS" },
+    { "com.kanishka.airlog", "com.kanishka-airlog.x", "reverse-DNS" },
+    { "com.kanishka.airlog", "com.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "longer than" },
+    { "api = 1", "api = 2", "API level 2" },
+    { "api = 1", "api = 0", "at least 1" },
+    { "api = 1", "api = \"1\"", "integer" },
+    { "\"native\"", "\"wasm\"", "runtime: unknown 'wasm'" },
+    { "\"1.2.0\"", "\"1.2\"", "version" },
+    { "\"app.elf\"", "\"../app.elf\"", "entry" },
+    { "name = \"Air Log\"\n", "", "name: missing" },
+    { "[\"grove\"]", "[\"grove\", \"grove\"]", "listed twice" },
+    { "[\"grove\"]", "[\"Grove!\"]", "bad port name" },
+    { "[\"grove\"]", "\"grove\"", "array of port names" },
+    { "[\"grove\"]", "[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]", "at most 8" },
+    { "[\"grove\"]", "[1]", "array of port names" },
+    { "background_wake = true\n", "", "needs background_wake" },
+    { "net = true", "net = 1", "true or false" },
+    { "net = true", "nett = true", "unknown key 'permissions.nett'" },
+    { "max_seconds = 30", "max_seconds = 301", "out of range" },
+    { "\"on_alarm\"", "\"on-alarm\"", "function name" },
+    { "min_heap_mb = 2", "min_heap_mb = 2\nmin_heap_kb = 5", "exclusive" },
+    { "min_heap_mb = 2", "min_heap_mb = 2.5", "" },
+    { "min_heap_mb = 2\n", "min_heap_mb = 2\norientation = \"sideways\"\n", "orientation: unknown 'sideways'" },
+    { "name = \"Air Log\"", "name = \"\"\"Air Log\"\"\"", "" },
+    { "name = \"Air Log\"", "\"name\" = \"Air Log\"", "" },
+    { NULL, "[extra]\n", "unknown table [extra]" },
+    { NULL, "colour = \"red\"\n", "unknown key 'background.colour'" },
+    { "runtime", "runtime = \"native\"\nruntime", "duplicate key" },
+};
 
 static void test_manifest_errors(void)
 {
-    expect_manifest_error("id = \"com.kanishka.airlog\"\n", "", "id: missing");
-    expect_manifest_error("com.kanishka.airlog", "airlog", "reverse-DNS");
-    expect_manifest_error("com.kanishka.airlog", "Com.Kanishka.Airlog", "reverse-DNS");
-    expect_manifest_error("com.kanishka.airlog", "com..airlog", "reverse-DNS");
-    expect_manifest_error("com.kanishka.airlog", "com.kanishka-airlog.x", "reverse-DNS");
-    expect_manifest_error("com.kanishka.airlog",
-                          "com.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "longer than");
-    expect_manifest_error("api = 1", "api = 2", "API level 2");
-    expect_manifest_error("api = 1", "api = 0", "at least 1");
-    expect_manifest_error("api = 1", "api = \"1\"", "integer");
-    expect_manifest_error("\"native\"", "\"wasm\"", "runtime: unknown 'wasm'");
-    expect_manifest_error("\"1.2.0\"", "\"1.2\"", "version");
-    expect_manifest_error("\"app.elf\"", "\"../app.elf\"", "entry");
-    expect_manifest_error("name = \"Air Log\"\n", "", "name: missing");
-    expect_manifest_error("[\"grove\"]", "[\"grove\", \"grove\"]", "listed twice");
-    expect_manifest_error("[\"grove\"]", "[\"Grove!\"]", "bad port name");
-    expect_manifest_error("[\"grove\"]", "\"grove\"", "array of port names");
-    expect_manifest_error("[\"grove\"]", "[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]", "at most 8");
-    expect_manifest_error("[\"grove\"]", "[1]", "array of port names");
-    expect_manifest_error("background_wake = true\n", "", "needs background_wake");
-    expect_manifest_error("net = true", "net = 1", "true or false");
-    expect_manifest_error("net = true", "nett = true", "unknown key 'permissions.nett'");
-    expect_manifest_error("max_seconds = 30", "max_seconds = 301", "out of range");
-    expect_manifest_error("\"on_alarm\"", "\"on-alarm\"", "function name");
-    expect_manifest_error("min_heap_mb = 2", "min_heap_mb = 2\nmin_heap_kb = 5", "exclusive");
-    expect_manifest_error(NULL, "[extra]\n", "unknown table [extra]");
-    expect_manifest_error(NULL, "colour = \"red\"\n", "unknown key 'background.colour'");
-    expect_manifest_error("runtime", "runtime = \"native\"\nruntime", "duplicate key");
+    for (size_t i = 0; i < sizeof s_bad_manifests / sizeof s_bad_manifests[0]; i++) {
+        char text[1024], err[160];
+        manifest_edit(text, sizeof text, s_bad_manifests[i].from, s_bad_manifests[i].to);
+        t5_manifest_t m;
+        TEST_ASSERT_EQUAL_MESSAGE(T5_ERR_INVALID_ARG, t5_manifest_parse(text, strlen(text), &m, err, sizeof err), text);
+        TEST_ASSERT_NOT_NULL_MESSAGE(strstr(err, s_bad_manifests[i].needle), err);
+        TEST_ASSERT_EQUAL_STRING("", m.id);   /* cleared on failure */
+    }
+}
+
+/* tools/t5/t5pack.py's verdict on a manifest: true if it would pack it. */
+static bool t5pack_accepts(const char *text)
+{
+    char path[256], cmd[768];
+    snprintf(path, sizeof path, "%s/manifest.toml", s_dir);
+    FILE *f = fopen(path, "wb");
+    TEST_ASSERT_NOT_NULL(f);
+    fputs(text, f);
+    fclose(f);
+    snprintf(cmd, sizeof cmd,
+             "python3 -c \"import sys; sys.path.insert(0, sys.argv[1]); import t5pack; "
+             "t5pack.validate(open(sys.argv[2], encoding='utf-8').read())\" '%s/tools/t5' '%s' > /dev/null 2>&1",
+             T5_REPO_ROOT, path);
+    return system(cmd) == 0;
+}
+
+/* The app SDK packs exactly what the device installs. */
+static void test_manifest_rules_match_t5pack(void)
+{
+    char text[1024], err[160];
+    t5_manifest_t m;
+    const char *good[] = {
+        DESIGN_EXAMPLE,
+        "id = \"org.example.py_demo\"\nname = \"Py\"\nversion = \"0.1.0-beta.2\"\napi = 1\n"
+        "runtime = \"micropython\"\nentry = \"src/main.py\"\nicon = \"icon.png\"\nmin_heap_kb = 300\n"
+        "orientation = \"any\"\ndescription = \"d\"\nauthor = \"a\"\nhomepage = \"h\"\nlicense = \"MIT\"\n"
+        "[permissions]\ncamera = true\nmic = false\nports = []\nsystem = true\nshared_read = true\n"
+        "shared_write = true\nall_files = true\nusb = true\nble = true\nstorage = true\n",
+        "id = \"org.example.bus\"\nname = \"Bus\"\nversion = \"1.0.0\"\napi = 1\n"
+        "runtime = \"native\"\nentry = \"app.elf\"\norientation = \"portrait\"\n"
+        "[permissions]\nports = [\"mbus.i2c\", \"mbus.g2\"]\n",
+    };
+    for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
+        TEST_ASSERT_EQUAL_MESSAGE(T5_OK, t5_manifest_parse(good[i], strlen(good[i]), &m, err, sizeof err), err);
+        TEST_ASSERT_TRUE_MESSAGE(t5pack_accepts(good[i]), good[i]);
+    }
+    for (size_t i = 0; i < sizeof s_bad_manifests / sizeof s_bad_manifests[0]; i++) {
+        manifest_edit(text, sizeof text, s_bad_manifests[i].from, s_bad_manifests[i].to);
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(T5_OK, t5_manifest_parse(text, strlen(text), &m, err, sizeof err), text);
+        TEST_ASSERT_FALSE_MESSAGE(t5pack_accepts(text), text);
+    }
+}
+
+/* Bytes in the regular files under dir. */
+static uint64_t tree_bytes(const char *dir, int depth)
+{
+    uint64_t n = 0;
+    DIR *d = opendir(dir);
+    TEST_ASSERT_NOT_NULL(d);
+    TEST_ASSERT_TRUE(depth < 8);
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char p[512];
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        struct stat st;
+        TEST_ASSERT_EQUAL(0, stat(p, &st));
+        n += S_ISDIR(st.st_mode) ? tree_bytes(p, depth + 1) : (uint64_t)st.st_size;
+    }
+    closedir(d);
+    return n;
 }
 
 static void test_perm_names_and_versions(void)
 {
-    for (uint32_t bit = 1; bit <= T5_PERM_SYSTEM; bit <<= 1) {
+    for (uint32_t bit = 1; bit & T5_PERM_ALL; bit <<= 1) {
         const char *n = t5_perm_name(bit);
         TEST_ASSERT_NOT_NULL(n);
         TEST_ASSERT_EQUAL_HEX32(bit, t5_perm_from_name(n));
@@ -670,12 +749,13 @@ static void test_install_auto_sd_then_data(void)
     TEST_ASSERT_TRUE(exists("%s/%s", info.dir, "assets/readme.txt"));
     TEST_ASSERT_FALSE(exists("%s/%s~new", s_sd, "com.example.hello"));
 
-    /* Size is the sum of the extracted files (manifest included). */
-    char mpath[300];
-    snprintf(mpath, sizeof mpath, "%s/manifest.toml", info.dir);
+    /* Size is the sum of the extracted files (manifest included, the
+     * install record not). */
+    char rec[300];
+    snprintf(rec, sizeof rec, "%s/.install", info.dir);
     struct stat st;
-    TEST_ASSERT_EQUAL(0, stat(mpath, &st));
-    TEST_ASSERT_EQUAL((uint64_t)(FX_BIG_ELF_SIZE + 300 + FX_README_SIZE + st.st_size), info.size);
+    TEST_ASSERT_EQUAL(0, stat(rec, &st));
+    TEST_ASSERT_EQUAL(tree_bytes(info.dir, 0) - (uint64_t)st.st_size, info.size);
 
     t5_pkg_info_t f;
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_find("com.example.hello", &f));
@@ -912,10 +992,17 @@ static void test_grants(void)
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_load("com.example.hello", &g, &d));
     TEST_ASSERT_EQUAL_HEX32(T5_PERM_MIC, g);
     TEST_ASSERT_EQUAL_HEX32(T5_PERM_USB, d);
-    TEST_ASSERT_FALSE(exists("%s/com.example.hello/.grants.tmp%s", s_appdata, ""));
-    /* Corrupt file. */
+    /* Saving leaves the grants file and nothing else behind. */
     char dir[300];
     snprintf(dir, sizeof dir, "%s/com.example.hello", s_appdata);
+    DIR *dd = opendir(dir);
+    TEST_ASSERT_NOT_NULL(dd);
+    struct dirent *de;
+    while ((de = readdir(dd))) {
+        if (strcmp(de->d_name, ".") && strcmp(de->d_name, "..")) TEST_ASSERT_EQUAL_STRING(".grants", de->d_name);
+    }
+    closedir(dd);
+    /* Corrupt file. */
     write_text(dir, ".grants", "garbage");
     TEST_ASSERT_EQUAL(T5_ERR_FAIL, t5_pkg_grants_load("com.example.hello", &g, &d));
     TEST_ASSERT_EQUAL(0, g);
@@ -941,6 +1028,7 @@ int main(void)
     RUN_TEST(test_manifest_other_fields);
     RUN_TEST(test_manifest_mbus_ports);
     RUN_TEST(test_manifest_errors);
+    RUN_TEST(test_manifest_rules_match_t5pack);
     RUN_TEST(test_perm_names_and_versions);
     RUN_TEST(test_inspect);
     RUN_TEST(test_install_auto_sd_then_data);

@@ -1,6 +1,27 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 #include "md/md.h"
+#include "md/md_diag.h"
+
+/* md_freeze.c: a dialog's set-up times, for md_freeze_stats. */
+void md_freeze_note_dialog(uint32_t prep_ms, uint32_t box_snap_ms, uint32_t compose_ms);
+/* A scrim over a frozen backdrop. Top-layer objects created before the
+ * scrim aren't in the backdrop (the screen alone) and keep redrawing live.
+ * bake: into the snapshot (md_freeze_draw_into), everywhere but over those
+ * objects; !bake: live, over just those objects (from the scrim's
+ * DRAW_MAIN_END). Together they match a live scrim. */
+void md_scrim_draw(lv_layer_t *layer, lv_obj_t *scrim, lv_opa_t opa, bool bake);
+
+/* Waiting for md_freeze_settled() after a full-screen change, polled every
+ * 4 ms for at most 30 polls (~120 ms), then done(arg). Stop cancels it. */
+typedef struct {
+    lv_timer_t *timer;
+    uint32_t polls;
+    void (*done)(void *arg);
+    void *arg;
+} md_settle_t;
+void md_settle_start(md_settle_t *s, void (*done)(void *arg), void *arg);
+void md_settle_stop(md_settle_t *s);
 
 #define MD_ELEV_LEVELS 10
 extern const int md_elev_levels[MD_ELEV_LEVELS];
@@ -19,16 +40,3 @@ lv_style_t *md_style_no_press(void);
 /* Variants applied on top of the contained-button theme style. */
 lv_style_t *md_style_btn_text(void);
 lv_style_t *md_style_btn_outlined(void);
-
-/* RGB565 alpha blend, two channels at a time: spread a pixel to
- * 0b00000GGGGGG00000RRRRR000000BBBBB so 5-bit weights can't carry over. */
-static inline uint32_t md_spread565(uint16_t c)
-{
-    return ((uint32_t)c | ((uint32_t)c << 16)) & 0x07E0F81Fu;
-}
-
-static inline uint16_t md_pack565(uint32_t x)
-{
-    x &= 0x07E0F81Fu;
-    return (uint16_t)(x | (x >> 16));
-}

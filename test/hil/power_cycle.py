@@ -9,27 +9,25 @@ failures). Without --net-lock the C6 is powered off and on every cycle too.
 Draw per state needs an external meter in series with the pack; pass
 --meter-pause to stop in each state for a reading (bench-procedures.md, 0.9).
 
-    ~/.espressif/python_env/idf6.1_py3.15_env/bin/python test/hil/power_cycle.py           # 150 cycles, ~5 min
+    tools/t5/t5 hil power_cycle [--cycles N]       # 150 cycles, ~5 min
 """
 import argparse
-import os
 import re
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools", "t5"))
-from t5link import Tab5  # noqa: E402
+from t5link import connect
+
+# `disp ids` with the panel awake (t5_diag/diag_dev.c): power mode 0x9C is
+# sleep-out, display on, normal mode, booster on. Not anchored to a line:
+# the C6 restarting after a wake logs over the console at the same time.
+PANEL_AWAKE = re.compile(r"OK: DCS ID [0-9a-f]{2} [0-9a-f]{2} [0-9a-f]{2}, power mode 0x9c\b", re.I)
 
 
 def wait_state(t, want, timeout=8.0):
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        out = t.cmd("power", 10)
-        m = re.search(r"^state ([a-z-]+)", out, re.M)
-        if m and m.group(1) == want:
-            return out
-        time.sleep(0.1)
-    return None
+    """`power`'s output once its state is want, or None."""
+    m = t.poll("power", rf"^state {want},", timeout, every=0.1)
+    return m.string if m else None
 
 
 def main():
@@ -40,7 +38,7 @@ def main():
     a = ap.parse_args()
 
     fails, resume_ms, panel_bad = [], [], 0
-    with Tab5(timeout=20) as t:
+    with connect() as t:
         t.cmd("power unlock screen")
         if a.net_lock:
             t.cmd("power lock net")
@@ -63,9 +61,9 @@ def main():
             if m:
                 resume_ms.append(int(m.group(1)))
             ids = t.cmd("disp ids", 10)
-            if not re.search(r"power.mode\s*0x9c|pm 0x9c|0x9c", ids, re.I):
+            if not PANEL_AWAKE.search(ids):
                 panel_bad += 1
-                fails.append((i, "panel: " + ids.strip().replace("\n", " ")[:80]))
+                fails.append((i, "panel: " + " | ".join(l for l in ids.splitlines() if "DCS" in l or "disp" in l)[:200]))
             if i % 50 == 0:
                 print(f"{i} cycles, {len(fails)} failures, {time.time() - t0:.0f} s", flush=True)
         after = t.cmd("power", 10)

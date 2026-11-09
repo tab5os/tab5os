@@ -6,7 +6,7 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 
 ## C
 
-### App lifecycle (t5/app.h)
+### t5_app/app.h (t5/app.h)
 
 - `const char * t5_app_data_dir(t5_app_t * app);`
   Writable directory kept across upgrades: /data/appdata/<id>.
@@ -32,95 +32,34 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `void t5_app_set_user(t5_app_t * app, void * user);`
 - `t5_err_t t5_app_state_load(t5_app_t * app, void * buf, size_t cap, size_t * len);`
 - `t5_err_t t5_app_state_save(t5_app_t * app, const void * data, size_t len);`
+- `t5_err_t t5_file_pick(t5_app_t * app, const char * title, const char * exts, uint32_t flags, t5_file_pick_cb_t cb, void * user);`
 
-### System: apps (t5/system.h)
+### t5_core/err.h (t5/app.h)
 
-- `int t5_apps_energy(t5_energy_rec_t * out, int max);` (perm system)
-- `t5_err_t t5_apps_info(const char * id, t5_app_info_t * out);` (perm system)
-- `t5_err_t t5_apps_launch(const char * id);` (perm system)
-  Safe from any task: the work runs on the UI task.
-- `t5_err_t t5_apps_launch_arg(const char * id, const char * arg);` (perm system)
-  Launch with an argument the app reads with t5_app_launch_arg() (a path, a settings page, an app id). If the app is already in front with another argument it is restarted.
-- `int t5_apps_list(t5_app_entry_t * out, int max);` (perm system)
+- `const char * t5_err_str(t5_err_t err);`
 
-### Ports (t5/port.h)
+### t5_core/event.h (t5/app.h)
 
-- `t5_err_t t5_port_adc_read_mv(t5_port_t * p, int * mv);`
-  ---- ADC (calibrated, 0..~3300 mV) --------------------------------------
-- `t5_err_t t5_port_close(t5_port_t * p);`
-  Release the pins and the driver. NULL or an already closed handle is ignored.
-- `t5_err_t t5_port_gpio_get(t5_port_t * p, bool * level);`
-- `t5_err_t t5_port_gpio_set(t5_port_t * p, bool level);`
-  ---- GPIO ---------------------------------------------------------------
-- `t5_err_t t5_port_i2c_probe(t5_port_t * p, uint8_t addr);`
-  T5_OK if something ACKs, T5_ERR_NACK if not.
-- `t5_err_t t5_port_i2c_read_reg(t5_port_t * p, uint8_t addr, uint8_t reg, uint8_t * buf, size_t len);`
-  ---- I2C (7-bit addresses) ----------------------------------------------
-- `int t5_port_i2c_scan(t5_port_t * p, uint8_t * found, size_t max);`
-  Probe 0x08..0x77 (reserved ones skipped on mbus.i2c). Returns the count found.
-- `t5_err_t t5_port_i2c_write_reg(t5_port_t * p, uint8_t addr, uint8_t reg, const uint8_t * buf, size_t len);`
-- `t5_err_t t5_port_i2c_xfer(t5_port_t * p, uint8_t addr, const uint8_t * tx, size_t txlen, uint8_t * rx, size_t rxlen);`
-  Write tx then read rx with a repeated start. Either side may be empty.
-- `t5_port_mode_t t5_port_mode(const t5_port_t * p);`
-- `const char * t5_port_name(const t5_port_t * p);`
-- `t5_err_t t5_port_open(const char * name, t5_port_mode_t mode, const void * cfg, t5_port_t ** out);` (perm ports, tracked)
-  Open a port. cfg points to the struct for mode (or NULL for defaults).
-- `t5_err_t t5_port_open_ex(const char * name, t5_port_mode_t mode, const void * cfg, uint32_t flags, t5_port_t ** out, char * why, size_t whylen);` (perm ports, tracked)
-  As t5_port_open, with flags and a reason on failure (why may be NULL).
-- `t5_err_t t5_port_pwm_set(t5_port_t * p, uint32_t duty_permille);`
-  ---- PWM ----------------------------------------------------------------
-- `t5_err_t t5_port_spi_transfer(t5_port_t * p, const void * tx, void * rx, size_t n);`
-  ---- SPI (full duplex; tx or rx may be NULL) ----------------------------
-- `uint32_t t5_port_uart_baud(const t5_port_t * p);`
-- `t5_err_t t5_port_uart_flush(t5_port_t * p);`
-  Drop anything received and not read yet.
-- `int t5_port_uart_read(t5_port_t * p, void * data, size_t n, uint32_t timeout_ms);`
-- `t5_err_t t5_port_uart_wait_tx(t5_port_t * p, uint32_t timeout_ms);`
-  Wait until everything written has left the wire (RS-485: before turnaround).
-- `int t5_port_uart_write(t5_port_t * p, const void * data, size_t n);`
-  ---- UART and RS-485 ---------------------------------------------------- Return bytes written/read, or a negative t5_err_t.
+- `const char * t5_event_name(t5_event_id_t id);`
+- `t5_err_t t5_event_subscribe(t5_event_id_t id, t5_event_handler_t fn, void * arg);` (tracked)
+- `t5_err_t t5_event_unsubscribe(t5_event_id_t id, t5_event_handler_t fn, void * arg);` (tracked)
 
-### Modbus RTU (t5/port.h)
+### t5_core/os.h (t5/app.h)
 
-- `t5_err_t t5_modbus_exception_err(uint8_t code);`
-- `void t5_modbus_init(t5_modbus_t * mb, t5_port_t * port);`
-- `t5_err_t t5_modbus_read_coils(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t count, uint8_t * bits);`
-  Coils: bits packed LSB first, (count + 7) / 8 bytes.
-- `t5_err_t t5_modbus_read_holding(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t * out);`
-  Registers come back in host order.
-- `t5_err_t t5_modbus_read_input(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t * out);`
-- `t5_err_t t5_modbus_write_coil(t5_modbus_t * mb, uint8_t slave, uint16_t addr, bool on);`
-- `t5_err_t t5_modbus_write_register(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t value);`
-- `t5_err_t t5_modbus_write_registers(t5_modbus_t * mb, uint8_t slave, uint16_t addr, const uint16_t * vals, uint16_t count);`
+- `void t5_delay_ms(uint32_t ms);`
+- `t5_mutex_t t5_mutex_create(void);` (tracked)
+- `void t5_mutex_delete(t5_mutex_t m);` (tracked)
+- `void t5_mutex_lock(t5_mutex_t m);`
+- `bool t5_mutex_lock_timeout(t5_mutex_t m, uint32_t ms);`
+- `void t5_mutex_unlock(t5_mutex_t m);`
+- `t5_err_t t5_task_create(const char * name, t5_task_fn_t fn, void * arg, uint32_t stack_bytes, int prio, int core, t5_task_t * out);` (tracked)
+  Create a task that inherits the caller's app context. core: 0, 1 or T5_CORE_ANY.
+- `t5_task_t t5_task_self(void);`
+  The calling task (an opaque id, never NULL).
+- `int64_t t5_time_us(void);`
+  Monotonic time since boot.
 
-### Power rails (t5/port.h)
-
-- `t5_err_t t5_rail_acquire(t5_rail_t rail, const char * owner, uint32_t flags, t5_rail_hold_t ** out);` (perm ports)
-  owner is copied (truncated to T5_RAIL_OWNER_LEN - 1).
-- `bool t5_rail_is_on(t5_rail_t rail);`
-- `const char * t5_rail_name(t5_rail_t rail);`
-- `t5_err_t t5_rail_release(t5_rail_hold_t * hold);`
-
-### Power (t5/power.h)
-
-- `t5_power_state_t t5_power_state(void);`
-- `const char * t5_power_state_name(t5_power_state_t s);`
-- `t5_wake_reason_t t5_power_wake_reason(void);`
-- `const char * t5_wake_reason_name(t5_wake_reason_t r);`
-- `t5_wakelock_t * t5_wakelock_acquire(t5_lock_type_t type, const char * owner);`
-  NULL if the table is full. owner is copied.
-- `t5_wakelock_t * t5_wakelock_acquire_timeout(t5_lock_type_t type, const char * owner, uint32_t timeout_ms);`
-  Released by the service after timeout_ms unless released earlier.
-- `void t5_wakelock_release(t5_wakelock_t * lock);`
-
-### Battery (t5/power.h)
-
-- `int t5_battery_history(t5_bat_hist_pt_t * out, int max);` (perm system)
-  The service's copy (t5_battery).
-- `int t5_battery_percent(void);`
-- `void t5_battery_status(t5_battery_status_t * out);`
-
-### Audio (t5/audio.h)
+### t5_audio/audio.h (t5/audio.h)
 
 - `bool t5_audio_headphones(void);`
 - `bool t5_audio_in_active(void);`
@@ -149,7 +88,7 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `int t5_audio_volume(void);`
   ---- output ----------------------------------------------------------------
 
-### Audio DSP (t5/audio.h)
+### t5_audio/dsp.h (t5/audio.h)
 
 - `void t5_mix_add(int32_t * acc, const int16_t * pcm, size_t samples, int32_t gain_q15);`
   ---- mixing ------------------------------------------------------------------ acc += pcm * gain_q15 / 32768 (samples, not frames).
@@ -163,16 +102,16 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
   Read up to n_in frames of in, write up to max_out frames of out_ch channels (mono in is copied to both, stereo to mono is averaged). Returns frames written; *consumed is how many input frames were used.
 - `void t5_resampler_init(t5_resampler_t * r, uint32_t in_rate, uint8_t in_ch, uint32_t out_rate);`
 
-### Camera (t5/camera.h)
+### t5_camera/camera.h (t5/camera.h)
 
 - `bool t5_camera_active(void);`
 - `t5_err_t t5_camera_close(t5_camera_t * cam);` (perm camera)
 - `t5_err_t t5_camera_open(t5_camera_t ** out);` (perm camera)
-- `t5_err_t t5_camera_photo(t5_camera_t * cam, const char * path, int quality);` (perm camera, tracked)
-  A JPEG still (quality 1..100, 0 = 85). Blocks until written (any task but the UI task).
+- `t5_err_t t5_camera_photo(t5_camera_t * cam, const char * path, int quality);` (perm camera)
+  A JPEG still (quality 1..100, 0 = 85). Blocks until written (any task but the UI task). Photos and recordings go only where the calling app may write (T5_ERR_DENIED).
 - `struct _lv_obj_t * t5_camera_preview_create(t5_camera_t * cam, struct _lv_obj_t * parent);` (perm camera)
   Live preview inside parent, scaled to fit and kept upright (UI task). Returns the image object; deleting it stops the preview.
-- `t5_err_t t5_camera_record_start(t5_camera_t * cam, const char * path, uint32_t kbps);` (perm camera, tracked)
+- `t5_err_t t5_camera_record_start(t5_camera_t * cam, const char * path, uint32_t kbps);` (perm camera)
   H.264 (Annex B elementary stream) to path; kbps 0 = 4000, lowered while the card falls behind. Start and stop block, and need the UI task meanwhile: call them from any task but the UI task (T5_ERR_STATE).
 - `t5_err_t t5_camera_record_stop(t5_camera_t * cam);` (perm camera)
 - `bool t5_camera_recording(const t5_camera_t * cam);` (perm camera)
@@ -183,87 +122,68 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `t5_err_t t5_jpeg_size(const uint8_t * jpeg, size_t len, uint16_t * w, uint16_t * h);`
   The size a JPEG decodes to (rounded up to 16), without decoding.
 
-### USB (t5/usb.h)
+### t5_net/http.h (t5/net.h)
 
-- `const char * t5_usb_class_name(t5_usb_class_t c);`
-- `int t5_usb_device_count(void);`
-- `int t5_usb_devices(t5_usb_dev_t * out, int max);`
-- `bool t5_usb_keyboard_present(void);`
-- `t5_err_t t5_usb_midi_listen(t5_usb_midi_cb_t cb, void * arg);` (perm usb, tracked)
-- `bool t5_usb_midi_present(void);`
-- `t5_err_t t5_usb_midi_send(const uint8_t * msg, size_t len);` (perm usb)
-- `bool t5_usb_mouse_present(void);`
-- `t5_err_t t5_usb_serial_close(t5_usb_serial_t * s);` (perm usb)
-- `t5_err_t t5_usb_serial_open(uint32_t baud, t5_usb_serial_t ** out);` (perm usb)
-- `bool t5_usb_serial_present(void);`
-- `int t5_usb_serial_read(t5_usb_serial_t * s, void * data, size_t n, uint32_t timeout_ms);` (perm usb)
-- `int t5_usb_serial_write(t5_usb_serial_t * s, const void * data, size_t n, uint32_t timeout_ms);` (perm usb)
-- `t5_err_t t5_usb_storage_eject(void);` (perm storage)
-- `t5_err_t t5_usb_storage_format(void);` (perm storage)
-  Erase the drive at /usb (one FAT filesystem; not on the UI task).
-- `bool t5_usb_storage_mounted(void);`
-  Mass storage at /usb.
-- `t5_err_t t5_usb_uvc_close(t5_usb_uvc_t * u);` (perm usb)
-- `t5_err_t t5_usb_uvc_open(uint16_t w, uint16_t h, uint8_t fps, t5_usb_uvc_frame_cb_t cb, void * arg, t5_usb_uvc_t ** out);` (perm usb, tracked)
-- `bool t5_usb_uvc_present(void);`
+- `t5_err_t t5_http_close(t5_http_t * h);` (perm net)
+- `int64_t t5_http_content_length(const t5_http_t * h);` (perm net)
+  Content-Length, or -1 if the server didn't say (chunked or until close).
+- `int t5_http_fetch(const t5_http_req_t * req, void * buf, size_t cap, int * status);` (perm net)
+  The whole exchange: the body goes into buf (at most cap bytes, else T5_ERR_NO_MEM). Returns the body length, or a negative t5_err_t; *status gets the HTTP status.
+- `const char * t5_http_header(const t5_http_t * h, const char * name);` (perm net)
+  Response header (case-insensitive), or NULL. Valid until close.
+- `t5_err_t t5_http_header_at(const t5_http_t * h, int i, const char ** name, const char ** value);` (perm net)
+  The i-th response header; T5_ERR_NOT_FOUND past the end.
+- `t5_err_t t5_http_open(const t5_http_req_t * req, t5_http_t ** out);` (perm net)
+  Connect, send the request, read the status line and headers.
+- `int t5_http_read(t5_http_t * h, void * buf, size_t n, uint32_t timeout_ms);` (perm net)
+  Up to n body bytes; 0 at the end of the body.
+- `int t5_http_status(const t5_http_t * h);` (perm net)
+- `const char * t5_http_url(const t5_http_t * h);` (perm net)
+  The URL that answered, after redirects.
 
-### Storage (t5/storage.h)
+### t5_net/httpd.h (t5/net.h)
 
-- `t5_err_t t5_storage_data_usage(uint64_t * total, uint64_t * used);`
-- `t5_err_t t5_storage_sd_eject(void);` (perm storage)
-  Run sync hooks, then unmount. Safe to pull the card afterwards.
-- `t5_err_t t5_storage_sd_format(void);` (perm storage)
-  Erase the mounted SD card (a new FAT filesystem; slow on big cards: not on the UI task).
-- `t5_err_t t5_storage_sd_info(t5_sd_info_t * out);`
-- `t5_err_t t5_storage_sd_rescan(void);` (perm storage)
-  Leave EJECTED/FAILED and try to mount on the next poll.
-- `t5_sd_state_t t5_storage_sd_state(void);`
-- `const char * t5_storage_sd_state_str(t5_sd_state_t s);`
-- `t5_err_t t5_storage_write_atomic(const char * path, const void * data, size_t len);` (tracked)
-  Write a whole file so a reader sees the old or the new contents, never a mix: write <path>.tmp, fsync, rename. Atomic on /data (LittleFS); on FAT the old file is removed first, so a power cut can lose it.
+- `t5_err_t t5_httpd_begin(t5_httpd_req_t * req, int status, const char * content_type, const t5_http_header_t * headers, size_t n_headers);` (perm net)
+  Or streamed: begin (chunked), write as often as needed, end (frees req).
+- `const void * t5_httpd_body(const t5_httpd_req_t * req, size_t * len);` (perm net)
+- `t5_err_t t5_httpd_end(t5_httpd_req_t * req);` (perm net)
+- `const char * t5_httpd_header(const t5_httpd_req_t * req, const char * name);` (perm net)
+- `t5_err_t t5_httpd_header_at(const t5_httpd_req_t * req, int i, const char ** name, const char ** value);` (perm net)
+- `const char * t5_httpd_method(const t5_httpd_req_t * req);` (perm net)
+- `t5_err_t t5_httpd_next(t5_httpd_t * srv, uint32_t timeout_ms, t5_httpd_req_t ** out);` (perm net)
+  The next complete request. T5_ERR_TIMEOUT if none came in time. Every request must be answered (respond, end or upgrade), which frees it.
+- `const char * t5_httpd_path(const t5_httpd_req_t * req);` (perm net)
+- `t5_err_t t5_httpd_peer(const t5_httpd_req_t * req, t5_net_addr_t * out);` (perm net)
+- `uint16_t t5_httpd_port(t5_httpd_t * srv);` (perm net)
+- `const char * t5_httpd_query(const t5_httpd_req_t * req);` (perm net)
+- `t5_err_t t5_httpd_respond(t5_httpd_req_t * req, int status, const char * content_type, const void * body, size_t len, const t5_http_header_t * headers, size_t n_headers);` (perm net)
+  The whole response at once (Content-Length), then the connection closes and req is freed. content_type may be NULL.
+- `t5_err_t t5_httpd_start(uint16_t port, const t5_httpd_cfg_t * cfg, t5_httpd_t ** out);` (perm net)
+  Listen on port (0 = any free port: see t5_httpd_port) on every interface.
+- `t5_err_t t5_httpd_stop(t5_httpd_t * srv);` (perm net)
+- `t5_err_t t5_httpd_websocket(t5_httpd_req_t * req, const char * subprotocol, size_t max_msg, t5_ws_t ** out);` (perm net)
+  Accept a WebSocket upgrade request (frees req): the result is a t5_ws_t like a client's (t5_ws_send, t5_ws_recv, t5_ws_close). subprotocol may be NULL. T5_ERR_INVALID_ARG if req isn't an upgrade.
+- `int t5_httpd_write(t5_httpd_req_t * req, const void * data, size_t len);` (perm net)
 
-### Shell (t5/shell.h)
+### t5_net/mqtt.h (t5/net.h)
 
-- `t5_err_t t5_shell_home(void);`
-- `void t5_shell_keyboard_hide(void);`
-- `void t5_shell_keyboard_show(void * textarea);`
-  Show the on-screen keyboard for a text area (UI task). The shell does this by itself when a text area is tapped.
-- `t5_err_t t5_shell_quick_settings(bool open);`
-  Open or close quick settings, go home.
-- `t5_err_t t5_shell_set_fullscreen(bool on);`
-  App API (any task). Hide the status bar for the foreground app (camera, games). Reset when the app leaves the foreground.
-- `t5_err_t t5_shell_toast(const char * text);`
-  A snackbar from any task (copied). action may be NULL.
+- `t5_err_t t5_mqtt_close(t5_mqtt_t * m);` (perm net)
+  Disconnect cleanly and free.
+- `t5_err_t t5_mqtt_connect(const t5_mqtt_cfg_t * cfg, t5_mqtt_t ** out);` (perm net)
+  Start the client and wait (timeout_ms) for the broker to accept it. T5_ERR_DENIED if it refused (bad credentials), T5_ERR_TIMEOUT if it never answered.
+- `bool t5_mqtt_connected(t5_mqtt_t * m);` (perm net)
+- `uint32_t t5_mqtt_dropped(t5_mqtt_t * m);` (perm net)
+  Messages dropped because the app didn't take them fast enough.
+- `t5_err_t t5_mqtt_next(t5_mqtt_t * m, t5_mqtt_event_t * ev, void * buf, size_t cap, uint32_t timeout_ms);` (perm net)
+  The next event, with its topic and data copied into buf. T5_ERR_NO_MEM if buf is too small (the event stays queued; t5_mqtt_next_size says how much it needs), T5_ERR_TIMEOUT if nothing came.
+- `int t5_mqtt_next_size(t5_mqtt_t * m);` (perm net)
+  Buffer size the next event needs, or -1 if none is queued.
+- `int t5_mqtt_publish(t5_mqtt_t * m, const char * topic, const void * data, size_t len, int qos, bool retain);` (perm net)
+  Returns the message id (0 for QoS 0), or a negative t5_err_t.
+- `int t5_mqtt_subscribe(t5_mqtt_t * m, const char * topic, int qos);` (perm net)
+- `int t5_mqtt_unsubscribe(t5_mqtt_t * m, const char * topic);` (perm net)
 
-### UI service (t5/ui.h)
-
-- `const char * t5_rot_name(t5_rotation_t r);`
-- `void t5_rot_size(t5_rotation_t r, int32_t * w, int32_t * h);`
-  Logical resolution for a rotation.
-- `t5_err_t t5_ui_async(t5_ui_fn_t fn, void * arg);` (tracked)
-- `void t5_ui_lock(void);`
-  Recursive lock around LVGL for tasks other than the UI task.
-- `bool t5_ui_lock_timeout(uint32_t ms);`
-- `bool t5_ui_low_power(void);`
-- `bool t5_ui_on_ui_task(void);`
-- `t5_rotation_t t5_ui_rotation(void);`
-  ---- rotation (plan 4.9) -----------------------------------------------
-- `t5_err_t t5_ui_sync(t5_ui_fn_t fn, void * arg, uint32_t timeout_ms);` (tracked)
-  Run fn(arg) on the UI task and wait for it (up to timeout_ms).
-- `void t5_ui_unlock(void);`
-
-### Time (t5/sys.h)
-
-- `bool t5_time_local(struct tm * out);`
-  Local time now. Returns false if the wall clock isn't set yet (the fields still hold whatever the clock says).
-- `time_t t5_time_now(void);`
-- `const char * t5_time_tz(void);`
-- `const char * t5_time_tz_name(void);`
-- `int64_t t5_time_us(void);`
-  Monotonic time since boot.
-- `bool t5_time_valid(void);`
-
-### Sockets (t5/net.h)
+### t5_net/sock.h (t5/net.h)
 
 - `t5_err_t t5_net_addr_parse(const char * s, t5_net_addr_t * out);`
   "1.2.3.4", "::1" or "fe80::1" into an address (port 0). Doesn't resolve names.
@@ -307,26 +227,7 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `int t5_udp_sendto(t5_sock_t * s, const t5_net_addr_t * to, const void * data, size_t n, uint32_t timeout_ms);` (perm net)
   One datagram (up to 65507 bytes). Returns n.
 
-### HTTP client (t5/net.h)
-
-- `t5_err_t t5_http_close(t5_http_t * h);` (perm net)
-- `int64_t t5_http_content_length(const t5_http_t * h);` (perm net)
-  Content-Length, or -1 if the server didn't say (chunked or until close).
-- `int t5_http_fetch(const t5_http_req_t * req, void * buf, size_t cap, int * status);` (perm net)
-  The whole exchange: the body goes into buf (at most cap bytes, else T5_ERR_NO_MEM). Returns the body length, or a negative t5_err_t; *status gets the HTTP status.
-- `const char * t5_http_header(const t5_http_t * h, const char * name);` (perm net)
-  Response header (case-insensitive), or NULL. Valid until close.
-- `t5_err_t t5_http_header_at(const t5_http_t * h, int i, const char ** name, const char ** value);` (perm net)
-  The i-th response header; T5_ERR_NOT_FOUND past the end.
-- `t5_err_t t5_http_open(const t5_http_req_t * req, t5_http_t ** out);` (perm net)
-  Connect, send the request, read the status line and headers.
-- `int t5_http_read(t5_http_t * h, void * buf, size_t n, uint32_t timeout_ms);` (perm net)
-  Up to n body bytes; 0 at the end of the body.
-- `int t5_http_status(const t5_http_t * h);` (perm net)
-- `const char * t5_http_url(const t5_http_t * h);` (perm net)
-  The URL that answered, after redirects.
-
-### WebSocket client (t5/net.h)
+### t5_net/ws.h (t5/net.h)
 
 - `t5_err_t t5_ws_close(t5_ws_t * ws, uint16_t code);` (perm net)
   Send a close (code 1000 = normal; 0 = no code), wait up to a second for the server's, close the connection and free.
@@ -340,84 +241,146 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `const char * t5_ws_subprotocol(const t5_ws_t * ws);` (perm net)
   The subprotocol the server picked, or "".
 
-### HTTP server (t5/net.h)
+### t5_ports/modbus.h (t5/port.h)
 
-- `t5_err_t t5_httpd_begin(t5_httpd_req_t * req, int status, const char * content_type, const t5_http_header_t * headers, size_t n_headers);` (perm net)
-  Or streamed: begin (chunked), write as often as needed, end (frees req).
-- `const void * t5_httpd_body(const t5_httpd_req_t * req, size_t * len);` (perm net)
-- `t5_err_t t5_httpd_end(t5_httpd_req_t * req);` (perm net)
-- `const char * t5_httpd_header(const t5_httpd_req_t * req, const char * name);` (perm net)
-- `t5_err_t t5_httpd_header_at(const t5_httpd_req_t * req, int i, const char ** name, const char ** value);` (perm net)
-- `const char * t5_httpd_method(const t5_httpd_req_t * req);` (perm net)
-- `t5_err_t t5_httpd_next(t5_httpd_t * srv, uint32_t timeout_ms, t5_httpd_req_t ** out);` (perm net)
-  The next complete request. T5_ERR_TIMEOUT if none came in time. Every request must be answered (respond, end or upgrade), which frees it.
-- `const char * t5_httpd_path(const t5_httpd_req_t * req);` (perm net)
-- `t5_err_t t5_httpd_peer(const t5_httpd_req_t * req, t5_net_addr_t * out);` (perm net)
-- `uint16_t t5_httpd_port(t5_httpd_t * srv);` (perm net)
-- `const char * t5_httpd_query(const t5_httpd_req_t * req);` (perm net)
-- `t5_err_t t5_httpd_respond(t5_httpd_req_t * req, int status, const char * content_type, const void * body, size_t len, const t5_http_header_t * headers, size_t n_headers);` (perm net)
-  The whole response at once (Content-Length), then the connection closes and req is freed. content_type may be NULL.
-- `t5_err_t t5_httpd_start(uint16_t port, const t5_httpd_cfg_t * cfg, t5_httpd_t ** out);` (perm net)
-  Listen on port (0 = any free port: see t5_httpd_port) on every interface.
-- `t5_err_t t5_httpd_stop(t5_httpd_t * srv);` (perm net)
-- `t5_err_t t5_httpd_websocket(t5_httpd_req_t * req, const char * subprotocol, size_t max_msg, t5_ws_t ** out);` (perm net)
-  Accept a WebSocket upgrade request (frees req): the result is a t5_ws_t like a client's (t5_ws_send, t5_ws_recv, t5_ws_close). subprotocol may be NULL. T5_ERR_INVALID_ARG if req isn't an upgrade.
-- `int t5_httpd_write(t5_httpd_req_t * req, const void * data, size_t len);` (perm net)
+- `t5_err_t t5_modbus_exception_err(uint8_t code);`
+- `void t5_modbus_init(t5_modbus_t * mb, t5_port_t * port);`
+- `t5_err_t t5_modbus_read_coils(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t count, uint8_t * bits);`
+  Coils: bits packed LSB first, (count + 7) / 8 bytes.
+- `t5_err_t t5_modbus_read_holding(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t * out);`
+  Registers come back in host order.
+- `t5_err_t t5_modbus_read_input(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t count, uint16_t * out);`
+- `t5_err_t t5_modbus_write_coil(t5_modbus_t * mb, uint8_t slave, uint16_t addr, bool on);`
+- `t5_err_t t5_modbus_write_register(t5_modbus_t * mb, uint8_t slave, uint16_t addr, uint16_t value);`
+- `t5_err_t t5_modbus_write_registers(t5_modbus_t * mb, uint8_t slave, uint16_t addr, const uint16_t * vals, uint16_t count);`
 
-### MQTT (t5/net.h)
+### t5_ports/ports.h (t5/port.h)
 
-- `t5_err_t t5_mqtt_close(t5_mqtt_t * m);` (perm net)
-  Disconnect cleanly and free.
-- `t5_err_t t5_mqtt_connect(const t5_mqtt_cfg_t * cfg, t5_mqtt_t ** out);` (perm net)
-  Start the client and wait (timeout_ms) for the broker to accept it. T5_ERR_DENIED if it refused (bad credentials), T5_ERR_TIMEOUT if it never answered.
-- `bool t5_mqtt_connected(t5_mqtt_t * m);` (perm net)
-- `uint32_t t5_mqtt_dropped(t5_mqtt_t * m);` (perm net)
-  Messages dropped because the app didn't take them fast enough.
-- `t5_err_t t5_mqtt_next(t5_mqtt_t * m, t5_mqtt_event_t * ev, void * buf, size_t cap, uint32_t timeout_ms);` (perm net)
-  The next event, with its topic and data copied into buf. T5_ERR_NO_MEM if buf is too small (the event stays queued; t5_mqtt_next_size says how much it needs), T5_ERR_TIMEOUT if nothing came.
-- `int t5_mqtt_next_size(t5_mqtt_t * m);` (perm net)
-  Buffer size the next event needs, or -1 if none is queued.
-- `int t5_mqtt_publish(t5_mqtt_t * m, const char * topic, const void * data, size_t len, int qos, bool retain);` (perm net)
-  Returns the message id (0 for QoS 0), or a negative t5_err_t.
-- `int t5_mqtt_subscribe(t5_mqtt_t * m, const char * topic, int qos);` (perm net)
-- `int t5_mqtt_unsubscribe(t5_mqtt_t * m, const char * topic);` (perm net)
+- `t5_err_t t5_port_adc_read_mv(t5_port_t * p, int * mv);`
+  ---- ADC (calibrated, 0..~3300 mV) --------------------------------------
+- `t5_err_t t5_port_close(t5_port_t * p);`
+  Release the pins and the driver. NULL or an already closed handle is ignored.
+- `t5_err_t t5_port_gpio_get(t5_port_t * p, bool * level);`
+- `t5_err_t t5_port_gpio_set(t5_port_t * p, bool level);`
+  ---- GPIO ---------------------------------------------------------------
+- `t5_err_t t5_port_i2c_probe(t5_port_t * p, uint8_t addr);`
+  T5_OK if something ACKs, T5_ERR_NACK if not.
+- `t5_err_t t5_port_i2c_read_reg(t5_port_t * p, uint8_t addr, uint8_t reg, uint8_t * buf, size_t len);`
+  ---- I2C (7-bit addresses) ----------------------------------------------
+- `int t5_port_i2c_scan(t5_port_t * p, uint8_t * found, size_t max);`
+  Probe 0x08..0x77 (reserved ones skipped on mbus.i2c). Returns the count found.
+- `t5_err_t t5_port_i2c_write_reg(t5_port_t * p, uint8_t addr, uint8_t reg, const uint8_t * buf, size_t len);`
+- `t5_err_t t5_port_i2c_xfer(t5_port_t * p, uint8_t addr, const uint8_t * tx, size_t txlen, uint8_t * rx, size_t rxlen);`
+  Write tx then read rx with a repeated start. Either side may be empty.
+- `t5_port_mode_t t5_port_mode(const t5_port_t * p);`
+- `const char * t5_port_name(const t5_port_t * p);`
+- `t5_err_t t5_port_open(const char * name, t5_port_mode_t mode, const void * cfg, t5_port_t ** out);` (perm ports)
+  Open a port. cfg points to the struct for mode (or NULL for defaults).
+- `t5_err_t t5_port_open_ex(const char * name, t5_port_mode_t mode, const void * cfg, uint32_t flags, t5_port_t ** out, char * why, size_t whylen);` (perm ports)
+  As t5_port_open, with flags and a reason on failure (why may be NULL).
+- `t5_err_t t5_port_pwm_set(t5_port_t * p, uint32_t duty_permille);`
+  ---- PWM ----------------------------------------------------------------
+- `t5_err_t t5_port_spi_transfer(t5_port_t * p, const void * tx, void * rx, size_t n);`
+  ---- SPI (full duplex; tx or rx may be NULL) ----------------------------
+- `uint32_t t5_port_uart_baud(const t5_port_t * p);`
+- `t5_err_t t5_port_uart_flush(t5_port_t * p);`
+  Drop anything received and not read yet.
+- `int t5_port_uart_read(t5_port_t * p, void * data, size_t n, uint32_t timeout_ms);`
+- `t5_err_t t5_port_uart_wait_tx(t5_port_t * p, uint32_t timeout_ms);`
+  Wait until everything written has left the wire (RS-485: before turnaround).
+- `int t5_port_uart_write(t5_port_t * p, const void * data, size_t n);`
+  ---- UART and RS-485 ---------------------------------------------------- Return bytes written/read, or a negative t5_err_t.
 
-### Network (t5/sys.h)
+### t5_power/rail.h (t5/port.h)
 
-- `const char * t5_net_state_name(t5_net_state_t s);`
-- `void t5_net_status(t5_net_status_t * out);`
+- `t5_err_t t5_rail_acquire(t5_rail_t rail, const char * owner, uint32_t flags, t5_rail_hold_t ** out);` (perm ports)
+  owner is copied (truncated to T5_RAIL_OWNER_LEN - 1). The hold belongs to the calling app, if any, and is released when it exits.
+- `bool t5_rail_is_on(t5_rail_t rail);`
+- `const char * t5_rail_name(t5_rail_t rail);`
+- `t5_err_t t5_rail_release(t5_rail_hold_t * hold);`
 
-### IMU (t5/sys.h)
+### t5_battery/battery.h (t5/power.h)
+
+- `int t5_battery_percent(void);`
+- `void t5_battery_status(t5_battery_status_t * out);`
+
+### t5_power/power.h (t5/power.h)
+
+- `t5_power_state_t t5_power_state(void);`
+- `const char * t5_power_state_name(t5_power_state_t s);`
+- `t5_wake_reason_t t5_power_wake_reason(void);`
+- `const char * t5_wake_reason_name(t5_wake_reason_t r);`
+- `t5_wakelock_t * t5_wakelock_acquire(t5_lock_type_t type, const char * owner);`
+  NULL if the table is full. owner is copied.
+- `t5_wakelock_t * t5_wakelock_acquire_timeout(t5_lock_type_t type, const char * owner, uint32_t timeout_ms);`
+  Released by the service after timeout_ms unless released earlier.
+- `void t5_wakelock_release(t5_wakelock_t * lock);`
+
+### t5_shell/shell.h (t5/shell.h)
+
+- `t5_err_t t5_shell_home(void);`
+- `void t5_shell_keyboard_hide(void);`
+- `void t5_shell_keyboard_show(void * textarea);`
+  Show the on-screen keyboard for a text area (UI task). The shell does this by itself when a text area is tapped.
+- `t5_err_t t5_shell_quick_settings(bool open);`
+  Open or close quick settings, go home.
+- `t5_err_t t5_shell_set_fullscreen(bool on);`
+  App API (any task). Hide the status bar for the foreground app (camera, games). Reset when the app leaves the foreground.
+- `t5_err_t t5_shell_toast(const char * text);`
+  A snackbar from any task (copied).
+
+### t5_storage/t5_storage.h (t5/storage.h)
+
+- `t5_err_t t5_storage_data_usage(uint64_t * total, uint64_t * used);`
+- `t5_err_t t5_storage_sd_eject(void);` (perm storage)
+  Unmount a mounted card; safe to pull it afterwards. T5_ERR_STATE if none is mounted.
+- `t5_err_t t5_storage_sd_format(void);` (perm storage)
+  Erase the mounted SD card (a new FAT filesystem; slow on big cards: not on the UI task).
+- `t5_err_t t5_storage_sd_info(t5_sd_info_t * out);`
+- `t5_err_t t5_storage_sd_rescan(void);` (perm storage)
+  Leave EJECTED/FAILED and try to mount on the next poll.
+- `t5_sd_state_t t5_storage_sd_state(void);`
+- `const char * t5_storage_sd_state_str(t5_sd_state_t s);`
+- `t5_err_t t5_storage_write_atomic(const char * path, const void * data, size_t len);` (tracked)
+  Write a whole file so a reader sees the old or the new contents, never a mix: write <path>.tmp, fsync, rename. Atomic on /data (LittleFS); on FAT the old file is removed first, so a power cut can lose it.
+
+### t5_imu/t5_imu.h (t5/sys.h)
 
 - `t5_err_t t5_imu_read_accel(t5_imu_accel_t * out);`
 - `t5_imu_status_t t5_imu_status(void);`
 
-### Events (t5/app.h)
+### t5_net/net.h (t5/sys.h)
 
-- `const char * t5_event_name(t5_event_id_t id);`
-- `t5_err_t t5_event_subscribe(t5_event_id_t id, t5_event_handler_t fn, void * arg);` (tracked)
-- `t5_err_t t5_event_unsubscribe(t5_event_id_t id, t5_event_handler_t fn, void * arg);` (tracked)
+- `const char * t5_net_state_name(t5_net_state_t s);`
+- `void t5_net_status(t5_net_status_t * out);`
 
-### Tasks and locks (t5/app.h)
+### t5_time/t5_time.h (t5/sys.h)
 
-- `void t5_delay_ms(uint32_t ms);`
-- `t5_mutex_t t5_mutex_create(void);` (tracked)
-- `void t5_mutex_delete(t5_mutex_t m);` (tracked)
-- `void t5_mutex_lock(t5_mutex_t m);`
-- `bool t5_mutex_lock_timeout(t5_mutex_t m, uint32_t ms);`
-- `void t5_mutex_unlock(t5_mutex_t m);`
-- `t5_err_t t5_task_create(const char * name, t5_task_fn_t fn, void * arg, uint32_t stack_bytes, int prio, int core, t5_task_t * out);` (tracked)
-  Create a task that inherits the caller's app context. core: 0, 1 or T5_CORE_ANY.
-- `t5_task_t t5_task_self(void);`
+- `bool t5_time_local(struct tm * out);`
+  Local time now. Returns false if the wall clock isn't set yet (the fields still hold whatever the clock says).
+- `time_t t5_time_now(void);`
+- `const char * t5_time_tz(void);`
+- `const char * t5_time_tz_name(void);`
+- `bool t5_time_valid(void);`
 
-### Errors (t5/app.h)
+### t5_app/system.h (t5/system.h)
 
-- `const char * t5_err_str(t5_err_t err);`
-- `int * t5_errno(void);`
+- `int t5_apps_energy(t5_energy_rec_t * out, int max);` (perm system)
+  Per-app average draw (plan 6.8), highest first. See t5_app/energy.h.
+- `t5_err_t t5_apps_info(const char * id, t5_app_info_t * out);` (perm system)
+- `t5_err_t t5_apps_launch(const char * id);` (perm system)
+  Safe from any task: the work runs on the UI task.
+- `t5_err_t t5_apps_launch_arg(const char * id, const char * arg);` (perm system)
+  Launch with an argument the app reads with t5_app_launch_arg() (a path, a settings page, an app id). If the app is already in front with another argument it is restarted.
+- `int t5_apps_list(t5_app_entry_t * out, int max);` (perm system)
 
-### Material Design 2 widgets (t5/ui.h)
+### t5_battery/history.h (t5/system.h)
 
-- `const md_accent_def_t * md_accent(md_accent_t a);`
+- `int t5_battery_history(t5_bat_hist_pt_t * out, int max);` (perm system)
+  The service's copy, oldest first.
+
+### md/md.h (t5/ui.h)
+
 - `void md_anim_set_curve(lv_anim_t * a, md_curve_t curve);`
   ---- motion ----------------------------------------------------------------
 - `lv_obj_t * md_appbar_add_action(lv_obj_t * bar, const char * icon, lv_event_cb_t cb, void * user_data);`
@@ -430,9 +393,6 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `lv_obj_t * md_chip_create(lv_obj_t * parent, const char * text, const char * icon, md_chip_kind_t kind);`
 - `bool md_chip_selected(lv_obj_t * chip);`
 - `void md_chip_set_selected(lv_obj_t * chip, bool on);`
-- `const md_bezier_t * md_curve(md_curve_t c);`
-- `float md_curve_eval(md_curve_t c, float t);`
-  Evaluate the curve: progress t in [0,1] to eased value in [0,1].
 - `void md_dialog_close(lv_obj_t * dialog);`
 - `lv_obj_t * md_dialog_show(const char * title, const char * text, const char * btn_confirm, const char * btn_dismiss, md_dialog_cb_t cb, void * user_data);`
 - `lv_obj_t * md_divider_create(lv_obj_t * parent);`
@@ -441,8 +401,6 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `lv_obj_t * md_drawer_open(const char * title, const char * subtitle);`
   Navigation drawer (256 dp, elevation 16) sliding in from the left over a scrim. Add items, or put anything in md_drawer_panel(). Tapping an item or the scrim closes it.
 - `lv_obj_t * md_drawer_panel(lv_obj_t * drawer);`
-- `uint8_t md_elevation_overlay_opa(int elevation_dp);`
-  Dark theme elevation: a white overlay on the surface that grows with elevation. Returns 0..255 opacity for an elevation in dp.
 - `lv_obj_t * md_fab_create(lv_obj_t * parent, const char * icon, bool mini);`
 - `const lv_font_t * md_font(md_type_role_t role);`
   ---- type -----------------------------------------------------------------
@@ -463,8 +421,6 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
   Called with the row's index on a long press (no click follows).
 - `void md_menu_close(lv_obj_t * menu);`
 - `lv_obj_t * md_menu_show(lv_obj_t * anchor, const char * const * items, int n, md_menu_cb_t cb, void * user_data);`
-- `md_rgb_t md_mix(md_rgb_t fg, md_rgb_t bg, uint8_t opa);`
-  Blend fg over bg at opa (0..255), per channel, rounded.
 - `lv_obj_t * md_page_body(lv_obj_t * page);`
 - `lv_obj_t * md_page_create(lv_obj_t * parent, const char * title, lv_event_cb_t back_cb, void * user_data, lv_obj_t ** bar_out);`
   A full-size page: app bar (back arrow when back_cb is set) over a scrolling column, md_page_body().
@@ -486,8 +442,6 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `void md_snackbar_dismiss(void);`
 - `lv_obj_t * md_snackbar_show(const char * text, const char * action, md_action_cb_t cb, void * user_data);`
   Snackbar: one at a time at the bottom, 4 s (10 s with an action).
-- `md_rgb_t md_surface_at(const md_scheme_t * s, int elevation_dp);`
-  The resulting surface colour on a dark scheme (surface blended with white), or plain surface on a light one.
 - `lv_obj_t * md_switch_create(lv_obj_t * parent, bool on);`
   Selection controls, sized to the spec with 48 dp touch targets. LV_EVENT_VALUE_CHANGED as for the plain LVGL widgets.
 - `lv_obj_t * md_tabs_add(lv_obj_t * tabs, const char * name);`
@@ -501,9 +455,67 @@ Native apps may call the 295 Tab5 OS functions below, 1907 LVGL 9.6 functions (t
 - `void md_textfield_set_text(lv_obj_t * field, const char * text);`
 - `lv_obj_t * md_textfield_ta(lv_obj_t * field);`
 - `const char * md_textfield_text(lv_obj_t * field);`
+
+### md/md_tokens.h (t5/ui.h)
+
+- `const md_accent_def_t * md_accent(md_accent_t a);`
+- `const md_bezier_t * md_curve(md_curve_t c);`
+- `float md_curve_eval(md_curve_t c, float t);`
+  Evaluate the curve: progress t in [0,1] to eased value in [0,1].
+- `uint8_t md_elevation_overlay_opa(int elevation_dp);`
+  Dark theme elevation: a white overlay on the surface that grows with elevation. Returns 0..255 opacity for an elevation in dp.
+- `md_rgb_t md_mix(md_rgb_t fg, md_rgb_t bg, uint8_t opa);`
+  Blend fg over bg at opa (0..255), per channel, rounded.
+- `md_rgb_t md_surface_at(const md_scheme_t * s, int elevation_dp);`
+  The resulting surface colour on a dark scheme (surface blended with white), or plain surface on a light one.
 - `const md_type_t * md_type(md_type_role_t role);`
 - `int md_type_tracking_px(md_type_role_t role);`
   Letter spacing in px for a role (rounded).
+
+### t5_ui/rotation.h (t5/ui.h)
+
+- `const char * t5_rot_name(t5_rotation_t r);`
+- `void t5_rot_size(t5_rotation_t r, int32_t * w, int32_t * h);`
+  Logical resolution for a rotation.
+
+### t5_ui/t5_ui.h (t5/ui.h)
+
+- `t5_err_t t5_ui_async(t5_ui_fn_t fn, void * arg);` (tracked)
+- `void t5_ui_lock(void);`
+  Recursive lock around LVGL for tasks other than the UI task.
+- `bool t5_ui_lock_timeout(uint32_t ms);`
+- `bool t5_ui_low_power(void);`
+  Low-power mode (the power service's; main passes it to set, which any task may call, also before init, and which never waits for the UI): the refresh rate is capped at 30 fps from the UI task's next pass, and md drops ripples.
+- `bool t5_ui_on_ui_task(void);`
+- `t5_rotation_t t5_ui_rotation(void);`
+  ---- rotation (plan 4.9) -----------------------------------------------
+- `t5_err_t t5_ui_sync(t5_ui_fn_t fn, void * arg, uint32_t timeout_ms);` (tracked)
+  Run fn(arg) on the UI task and wait for it (up to timeout_ms).
+- `void t5_ui_unlock(void);`
+
+### t5_usb/usb.h (t5/usb.h)
+
+- `const char * t5_usb_class_name(t5_usb_class_t c);`
+- `int t5_usb_device_count(void);`
+- `int t5_usb_devices(t5_usb_dev_t * out, int max);`
+- `bool t5_usb_keyboard_present(void);`
+- `t5_err_t t5_usb_midi_listen(t5_usb_midi_cb_t cb, void * arg);` (perm usb, tracked)
+- `bool t5_usb_midi_present(void);`
+- `t5_err_t t5_usb_midi_send(const uint8_t * msg, size_t len);` (perm usb)
+- `bool t5_usb_mouse_present(void);`
+- `t5_err_t t5_usb_serial_close(t5_usb_serial_t * s);` (perm usb)
+- `t5_err_t t5_usb_serial_open(uint32_t baud, t5_usb_serial_t ** out);` (perm usb)
+- `bool t5_usb_serial_present(void);`
+- `int t5_usb_serial_read(t5_usb_serial_t * s, void * data, size_t n, uint32_t timeout_ms);` (perm usb)
+- `int t5_usb_serial_write(t5_usb_serial_t * s, const void * data, size_t n, uint32_t timeout_ms);` (perm usb)
+- `t5_err_t t5_usb_storage_eject(void);` (perm storage)
+- `t5_err_t t5_usb_storage_format(void);` (perm storage)
+  Erase the drive at /usb (one FAT filesystem; not on the UI task).
+- `bool t5_usb_storage_mounted(void);`
+  Mass storage at /usb.
+- `t5_err_t t5_usb_uvc_close(t5_usb_uvc_t * u);` (perm usb, tracked)
+- `t5_err_t t5_usb_uvc_open(uint16_t w, uint16_t h, uint8_t fps, t5_usb_uvc_frame_cb_t cb, void * arg, t5_usb_uvc_t ** out);` (perm usb, tracked)
+- `bool t5_usb_uvc_present(void);`
 
 ## Python: the `t5` module
 

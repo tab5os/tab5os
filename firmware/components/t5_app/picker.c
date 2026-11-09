@@ -29,6 +29,7 @@
 #include "t5_app/fspolicy.h"
 #include "t5_core/event.h"
 #include "t5_core/log.h"
+#include "t5_storage/paths.h"
 #include "t5_ui/t5_ui.h"
 #include "app_priv.h"
 
@@ -71,15 +72,6 @@ typedef struct {
 
 static picker_t *s_p;           /* UI task only */
 
-static const struct {
-    const char *path;
-    const char *label;
-} s_roots[] = {
-    { "/sd", "SD card" },
-    { "/usb", "USB drive" },
-    { "/data/user", "Internal storage" },
-};
-#define NROOTS (sizeof s_roots / sizeof s_roots[0])
 
 static void listing_free(listing_t *l)
 {
@@ -151,9 +143,9 @@ static bool dir_exists(const char *path)
 
 static void read_top_level(listing_t *l)
 {
-    for (size_t i = 0; i < NROOTS; i++) {
-        if (!dir_exists(s_roots[i].path)) continue;
-        l->ents[l->n++] = (entry_t){ s_roots[i].label, s_roots[i].path, true };
+    for (size_t i = 0; i < t5_fs_nroots; i++) {
+        if (!dir_exists(t5_fs_roots[i].path)) continue;
+        l->ents[l->n++] = (entry_t){ t5_fs_roots[i].label, t5_fs_roots[i].path, true };
     }
 }
 
@@ -210,8 +202,8 @@ static void set_status(picker_t *p, const char *text)
 
 static const char *leaf_label(const picker_t *p)
 {
-    for (size_t i = 0; i < NROOTS; i++) {
-        if (!strcmp(p->path, s_roots[i].path)) return s_roots[i].label;
+    for (size_t i = 0; i < t5_fs_nroots; i++) {
+        if (!strcmp(p->path, t5_fs_roots[i].path)) return t5_fs_roots[i].label;
     }
     const char *s = strrchr(p->path, '/');
     return s ? s + 1 : p->path;
@@ -295,8 +287,8 @@ static void up_clicked(lv_event_t *e)
         finish(p, NULL);
         return;
     }
-    for (size_t i = 0; i < NROOTS; i++) {
-        if (!strcmp(p->path, s_roots[i].path)) {
+    for (size_t i = 0; i < t5_fs_nroots; i++) {
+        if (!strcmp(p->path, t5_fs_roots[i].path)) {
             go(p, "");
             return;
         }
@@ -381,7 +373,7 @@ static void storage_changed_ui(void *arg)
     (void)arg;
     picker_t *p = s_p;
     if (!p) return;
-    if (!p->path[0] || t5_fs_under(p->path, "/sd")) {
+    if (!p->path[0] || t5_fs_under(p->path, T5_SD_PATH)) {
         void *saved = t5_sys_enter();
         go(p, "");
         t5_sys_leave(saved);

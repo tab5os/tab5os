@@ -6,7 +6,7 @@
 #include "esp_console.h"
 #include "t5_bsp/xpin.h"
 #include "t5_i2c/t5_i2c.h"
-#include "t5_pins/names.h"
+#include "t5_pins/table.h"
 #include "diag_priv.h"
 
 static const char *mode_str(t5_xpin_mode_t m)
@@ -30,7 +30,7 @@ static int dump(void)
             t5_xpin_t x = T5_XPIN(addrs[e], p);
             bool in = false;
             t5_err_t err = t5_xpin_read(x, &in);
-            const char *name = t5_bsp_xpin_name(addrs[e], p);
+            const char *name = t5_pins_xpin_name(addrs[e], p);
             t5_xpin_mode_t m = t5_xpin_mode(x);
             printf("  P%d   %-15s %-12s %-4s %-4s %s\n", p, name ? name : "(nc)", mode_str(m),
                    m == T5_XPIN_MODE_INPUT ? "-" : (t5_xpin_out_level(x) ? "1" : "0"),

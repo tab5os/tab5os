@@ -17,6 +17,7 @@
 #include "lvgl.h"
 #include "md/md.h"
 #include "t5_py/py.h"
+#include "py_priv.h"
 
 #define CON_MAX 4
 #define CON_TEXT (16 * 1024)
@@ -37,21 +38,10 @@ typedef struct {
 
 static con_t *s_cons[CON_MAX];
 static SemaphoreHandle_t s_lock;
-static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void lock(void)
 {
-    if (!s_lock) {
-        SemaphoreHandle_t l = xSemaphoreCreateMutex();
-        portENTER_CRITICAL(&s_mux);
-        if (!s_lock) {
-            s_lock = l;
-            l = NULL;
-        }
-        portEXIT_CRITICAL(&s_mux);
-        if (l) vSemaphoreDelete(l);
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    xSemaphoreTake(py_mutex_once(&s_lock), portMAX_DELAY);
 }
 
 static void unlock(void)
@@ -67,7 +57,6 @@ static con_t *find(lv_obj_t *obj)
     return NULL;
 }
 
-/* UI task. */
 static void flush(lv_timer_t *t)
 {
     con_t *c = lv_timer_get_user_data(t);
@@ -213,9 +202,4 @@ void t5_py_console_clear(lv_obj_t *con)
         c->clear = true;
     }
     unlock();
-}
-
-void t5_py_console_sink(const char *s, size_t n, void *con)
-{
-    t5_py_console_write(con, s, n);
 }

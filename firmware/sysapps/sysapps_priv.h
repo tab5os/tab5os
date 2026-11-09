@@ -70,6 +70,7 @@ void sa_photo_close(void);
 
 /* The apps */
 #include "t5_app/apps.h"
+#include "t5_app/registry.h"
 extern const t5_builtin_app_t sysapp_settings;
 extern const t5_builtin_app_t sysapp_files;
 extern const t5_builtin_app_t sysapp_appmanager;
@@ -78,3 +79,7 @@ extern const t5_builtin_app_t sysapp_ports;
 extern const t5_builtin_app_t sysapp_camera;
 extern const t5_builtin_app_t sysapp_terminal;
 extern const t5_builtin_app_t sysapp_editor;
+/* The ports a script run in Terminal or Editor may open: those in
+ * t5_ports/ports_table.c except mbus.debug and the single M5-Bus GPIOs. A
+ * hand copy of the table's names: keep the two in step. */
+extern const char *const sa_all_ports[];

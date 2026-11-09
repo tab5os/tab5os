@@ -30,8 +30,8 @@ typedef enum {
     T5_EV_RTC_ALARM,
 
     /* Sensors */
-    T5_EV_IMU_FAILED = 400,         /* init gave up after retries */
-    T5_EV_IMU_MOTION,
+    T5_EV_IMU_FAILED = 400,         /* init gave up (payload: int32_t, the t5_err_t) */
+    T5_EV_IMU_MOTION,               /* not posted yet (payload: none) */
 
     /* Display and touch */
     T5_EV_DISPLAY_READY = 500,
@@ -71,6 +71,7 @@ typedef enum {
     /* UI (payload: t5_ev_ui_t) */
     T5_EV_UI_ROTATE = 900,          /* the screen orientation changed */
     T5_EV_UI_STALL,                 /* the UI task missed its watchdog (payload: none) */
+    T5_EV_UI_INPUT_ADDED,           /* an input device (USB keyboard, mouse) joined LVGL (payload: none) */
 
     /* Apps (payload: t5_ev_app_t) */
     T5_EV_APP_STARTED = 1000,
@@ -148,6 +149,8 @@ typedef struct {
 
 #define T5_EVENT_MAX_DATA 32
 
+/* data is NULL for an event posted without a payload. Otherwise it points to
+ * T5_EVENT_MAX_DATA bytes: the len bytes posted, then zeros. */
 typedef void (*t5_event_handler_t)(t5_event_id_t id, const void *data, size_t len, void *arg);
 
 t5_err_t t5_event_init(void);

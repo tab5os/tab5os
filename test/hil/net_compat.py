@@ -9,18 +9,17 @@ network.WLAN, deflate, and the Tab5's own servers: t5.net.serve over HTTP
 and HTTPS, and a WebSocket upgrade, with this machine as the client.
 --external adds checks against public servers (needs internet).
 
-This machine runs the servers from net_stack.py plus a TLS echo, a minimal
+This machine runs the servers from _net.py plus a TLS echo, a minimal
 MQTT 3.1.1 broker and client threads the Tab5 starts through HTTP. Ends with
 `net handles` showing nothing left open.
 
-    ~/.espressif/python_env/idf6.1_py3.15_env/bin/python test/hil/net_compat.py [--external]
+    tools/t5/t5 hil net_compat [--external] [--host THIS_MACHINE]
 """
 import argparse
 import base64
 import json
 import os
 import re
-import socket
 import socketserver
 import ssl
 import struct
@@ -29,37 +28,22 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 
-sys.path.insert(0, os.path.dirname(__file__))
-import net_stack as ns  # noqa: E402
-from net_stack import Tab5  # noqa: E402
+import _net as hn
+from t5link import connect
 
-BASE = ns.BASE              # HTTP 8770, +1 TCP echo, +2 UDP echo, +3 WS echo
+BASE = hn.BASE
 MQTT_PORT = BASE + 4
 TLS_PORT = BASE + 5
 DEV_TCP, DEV_HTTP, DEV_HTTPS, DEV_ASYNC = 7782, 7783, 7784, 7785
 RESULTS = {}
 
-DEVICE_SCRIPT = r'''
-import t5, json, time
-H = "%(host)s"
-B = "http://%%s:%%d" %% (H, %(port)d)
+DEVICE_SCRIPT = hn.SCRIPT_HEAD + r'''
 CA = """%(ca)s"""
 CERT = """%(dev_cert)s"""
 KEY = """%(dev_key)s"""
-fails = 0
-def check(n, ok, extra=""):
-    global fails
-    print(("PASS " if ok else "FAIL ") + n + ("" if ok else " " + str(extra)))
-    if not ok: fails += 1
-def run(name, fn):
-    try:
-        fn()
-    except Exception as e:
-        import sys
-        sys.print_exception(e)
-        check(name, False, "raised %%r" %% (e,))
 def result(name, wait=5000):
     t0 = time.ticks_ms()
     while time.ticks_diff(time.ticks_ms(), t0) < wait:
@@ -311,11 +295,10 @@ if %(external)s:
         m.close()
         check("mqtts public broker", msg == b"hi", msg)
     run("external", external)
-print("DONE fails=%%d" %% fails)
-'''
+''' + hn.SCRIPT_TAIL
 
 
-class Http(ns.Http):
+class Http(hn.Http):
     def _route(self):
         p = self.path
         if p.startswith("/echo?"):
@@ -342,27 +325,36 @@ class Http(ns.Http):
 
 
 def http_client(ip, port, tls):
-    time.sleep(0.5)
-    try:
-        if tls:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            r = urllib.request.urlopen(f"https://{ip}:{port}/stream", context=ctx, timeout=10)
-        else:
-            rq = urllib.request.Request(f"http://{ip}:{port}/api?x=1", data=b"ping", headers={"X-Mac": "1"})
-            r = urllib.request.urlopen(rq, timeout=10)
-        RESULTS["httpget"] = {"status": r.status, "body": r.read().decode()}
-    except Exception as e:
-        RESULTS["httpget"] = {"error": repr(e)}
-        if hasattr(e, "code"):
+    if tls:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        rq, kw = f"https://{ip}:{port}/stream", {"context": ctx}
+    else:
+        rq, kw = urllib.request.Request(f"http://{ip}:{port}/api?x=1", data=b"ping", headers={"X-Mac": "1"}), {}
+    end = time.time() + 5
+    while True:
+        try:
+            r = urllib.request.urlopen(rq, timeout=10, **kw)
+            RESULTS["httpget"] = {"status": r.status, "body": r.read().decode()}
+            return
+        except urllib.error.HTTPError as e:
             RESULTS["httpget"] = {"status": e.code, "body": e.read().decode()}
+            return
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, ConnectionRefusedError) and time.time() < end:
+                time.sleep(0.1)         # the Tab5's server isn't listening yet
+                continue
+            RESULTS["httpget"] = {"error": repr(e)}
+            return
+        except OSError as e:
+            RESULTS["httpget"] = {"error": repr(e)}
+            return
 
 
 def ws_client(ip, port):
-    time.sleep(0.5)
     try:
-        s = socket.create_connection((ip, port), timeout=10)
+        s = hn.connect_retry(ip, port, timeout=10)
         key = base64.b64encode(os.urandom(16)).decode()
         s.sendall((f"GET /ws HTTP/1.1\r\nHost: {ip}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                    f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
@@ -380,7 +372,7 @@ def ws_client(ip, port):
             data += s.recv(1024)
         RESULTS["wsclient"] = data[2 : 2 + n].decode()
         s.close()
-    except Exception as e:
+    except (OSError, UnicodeDecodeError) as e:
         RESULTS["wsclient"] = repr(e)
 
 
@@ -503,48 +495,40 @@ def make_certs(d, host):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--external", action="store_true")
-    ap.add_argument("--host")
+    ap.add_argument("--host", help="this machine's address as the Tab5 sees it")
     a = ap.parse_args()
-    host = a.host or ns.my_ip()
-    tmp = tempfile.mkdtemp()
-    certs = make_certs(tmp, host)
-    TlsEcho.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    TlsEcho.ctx.load_cert_chain(os.path.join(tmp, "srv.pem"), os.path.join(tmp, "srv.key"))
-    ns.Http.script = Http.script = (DEVICE_SCRIPT % {
-        "host": host, "port": BASE, "mqtt": MQTT_PORT, "tls_port": TLS_PORT, "dev_tcp": DEV_TCP,
-        "dev_http": DEV_HTTP, "dev_https": DEV_HTTPS, "dev_async": DEV_ASYNC, "ca": certs["ca.pem"],
-        "dev_cert": certs["dev.pem"], "dev_key": certs["dev.key"], "external": "True" if a.external else "False",
-    }).encode()
-    servers = [ns.HServer((host, BASE), Http), ns.TServer((host, BASE + 1), ns.Echo),
-               socketserver.ThreadingUDPServer((host, BASE + 2), ns.UdpEcho), ns.TServer((host, BASE + 3), ns.WsEcho),
-               ns.TServer((host, MQTT_PORT), Broker), ns.TServer((host, TLS_PORT), TlsEcho)]
-    for s in servers:
-        threading.Thread(target=s.serve_forever, daemon=True).start()
-    ok = False
-    try:
-        with Tab5(timeout=40) as t:
-            if not ns.hold_network(t):
-                print("the Tab5 isn't on Wi-Fi")
-                return 1
-            code = (f"import t5;open('/data/user/_netcompat.py','wb')"
-                    f".write(t5.net.get('http://{host}:{BASE}/test.py').content)")
-            if "[done]" not in t.cmd("py exec " + code, timeout=40):
+    with connect(cmd_timeout=40) as t:
+        if not hn.hold_network(t):
+            print("the Tab5 isn't on Wi-Fi")
+            return 1
+        host = a.host or hn.my_ip(hn.tab5_ip(t))
+        tmp = tempfile.mkdtemp()
+        certs = make_certs(tmp, host)
+        TlsEcho.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        TlsEcho.ctx.load_cert_chain(os.path.join(tmp, "srv.pem"), os.path.join(tmp, "srv.key"))
+        Http.script = (DEVICE_SCRIPT % {
+            "host": host, "port": BASE, "mqtt": MQTT_PORT, "tls_port": TLS_PORT, "dev_tcp": DEV_TCP,
+            "dev_http": DEV_HTTP, "dev_https": DEV_HTTPS, "dev_async": DEV_ASYNC, "ca": certs["ca.pem"],
+            "dev_cert": certs["dev.pem"], "dev_key": certs["dev.key"], "external": "True" if a.external else "False",
+        }).encode()
+        servers = hn.serve([hn.HServer((host, BASE), Http), hn.TServer((host, BASE + 1), hn.Echo),
+                            socketserver.ThreadingUDPServer((host, BASE + 2), hn.UdpEcho),
+                            hn.TServer((host, BASE + 3), hn.WsEcho),
+                            hn.TServer((host, MQTT_PORT), Broker), hn.TServer((host, TLS_PORT), TlsEcho)])
+        try:
+            t0 = time.time()
+            out = hn.run_script(t, host, "netcompat")
+            if out is None:
                 print("couldn't fetch the test script")
                 return 1
-            t0 = time.time()
-            out = t.cmd("py run /data/user/_netcompat.py", timeout=90)
             print("\n".join(l for l in out.splitlines() if not re.match(r"^[IW] \(\d+\)", l)))
             print(f"({time.time() - t0:.1f} s)")
-            t.cmd("py exec import os;os.remove('/data/user/_netcompat.py')")
             t.cmd("power unlock net")
-            time.sleep(1)
-            left = t.cmd("net handles").strip().splitlines()[-1]
+            left = hn.handles_left(t)
             print("handles after:", left)
-            m = re.search(r"DONE fails=(\d+)", out)
-            ok = bool(m) and m.group(1) == "0" and left.startswith("0 ")
-    finally:
-        for s in servers:
-            s.shutdown()
+        finally:
+            hn.stop(servers)
+    ok = hn.passed(out) and left.startswith("0 ")
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 

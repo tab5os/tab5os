@@ -24,7 +24,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "t5_core/log.h"
-#include "t5_pins/pins.h"
 #include "ports_hw.h"
 
 static const char *TAG = "t5.ports.hw";
@@ -293,9 +292,6 @@ t5_err_t ports_hw_spi_transfer(ports_hw_t h, const void *tx, void *rx, size_t n)
 /* ---- GPIO ---------------------------------------------------------------- */
 t5_err_t ports_hw_gpio_config(int pin, bool output, bool pull_up, bool pull_down, bool open_drain)
 {
-    if (pin == T5_PIN_PWR_KEY) {
-        return T5_ERR_DENIED;   /* never reconfigured: power key and sleep wake line */
-    }
     const gpio_config_t gc = {
         .pin_bit_mask = 1ULL << pin,
         .mode = output ? (open_drain ? GPIO_MODE_INPUT_OUTPUT_OD : GPIO_MODE_INPUT_OUTPUT) : GPIO_MODE_INPUT,
@@ -321,7 +317,7 @@ int ports_hw_gpio_get(int pin)
 
 void ports_hw_pin_release(int pin)
 {
-    if (pin == T5_PIN_PWR_KEY || !GPIO_IS_VALID_GPIO(pin)) {
+    if (!GPIO_IS_VALID_GPIO(pin)) {
         return;
     }
     gpio_reset_pin((gpio_num_t)pin);

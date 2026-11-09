@@ -20,10 +20,11 @@
 #include "hal/assist_debug_hal.h"
 #include "soc/interrupts.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "riscv/rvruntime-frames.h"
 #include "t5_core/fault.h"
+#include "t5_core/task_tls.h"
+#include "t5_os_priv.h"
 
 /* IDF's port (port.c): per-core scheduler state. */
 extern volatile UBaseType_t port_xSchedulerRunning[portNUM_PROCESSORS];
@@ -33,7 +34,6 @@ extern volatile UBaseType_t port_uxCriticalNesting[portNUM_PROCESSORS];
 void __real_xt_unhandled_exception(void *frame);
 void __real_panicHandler(void *frame);
 
-#define TLS_APP_CTX (CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS - 1)   /* as t5_os_idf.c */
 #define MAX_POINT_TASKS 16
 #define MAX_DYING 8
 
@@ -68,25 +68,12 @@ uint32_t t5_fault_recovered(void)
     return s_recovered;
 }
 
-void *t5_app_ctx_of(t5_task_t task)
+/* t5_app_ctx_get() of any task. Inlined: the exception path calls it. */
+static inline __attribute__((always_inline)) void *app_ctx_of(void *task)
 {
-    return task ? pvTaskGetThreadLocalStoragePointer((TaskHandle_t)task, TLS_APP_CTX) : NULL;
+    return pvTaskGetThreadLocalStoragePointer((TaskHandle_t)task, T5_TASK_TLS_APP_CTX);
 }
 
-void t5_mutex_release_all(t5_mutex_t m)
-{
-    if (!m) return;
-    while (xSemaphoreGetMutexHolder((SemaphoreHandle_t)m) == xTaskGetCurrentTaskHandle()) {
-        if (xSemaphoreGiveRecursive((SemaphoreHandle_t)m) != pdTRUE) break;
-    }
-}
-
-bool t5_mutex_held(t5_mutex_t m)
-{
-    return m && xSemaphoreGetMutexHolder((SemaphoreHandle_t)m) == xTaskGetCurrentTaskHandle();
-}
-
-/* ---- recovery points ------------------------------------------------------ */
 static point_slot_t *IRAM_ATTR slot_find(void *task)
 {
     for (int i = 0; i < MAX_POINT_TASKS; i++) {
@@ -126,7 +113,6 @@ void t5_fault_pop(t5_fault_point_t *fp)
     if (s && s->top == fp) pop_slot(s, fp);
 }
 
-/* ---- where a recovered task resumes ------------------------------------------ */
 /* In case it was the stack guard that sent this task here. The scheduler
  * also turns it on at every context switch; starting it twice is harmless. */
 static void guard_rearm(void)
@@ -186,7 +172,6 @@ __attribute__((naked, used)) static void end_on_new_stack(void)
     __asm__("mv sp, a0\n j end_entry");
 }
 
-/* ---- deciding ------------------------------------------------------------------------ */
 /* Ask the blame hook; on a yes, point the saved frame at a recovery routine. */
 static bool IRAM_ATTR redirect(void *task, RvExcFrame *f, t5_fault_info_t *info, bool hang, uint32_t stack_top)
 {
@@ -195,7 +180,7 @@ static bool IRAM_ATTR redirect(void *task, RvExcFrame *f, t5_fault_info_t *info,
     uintptr_t sp = info->sp;
     t5_blame_args_t a = {
         .task = task,
-        .task_ctx = pvTaskGetThreadLocalStoragePointer((TaskHandle_t)task, TLS_APP_CTX),
+        .task_ctx = app_ctx_of(task),
         .point = fp,
         .scan_lo = sp,
         .scan_hi = fp && (uintptr_t)fp > sp ? (uintptr_t)fp : sp,
@@ -308,15 +293,6 @@ void IRAM_ATTR __wrap_xt_unhandled_exception(void *frame)
     __real_xt_unhandled_exception(frame);
 }
 
-/* ---- hung tasks --------------------------------------------------------------------- */
-static bool running_anywhere(TaskHandle_t t)
-{
-    for (int c = 0; c < portNUM_PROCESSORS; c++) {
-        if (xTaskGetCurrentTaskHandleForCore(c) == t) return true;
-    }
-    return false;
-}
-
 t5_err_t t5_fault_interrupt_task(t5_task_t task, uint32_t timeout_ms)
 {
     TaskHandle_t t = (TaskHandle_t)task;
@@ -325,7 +301,7 @@ t5_err_t t5_fault_interrupt_task(t5_task_t task, uint32_t timeout_ms)
     /* Suspending a task running on the other core takes effect at its next
      * interrupt; a task in a critical section never gets there. */
     TickType_t t0 = xTaskGetTickCount();
-    while (running_anywhere(t)) {
+    while (t5_task_on_a_core(t)) {
         if ((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS > timeout_ms) {
             vTaskResume(t);
             return T5_ERR_TIMEOUT;

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Editor (plan 8.4): write and run Python on the device.
  *
- * Scripts live in /data/user/scripts (and /sd/scripts with a card in).
+ * Scripts live in T5_USER_DIR/scripts (and /sd/scripts with a card in).
  * The editor page has the code view, a line and column readout and, once a
  * script has run, its output. Run saves first, then starts the script with
  * the Editor's permissions (ports, net, usb, storage) and its folder as the
@@ -19,8 +19,8 @@
 #include "codeview.h"
 #include "sysapps_priv.h"
 
-#define SCRIPTS "/data/user/scripts"
-#define SD_SCRIPTS "/sd/scripts"
+#define SCRIPTS T5_USER_DIR "/scripts"
+#define SD_SCRIPTS T5_SD_PATH "/scripts"
 #define FILE_MAX (128 * 1024)
 
 typedef struct {
@@ -70,14 +70,15 @@ static const char s_ui_demo[] =
     "    chart.push(t5.power.battery()[\"percent\"])\n"
     "    t5.sleep_ms(1000)\n";
 
-static void write_file(const char *path, const char *text)
+static bool write_file(const char *path, const char *text)
 {
-    t5_storage_write_atomic(path, text, strlen(text));
+    t5_err_t e = t5_storage_write_atomic(path, text, strlen(text));
+    sa_report(e, "save the script");
+    return e == T5_OK;
 }
 
 static void ensure_examples(void)
 {
-    mkdir("/data/user", 0755);
     mkdir(SCRIPTS, 0755);
     DIR *d = opendir(SCRIPTS);
     bool empty = true;
@@ -88,13 +89,9 @@ static void ensure_examples(void)
         }
         closedir(d);
     }
-    if (empty) {
-        write_file(SCRIPTS "/hello.py", s_hello);
-        write_file(SCRIPTS "/ui_demo.py", s_ui_demo);
-    }
+    if (empty && write_file(SCRIPTS "/hello.py", s_hello)) write_file(SCRIPTS "/ui_demo.py", s_ui_demo);
 }
 
-/* ---- the editor page ------------------------------------------------------------------- */
 static const char *base_name(const char *p)
 {
     const char *s = strrchr(p, '/');
@@ -141,8 +138,10 @@ static void run_finished(t5_py_t *vm, t5_py_state_t how, void *arg)
 {
     (void)vm;
     ed_t *ed = arg;
-    static const char *const msg[] = { "", "\n[done]\n", "\n[stopped by an exception]\n", "\n[stopped]\n" };
-    t5_py_console_write(ed->out, msg[how], strlen(msg[how]));
+    const char *msg = how == T5_PY_EXCEPTION ? "\n[stopped by an exception]\n"
+                    : how == T5_PY_STOPPED   ? "\n[stopped]\n"
+                                             : "\n[done]\n";
+    t5_py_console_write(ed->out, msg, strlen(msg));
     ed->run_done = true;     /* the timer frees the VM on the UI task */
 }
 
@@ -254,7 +253,7 @@ static void open_file(const char *path)
     md_appbar_add_action(bar, MD_ICON_SAVE, save_clicked, ed);
     md_appbar_add_action(bar, MD_ICON_KEYBOARD, keyboard_clicked, ed);
     ed->view = cv_create(body);
-    lv_obj_set_height(ed->view, 1);
+    lv_obj_set_height(ed->view, 1);   /* px: flex-grow sets it */
     lv_obj_set_flex_grow(ed->view, 2);
     ed->cv = cv_get(ed->view);
     ed->status = md_label_create(body, "", MD_TYPE_CAPTION);
@@ -265,7 +264,7 @@ static void open_file(const char *path)
     lv_obj_set_style_border_width(ed->out, T5_DP(1), 0);
     lv_obj_set_style_border_color(ed->out, md_color(md_scheme()->c.on_surface), 0);
     lv_obj_set_style_border_opa(ed->out, md_scheme()->on_surface.divider, 0);
-    lv_obj_set_height(ed->out, 1);
+    lv_obj_set_height(ed->out, 1);   /* px: flex-grow sets it */
     lv_obj_set_flex_grow(ed->out, 1);
     lv_obj_set_hidden(ed->out, true);
     cv_set_text(ed->cv, text ? text : "", len);
@@ -277,7 +276,6 @@ static void open_file(const char *path)
     sa_set_refresh(&s_nav, NULL, ed, ed_free);
 }
 
-/* ---- the file list --------------------------------------------------------------------------- */
 static void row_clicked(lv_event_t *e)
 {
     const char *path = lv_event_get_user_data(e);
@@ -335,7 +333,7 @@ static void create_clicked(lv_event_t *e)
     size_t l = strlen(name);
     snprintf(path, sizeof path, SCRIPTS "/%s%s", name, l > 3 && !strcmp(name + l - 3, ".py") ? "" : ".py");
     struct stat st;
-    if (stat(path, &st) != 0) write_file(path, "import t5\n\n");
+    if (stat(path, &st) != 0 && !write_file(path, "import t5\n\n")) return;
     t5_shell_keyboard_hide();
     open_file(path);
 }
@@ -357,7 +355,7 @@ static void build_list(void)
     list_dir(body, SCRIPTS, "On the device");
     list_dir(body, SD_SCRIPTS, "On the SD card");
     sa_note(body, "Scripts run with access to the Grove, M5-Bus, ext and RS-485 ports, the network, USB devices "
-                  "and files under /data/user, /sd and /usb.");
+                  "and files in internal storage, on the SD card and on a USB drive.");
     sa_set_refresh(&s_nav, list_refresh, NULL, NULL);
 }
 
@@ -378,14 +376,12 @@ static void on_destroy(t5_app_t *app)
 
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };
 
-static const char *const s_ports[] = { "grove", "ext", "rs485", "mbus.i2c", "mbus.uart", "mbus.spi", "stamp", NULL };
-
 const t5_builtin_app_t sysapp_editor = {
-    .id = "com.t5.editor",
+    .id = T5_APP_ID_EDITOR,
     .name = "Editor",
     .desc = &s_desc,
     .perms = T5_PERM_PORTS | T5_PERM_NET | T5_PERM_USB | T5_PERM_STORAGE,
     .orientation = T5_ORIENT_ANY,
-    .ports = s_ports,
+    .ports = sa_all_ports,
     .icon = MD_ICON_CODE,
 };

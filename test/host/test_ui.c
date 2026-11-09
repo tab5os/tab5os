@@ -1,10 +1,16 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Phase 4: rotation maths, the orientation filter, framebuffer damage
- * tracking and the MD2 tokens.
+ * tracking and the MD2 tokens. Phase 6: the shell's decisions that need no
+ * LVGL (shell_logic.c).
  */
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "unity.h"
+#include "md/md_icons.h"
 #include "md/md_tokens.h"
+#include "shell_logic.h"
+#include "t5_battery/policy.h"
 #include "t5_ui/fbtrack.h"
 #include "t5_ui/orient.h"
 #include "t5_ui/rotation.h"
@@ -153,11 +159,26 @@ static void test_orient_mask_and_bad_samples(void)
     /* Shaking (2.5 g) is ignored. */
     const int32_t shake[3] = { 0, -2500, 0 };
     TEST_ASSERT_FALSE(feed(&o, shake, 5000, 2000, T5_ROT_ALL, &r));
-    /* The allowed set shrinking forces the same-aspect partner first. */
+    /* The allowed set shrinking moves the screen even while flat: to the
+     * same-aspect partner first, else the first allowed rotation. */
     TEST_ASSERT_TRUE(t5_orient_update(&o, 0, 0, 1000, 9000, T5_ROT_MASK(T5_ROT_90), &r));
     TEST_ASSERT_EQUAL(T5_ROT_90, r);
     TEST_ASSERT_TRUE(t5_orient_update(&o, 0, 0, 1000, 9100, T5_ROT_PORTRAIT, &r));
-    TEST_ASSERT_TRUE(r == T5_ROT_0 || r == T5_ROT_180);
+    TEST_ASSERT_EQUAL(T5_ROT_0, r);
+}
+
+/* The one rule for leaving a rotation the foreground app doesn't allow
+ * (ui.c's t5_ui_set_allowed_rotations and the filter both use it). */
+static void test_orient_fallback(void)
+{
+    TEST_ASSERT_EQUAL(T5_ROT_90, t5_orient_fallback(T5_ROT_90, T5_ROT_ALL));
+    TEST_ASSERT_EQUAL(T5_ROT_90, t5_orient_fallback(T5_ROT_90, 0));
+    TEST_ASSERT_EQUAL(T5_ROT_270, t5_orient_fallback(T5_ROT_90, T5_ROT_MASK(T5_ROT_270)));
+    TEST_ASSERT_EQUAL(T5_ROT_180, t5_orient_fallback(T5_ROT_0, T5_ROT_MASK(T5_ROT_180) | T5_ROT_MASK(T5_ROT_90)));
+    /* No partner: the first allowed, from either landscape. */
+    TEST_ASSERT_EQUAL(T5_ROT_0, t5_orient_fallback(T5_ROT_90, T5_ROT_PORTRAIT));
+    TEST_ASSERT_EQUAL(T5_ROT_0, t5_orient_fallback(T5_ROT_270, T5_ROT_PORTRAIT));
+    TEST_ASSERT_EQUAL(T5_ROT_90, t5_orient_fallback(T5_ROT_180, T5_ROT_LANDSCAPE));
 }
 
 static void test_axis_map(void)
@@ -172,6 +193,14 @@ static void test_axis_map(void)
 }
 
 /* ---- damage tracking ------------------------------------------------------------ */
+
+static uint32_t covered(const t5_rect_t *r, int n, int32_t x, int32_t y)
+{
+    uint32_t c = 0;
+    for (int i = 0; i < n; i++) c += x >= r[i].x1 && x <= r[i].x2 && y >= r[i].y1 && y <= r[i].y2;
+    return c;
+}
+
 
 static void test_fbt_initial_full(void)
 {
@@ -212,14 +241,23 @@ static void test_fbt_merge_and_overflow(void)
     /* Adjacent strips merge into one. */
     t5_fbt_add(&t, (t5_rect_t){ 0, 0, 639, 99 });
     t5_fbt_add(&t, (t5_rect_t){ 0, 100, 639, 199 });
-    TEST_ASSERT_EQUAL(1, t.list[0].n);
     TEST_ASSERT_EQUAL_UINT32(640u * 200u, t5_fbt_pixels(&t, 0));
-    /* Many scattered rectangles collapse into the bounding box, never overflow. */
+    TEST_ASSERT_EQUAL(1, t5_fbt_take(&t, 0, out, T5_FBT_RECTS));
+    TEST_ASSERT_EQUAL(0, out[0].y1);
+    TEST_ASSERT_EQUAL(199, out[0].y2);
+    /* Many scattered rectangles: more than the list holds, and none lost. */
+    t5_rect_t added[40];
     for (int i = 0; i < 40; i++) {
         int x = (i * 97) % 1200, y = (i * 53) % 650;
-        t5_fbt_add(&t, (t5_rect_t){ x, y, x + 9, y + 9 });
+        added[i] = (t5_rect_t){ x, y, x + 9, y + 9 };
+        t5_fbt_add(&t, added[i]);
     }
-    TEST_ASSERT_TRUE(t.list[0].n <= T5_FBT_RECTS);
+    int n = t5_fbt_take(&t, 1, out, T5_FBT_RECTS);
+    TEST_ASSERT_TRUE(n >= 1 && n <= T5_FBT_RECTS);
+    for (int i = 0; i < 40; i++) {
+        TEST_ASSERT_TRUE(covered(out, n, added[i].x1, added[i].y1) > 0);
+        TEST_ASSERT_TRUE(covered(out, n, added[i].x2, added[i].y2) > 0);
+    }
     /* Out-of-bounds damage is clipped. */
     t5_fbt_init(&t, 100, 100);
     for (int i = 0; i < 3; i++) t5_fbt_take(&t, i, out, T5_FBT_RECTS);
@@ -246,12 +284,11 @@ static void test_fbt_pick(void)
 
 static void test_tokens_density_and_type(void)
 {
-    TEST_ASSERT_EQUAL(96, T5_DP(48));
     TEST_ASSERT_EQUAL(34, md_type(MD_TYPE_HEADLINE4)->size_dp);
     TEST_ASSERT_TRUE(md_type(MD_TYPE_BUTTON)->uppercase);
     TEST_ASSERT_EQUAL(MD_WEIGHT_MEDIUM, md_type(MD_TYPE_HEADLINE6)->weight);
-    /* Button tracking 0.0893 em at 28 px = 2.5 px -> 3 (rounded). */
-    TEST_ASSERT_INT_WITHIN(1, 2, md_type_tracking_px(MD_TYPE_BUTTON));
+    /* Button tracking 0.089 em at 14 dp (28 px) = 2.49 px -> 2. */
+    TEST_ASSERT_EQUAL(2, md_type_tracking_px(MD_TYPE_BUTTON));
     TEST_ASSERT_EQUAL(0, md_type_tracking_px(MD_TYPE_HEADLINE5));
 }
 
@@ -315,13 +352,6 @@ static void test_tokens_curves(void)
     TEST_ASSERT_EQUAL_HEX32(0x808080, md_mix(0xFFFFFF, 0x000000, 128) & 0xFEFEFE);
 }
 
-static uint32_t covered(const t5_rect_t *r, int n, int32_t x, int32_t y)
-{
-    uint32_t c = 0;
-    for (int i = 0; i < n; i++) c += x >= r[i].x1 && x <= r[i].x2 && y >= r[i].y1 && y <= r[i].y2;
-    return c;
-}
-
 static void test_fbt_subtract(void)
 {
     t5_rect_t a[2] = { { 0, 0, 99, 99 }, { 200, 0, 209, 9 } };
@@ -342,6 +372,98 @@ static void test_fbt_subtract(void)
     TEST_ASSERT_EQUAL(1, t5_fbt_subtract(a, 1, cut, 1, out, 1));
 }
 
+/* ---- the shell's logic ------------------------------------------------------------ */
+
+static void test_shell_recents(void)
+{
+    shell_recents_t r;
+    memset(&r, 0, sizeof r);
+    char ids[SHELL_RECENTS][T5_APP_ID_LEN];
+    TEST_ASSERT_EQUAL(0, shell_recents_list(&r, ids, SHELL_RECENTS));
+    shell_recents_note(&r, "a.a");
+    shell_recents_note(&r, "b.b");
+    shell_recents_note(&r, "c.c");
+    TEST_ASSERT_EQUAL(3, shell_recents_list(&r, ids, SHELL_RECENTS));
+    TEST_ASSERT_EQUAL_STRING("c.c", ids[0]);
+    TEST_ASSERT_EQUAL_STRING("a.a", ids[2]);
+    /* Launching a listed app moves it to the front, without a duplicate. */
+    shell_recents_note(&r, "a.a");
+    TEST_ASSERT_EQUAL(3, shell_recents_list(&r, ids, SHELL_RECENTS));
+    TEST_ASSERT_EQUAL_STRING("a.a", ids[0]);
+    TEST_ASSERT_EQUAL_STRING("c.c", ids[1]);
+    TEST_ASSERT_EQUAL_STRING("b.b", ids[2]);
+    /* Full: the oldest drops off. */
+    char id[8];
+    for (int i = 0; i < SHELL_RECENTS; i++) {
+        snprintf(id, sizeof id, "x.%d", i);
+        shell_recents_note(&r, id);
+    }
+    TEST_ASSERT_EQUAL(SHELL_RECENTS, shell_recents_list(&r, ids, SHELL_RECENTS));
+    TEST_ASSERT_EQUAL_STRING("x.5", ids[0]);
+    TEST_ASSERT_EQUAL_STRING("x.0", ids[SHELL_RECENTS - 1]);
+    TEST_ASSERT_EQUAL(2, shell_recents_list(&r, ids, 2));
+    /* A full-length id survives intact. */
+    char longid[T5_APP_ID_LEN];
+    memset(longid, 'z', sizeof longid - 1);
+    longid[sizeof longid - 1] = 0;
+    shell_recents_note(&r, longid);
+    shell_recents_list(&r, ids, 1);
+    TEST_ASSERT_EQUAL_STRING(longid, ids[0]);
+}
+
+static void test_shell_battery_icon(void)
+{
+    shell_status_t st = { .battery_pct = 50 };
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_STD, shell_battery_icon(&st));
+    st.battery_pct = T5_DIS_WARN_PCT + 1;
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_STD, shell_battery_icon(&st));
+    st.battery_pct = T5_DIS_WARN_PCT;            /* where the battery service warns */
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_ALERT, shell_battery_icon(&st));
+    st.battery_pct = 95;
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_FULL, shell_battery_icon(&st));
+    st.battery_pct = -1;                         /* not measured yet: no alarm */
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_STD, shell_battery_icon(&st));
+    st = (shell_status_t){ .battery_pct = 10, .low_power = true };
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_SAVER, shell_battery_icon(&st));
+    st.charging = true;                          /* charging wins over saver */
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_CHARGING_FULL, shell_battery_icon(&st));
+    /* Full on USB power without charging (the charger stopped) counts as charged. */
+    st = (shell_status_t){ .battery_pct = 99, .usb_power = true };
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_CHARGING_FULL, shell_battery_icon(&st));
+    st.battery_pct = 98;
+    TEST_ASSERT_EQUAL_STRING(MD_ICON_BATTERY_FULL, shell_battery_icon(&st));
+}
+
+static void test_shell_app_order_and_removal(void)
+{
+    shell_app_t a[] = {
+        { .id = "com.x.zeta", .name = "zeta" },
+        { .id = "com.x.alpha", .name = "" },        /* no name: sorted and shown by id */
+        { .id = "com.x.b", .name = "Beta" },
+        { .id = "com.x.a", .name = "ALPHA" },
+    };
+    qsort(a, 4, sizeof a[0], shell_app_name_cmp);
+    TEST_ASSERT_EQUAL_STRING("ALPHA", shell_app_name(&a[0]));
+    TEST_ASSERT_EQUAL_STRING("Beta", shell_app_name(&a[1]));
+    TEST_ASSERT_EQUAL_STRING("com.x.alpha", shell_app_name(&a[2]));
+    TEST_ASSERT_EQUAL_STRING("zeta", shell_app_name(&a[3]));
+    shell_app_t installed = { .id = "com.x.y" }, builtin = { .id = "com.t5.files", .builtin = true };
+    TEST_ASSERT_TRUE(shell_app_removable(&installed));
+    TEST_ASSERT_FALSE(shell_app_removable(&builtin));
+    installed.running = true;
+    TEST_ASSERT_FALSE(shell_app_removable(&installed));
+}
+
+static void test_shell_time_text(void)
+{
+    struct tm tm = { .tm_hour = 9, .tm_min = 5, .tm_wday = 4, .tm_mday = 5, .tm_mon = 10 };
+    char buf[48];
+    shell_fmt_clock(&tm, buf, sizeof buf);
+    TEST_ASSERT_EQUAL_STRING("09:05", buf);
+    shell_fmt_date(&tm, buf, sizeof buf);
+    TEST_ASSERT_EQUAL_STRING("Thursday, 5 November", buf);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -352,6 +474,7 @@ int main(void)
     RUN_TEST(test_orient_flat_ignored);
     RUN_TEST(test_orient_hysteresis);
     RUN_TEST(test_orient_mask_and_bad_samples);
+    RUN_TEST(test_orient_fallback);
     RUN_TEST(test_axis_map);
     RUN_TEST(test_fbt_initial_full);
     RUN_TEST(test_fbt_lag);
@@ -362,5 +485,9 @@ int main(void)
     RUN_TEST(test_tokens_dark_scheme);
     RUN_TEST(test_tokens_light_names_exist);
     RUN_TEST(test_tokens_curves);
+    RUN_TEST(test_shell_recents);
+    RUN_TEST(test_shell_battery_icon);
+    RUN_TEST(test_shell_app_order_and_removal);
+    RUN_TEST(test_shell_time_text);
     return UNITY_END();
 }

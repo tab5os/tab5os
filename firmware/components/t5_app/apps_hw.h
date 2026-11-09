@@ -26,8 +26,6 @@ bool apps_hw_coredump_save(const char *path);
  * table with app's permissions; then call its entry for the descriptor. */
 t5_err_t apps_hw_elf_load(t5_app_t *app, const char *path, void **handle, const t5_app_desc_t **desc);
 void apps_hw_elf_unload(void *handle);
-/* The loaded app's code (.text), for telling app faults from OS ones. */
-void apps_hw_elf_text(void *handle, uintptr_t *lo, uintptr_t *hi);
 
 /* The allocator under app heaps (tracker.h): placement by isolate.h. */
 void apps_hw_heap_install(void);
@@ -37,7 +35,6 @@ void apps_hw_reserve_take(void);
 void apps_hw_reserve_release(void);
 /* Does p lie in this app's heap (live block or not)? */
 bool apps_hw_heap_contains(const t5_tracker_t *t, const void *p);
-size_t apps_hw_heap_chunks_bytes(const t5_tracker_t *t);
 
 /* Run time of a task so far (us), for the CPU hog check. */
 uint64_t apps_hw_task_runtime_us(void *task);
@@ -52,4 +49,3 @@ bool apps_hw_task_park(void *task, int (*app_held)(void *task));
 void apps_hw_task_delete(void *task);
 void apps_hw_restart(void);
 void apps_hw_periodic(void (*fn)(void), uint32_t period_ms);
-size_t apps_hw_free_heap(void);

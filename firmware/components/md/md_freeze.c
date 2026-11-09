@@ -7,8 +7,7 @@
  * and hidden; the display's bottom layer draws the snapshots where the
  * screens currently are, at their current opacity. LVGL's own animation
  * logic (positions, opacity, screen events, auto-delete) runs unchanged,
- * and the top and sys layers (status bar, dialogs, keyboard) stay live
- * above. When the animation ends the screens are shown again.
+ * and the top and sys layers stay live above. When the animation ends the screens are shown again.
  *
  * On the device every lv_screen_load_anim() call goes through here (the
  * linker wraps it; md's CMakeLists.txt), so apps get it too.
@@ -292,12 +291,6 @@ void md_freeze_set_thaw_cb(lv_obj_t *scr, md_freeze_thaw_cb_t cb, void *arg)
     f->on_thaw_arg = arg;
 }
 
-const lv_draw_buf_t *md_freeze_snapshot(const lv_obj_t *scr)
-{
-    frozen_t *f = scr ? find(scr) : NULL;
-    return f ? f->snap : NULL;
-}
-
 bool md_screens_frozen(void)
 {
     for (int i = 0; i < MAX_FROZEN; i++) if (s_fz[i].obj) return true;
@@ -308,11 +301,6 @@ void md_freeze_set_enabled(bool on)
 {
     s_enabled = on;
     if (!on) md_thaw_screens();
-}
-
-bool md_freeze_enabled(void)
-{
-    return s_enabled;
 }
 
 void md_freeze_set_mode(uint32_t mask)
@@ -337,6 +325,34 @@ bool md_freeze_settled(void)
     return !s_settled || s_settled();
 }
 
+#define SETTLE_POLL_MS 4
+#define SETTLE_POLLS 30
+
+void md_settle_stop(md_settle_t *s)
+{
+    if (s->timer) {
+        lv_timer_delete(s->timer);
+        s->timer = NULL;
+    }
+}
+
+static void settle_poll(lv_timer_t *t)
+{
+    md_settle_t *s = lv_timer_get_user_data(t);
+    if (!md_freeze_settled() && ++s->polls < SETTLE_POLLS) return;
+    md_settle_stop(s);
+    s->done(s->arg);
+}
+
+void md_settle_start(md_settle_t *s, void (*done)(void *arg), void *arg)
+{
+    md_settle_stop(s);
+    s->polls = 0;
+    s->done = done;
+    s->arg = arg;
+    s->timer = lv_timer_create(settle_poll, SETTLE_POLL_MS, s);
+}
+
 void md_freeze_note_dialog(uint32_t prep_ms, uint32_t box_snap_ms, uint32_t compose_ms)
 {
     s_st.dialog_prep_ms_last = prep_ms;
@@ -344,11 +360,7 @@ void md_freeze_note_dialog(uint32_t prep_ms, uint32_t box_snap_ms, uint32_t comp
     s_st.compose_ms_last = compose_ms;
 }
 
-/* ---- scrims over a frozen backdrop ------------------------------------------ */
-/* Objects on the top layer under a scrim (the status bar) aren't in the
- * frozen backdrop, which is the screen alone, and they keep redrawing. So
- * the scrim is baked in everywhere but their areas, and drawn live over
- * those, which matches what a live scrim shows. */
+/* ---- scrims over a frozen backdrop (md_priv.h) -------------------------------- */
 #define MAX_BELOW 8
 static int below_areas(lv_obj_t *scrim, lv_area_t *out)
 {

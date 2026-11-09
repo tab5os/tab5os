@@ -9,16 +9,17 @@
 #include "t5_bsp/xpin.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
-#include "t5_display/t5_display.h"
-#include "t5_pins/pins.h"
+#include "t5_pins/table.h"
+#include "t5_power/autosave.h"
+#include "t5_power/power.h"
 #include "power_hw.h"
 #if CONFIG_PM_ENABLE
 #include "esp_pm.h"
 #endif
 
+static const char *TAG = "t5.power_hw";
 static SemaphoreHandle_t s_wake;
 #if CONFIG_PM_ENABLE
-static const char *TAG = "t5.power_hw";
 static esp_pm_lock_handle_t s_cpu_max;
 static bool s_cpu_max_held;
 #endif
@@ -48,16 +49,12 @@ t5_err_t t5_power_hw_init(void)
     return T5_OK;
 }
 
+_Static_assert(T5_PINS_RAIL_COUNT == T5_RAIL_BACKLIGHT, "t5_pins_rail_en[] covers the switched rails");
+
 t5_err_t t5_power_hw_rail_set(t5_rail_t rail, bool on)
 {
-    switch (rail) {
-    case T5_RAIL_USB5V: return t5_xpin_output(T5_XP_USB5V_EN, on);
-    case T5_RAIL_EXT5V: return t5_xpin_output(T5_XP_EXT5V_EN, on);
-    case T5_RAIL_WLAN: return t5_xpin_output(T5_XP_WLAN_PWR_EN, on);
-    case T5_RAIL_SPK: return t5_xpin_output(T5_XP_SPK_EN, on);
-    case T5_RAIL_BACKLIGHT: return t5_display_ready() ? t5_display_blank(!on) : T5_OK;
-    default: return T5_ERR_INVALID_ARG;
-    }
+    if ((unsigned)rail >= T5_PINS_RAIL_COUNT) return T5_ERR_INVALID_ARG;
+    return t5_xpin_output(t5_pins_rail_en[rail], on);
 }
 
 void t5_power_hw_cpu_low(bool low)
@@ -152,4 +149,16 @@ void t5_power_hw_halt(uint32_t wake_after_ms)
 {
     if (wake_after_ms) esp_sleep_enable_timer_wakeup((uint64_t)wake_after_ms * 1000);
     esp_deep_sleep_start();
+}
+
+/* Long enough for the last log lines, and a reply already handed to the
+ * network stack (the developer API's), to get out. */
+#define RESTART_SETTLE_MS 500
+
+void t5_power_restart(void)
+{
+    T5_LOG_ON_ERR(TAG, t5_autosave_now());
+    T5_LOGI(TAG, "restarting");
+    t5_delay_ms(RESTART_SETTLE_MS);
+    esp_restart();
 }

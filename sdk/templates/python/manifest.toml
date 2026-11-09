@@ -1,5 +1,5 @@
-id = "com.example.hello"
-name = "Hello"
+id = "@APP_ID@"
+name = "@APP_NAME@"
 version = "1.0.0"
 api = 1
 runtime = "micropython"

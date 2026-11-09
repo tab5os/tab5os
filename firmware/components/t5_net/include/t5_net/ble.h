@@ -59,10 +59,6 @@ t5_err_t t5_ble_subscribe(uint16_t val_handle, bool on);
 typedef void (*t5_ble_notify_cb_t)(uint16_t handle, const uint8_t *data, size_t len, void *arg);
 void t5_ble_set_notify_cb(t5_ble_notify_cb_t cb, void *arg);
 
-/* For t5_net, on its task: the C6 link came up or is going down, or the
- * enable setting changed (up = link state). */
-void t5_ble_on_link(bool up);
-
 /* Pure helpers (host-tested). */
 bool t5_ble_parse_addr(const char *s, uint8_t out[6]);           /* "aa:bb:cc:dd:ee:ff" -> LE bytes */
 void t5_ble_format_addr(const uint8_t addr[6], char out[18]);

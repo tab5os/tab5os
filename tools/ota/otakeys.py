@@ -8,10 +8,11 @@ Stdlib only: the PEM is decoded here, no openssl needed at build time.
 A private key in KEY_DIR is an error: only public halves belong in the tree.
 """
 import base64
-import hashlib
 import os
 import re
 import sys
+
+from sign import key_id
 
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
 
@@ -26,7 +27,7 @@ def load(path):
     der = base64.b64decode("".join(m.group(1).split()))
     if not der.startswith(P256_SPKI_PREFIX) or len(der) != len(P256_SPKI_PREFIX) + 65:
         sys.exit(f"{path}: not an uncompressed ECDSA P-256 public key")
-    return hashlib.sha256(der).digest(), der[-65:]
+    return key_id(der), der[-65:]
 
 
 def main():
@@ -44,7 +45,7 @@ def main():
         lines.append("    { \"%s\", { %s },\n      { %s } }," % (
             name[:31], ", ".join("0x%02x" % b for b in kid), ", ".join("0x%02x" % b for b in point)))
     if not keys:
-        lines.append("    { \"\", { 0 }, { 0 } },   /* none: only developer-mode updates install */")
+        lines.append("    { \"\", { 0 }, { 0 } },   /* none: only unsigned images t5_ota_source_t lets in install */")
     lines.append("};")
     lines.append("const int t5_ota_nkeys = %d;" % len(keys))
     text = "\n".join(lines) + "\n"

@@ -6,7 +6,7 @@
  * the app id into RTC no-init memory (survives a panic reset, not a power
  * loss); at boot, a crash-type wake with an id there means that app crashed.
  *
- * Records per app (in /data/sys/crashes.bin): consecutive crashes since the
+ * Records per app (in the system records dir, T5_CRASH_DB_NAME): consecutive crashes since the
  * app last exited cleanly, total crashes, the time and kind of the last one,
  * and the saved core dump. After two consecutive crashes the app is not
  * auto-launched (session restore, scheduled alarms); a person can still

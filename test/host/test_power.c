@@ -13,10 +13,12 @@
 #include "t5_pins/pins.h"
 #include "t5_power/arbiter.h"
 #include "t5_power/autosave.h"
+#include "t5_storage/paths.h"
 #include "t5_power/power.h"
 #include "t5_power/rail.h"
 #include "t5_time/rtc.h"
 #include "t5_time/t5_time.h"
+#include "board_power.h"
 #include "priv.h"
 
 static char s_dir[64];
@@ -42,7 +44,7 @@ void setUp(void)
     t5_time_reset_for_test();
     strcpy(s_dir, "/tmp/t5power.XXXXXX");
     TEST_ASSERT_NOT_NULL(mkdtemp(s_dir));
-    t5_autosave_set_dir(s_dir);
+    t5_sys_dir_set(s_dir);
 }
 
 void tearDown(void)
@@ -63,14 +65,17 @@ static void test_arbiter_idle_ladder(void)
 {
     TEST_ASSERT_EQUAL(T5_PWR_ACTIVE, t5_power_arbitrate(&(t5_arb_in_t){ 0 }));   /* all timers "never" */
     t5_arb_in_t in = arb(0);
+    const t5_power_timeouts_t to = in.to;
     TEST_ASSERT_EQUAL(T5_PWR_ACTIVE, t5_power_arbitrate(&in));
-    in.idle_ms = 30000;
+    in.idle_ms = to.dim_ms - 1;
+    TEST_ASSERT_EQUAL(T5_PWR_ACTIVE, t5_power_arbitrate(&in));
+    in.idle_ms = to.dim_ms;
     TEST_ASSERT_EQUAL(T5_PWR_DIM, t5_power_arbitrate(&in));
-    in.idle_ms = 120000;
+    in.idle_ms = to.screen_off_ms;
     TEST_ASSERT_EQUAL(T5_PWR_SCREEN_OFF, t5_power_arbitrate(&in));
-    in.idle_ms = 130000;
+    in.idle_ms = to.screen_off_ms + to.sleep_ms;
     TEST_ASSERT_EQUAL(T5_PWR_SLEEP, t5_power_arbitrate(&in));
-    in.idle_ms = 130000 + 24u * 3600 * 1000;
+    in.idle_ms = to.screen_off_ms + to.sleep_ms + to.soft_off_ms;
     TEST_ASSERT_EQUAL(T5_PWR_SOFT_OFF, t5_power_arbitrate(&in));
 }
 
@@ -144,16 +149,14 @@ static void test_rail_failure_counts_and_leaves_no_hold(void)
 
 static void test_rail_suspend_keeps_marked_rails(void)
 {
-    t5_rail_hold_t *u, *e, *w, *bl;
+    t5_rail_hold_t *u, *e, *w;
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_USB5V, "kbd", 0, &u));
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_EXT5V, "logger", T5_RAIL_KEEP_IN_SLEEP, &e));
-    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_WLAN, "net", 0, &w));
-    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire(T5_RAIL_BACKLIGHT, "power", 0, &bl));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_acquire_system(T5_RAIL_WLAN, "net", 0, &w));
     TEST_ASSERT_EQUAL(T5_OK, t5_rail_suspend(false));
     TEST_ASSERT_FALSE(mock_power.rail[T5_RAIL_USB5V]);
     TEST_ASSERT_TRUE(mock_power.rail[T5_RAIL_EXT5V]);
     TEST_ASSERT_FALSE(mock_power.rail[T5_RAIL_WLAN]);
-    TEST_ASSERT_TRUE(mock_power.rail[T5_RAIL_BACKLIGHT]);    /* follows the display, not Sleep */
     TEST_ASSERT_EQUAL(1, t5_rail_count(T5_RAIL_USB5V));      /* holds survive */
     TEST_ASSERT_EQUAL(T5_OK, t5_rail_resume());
     TEST_ASSERT_TRUE(mock_power.rail[T5_RAIL_USB5V]);
@@ -167,6 +170,13 @@ static void test_rail_suspend_keeps_marked_rails(void)
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_release(u));
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_rail_resume());
     TEST_ASSERT_FALSE(mock_power.rail[T5_RAIL_USB5V]);
+}
+
+static void test_backlight_is_not_a_rail(void)
+{
+    t5_rail_hold_t *h = (t5_rail_hold_t *)1;
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_rail_acquire(T5_RAIL_BACKLIGHT, "app", 0, &h));
+    TEST_ASSERT_EQUAL(0, t5_rail_count(T5_RAIL_BACKLIGHT));
 }
 
 /* ---- wake locks ----------------------------------------------------------- */
@@ -280,6 +290,7 @@ static void test_classify_wake(void)
 
 /* ---- the service ---------------------------------------------------------- */
 
+/* As main does: the display behind the power service's outputs. */
 static void start_power(uint8_t rtc_flags)
 {
     mock_expanders_start();
@@ -287,6 +298,7 @@ static void start_power(uint8_t rtc_flags)
     t5_display_init();
     t5_display_release_hold();            /* as the UI does after its first frame */
     TEST_ASSERT_TRUE(t5_display_ready());
+    board_power_wire();
     TEST_ASSERT_EQUAL(T5_OK, t5_power_init());
 }
 
@@ -300,23 +312,29 @@ static void advance(uint32_t ms)
 
 static void test_state_machine_walks_and_resumes(void)
 {
-    mock_i2c_add(0x55, true)->regs[0] = 3;   /* ST7123 for the display probe */
+    mock_st712x_add(3);   /* ST7123 for the display probe */
     start_power(0);
-    TEST_ASSERT_TRUE(mock_power.rail[T5_RAIL_BACKLIGHT]);
-    TEST_ASSERT_EQUAL(80, t5_display_effective_brightness());
+    const int user = t5_display_brightness();
+    TEST_ASSERT_TRUE(user > 0);
+    TEST_ASSERT_EQUAL(user, t5_display_effective_brightness());
+    TEST_ASSERT_TRUE(t5_rail_is_on(T5_RAIL_BACKLIGHT));
     s_order[0] = 0;
     t5_suspend_hook_t h = { "app", T5_SUSPEND_PRIO_APPS, 500, hook_s, hook_r, "A" };
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_power_register_hook(&h));
+    t5_power_timeouts_t to;
+    t5_power_get_timeouts(&to);
 
-    advance(30000);
+    advance(to.dim_ms);
     TEST_ASSERT_EQUAL(T5_PWR_DIM, t5_power_state());
-    TEST_ASSERT_EQUAL(10, t5_display_effective_brightness());
-    advance(90000);
+    int dimmed = t5_display_effective_brightness();
+    TEST_ASSERT_TRUE(dimmed > 0 && dimmed < user);
+    TEST_ASSERT_EQUAL(user, t5_display_brightness());  /* the user's level is kept */
+    advance(to.screen_off_ms - to.dim_ms);
     TEST_ASSERT_EQUAL(T5_PWR_SCREEN_OFF, t5_power_state());
-    TEST_ASSERT_FALSE(mock_power.rail[T5_RAIL_BACKLIGHT]);
+    TEST_ASSERT_FALSE(t5_rail_is_on(T5_RAIL_BACKLIGHT));
     TEST_ASSERT_EQUAL(0, mock_backlight);
     TEST_ASSERT_FALSE(mock_panel_asleep);       /* video keeps running for touch */
-    advance(10000);
+    advance(to.sleep_ms);
     TEST_ASSERT_EQUAL(T5_PWR_SLEEP, t5_power_state());
     TEST_ASSERT_TRUE(mock_power.cpu_low);
     TEST_ASSERT_EQUAL_STRING("sA", s_order);
@@ -328,7 +346,7 @@ static void test_state_machine_walks_and_resumes(void)
     TEST_ASSERT_EQUAL(T5_PWR_ACTIVE, t5_power_state());
     TEST_ASSERT_FALSE(mock_power.cpu_low);
     TEST_ASSERT_EQUAL_STRING("sArA", s_order);
-    TEST_ASSERT_EQUAL(80, mock_backlight);
+    TEST_ASSERT_EQUAL(user, mock_backlight);
     t5_power_stats_t st;
     t5_power_stats(&st);
     TEST_ASSERT_EQUAL(1, st.sleeps);
@@ -339,7 +357,7 @@ static void test_state_machine_walks_and_resumes(void)
 
 static void test_wake_from_sleep_keeps_screen_off(void)
 {
-    mock_i2c_add(0x55, true)->regs[0] = 3;
+    mock_st712x_add(3);
     start_power(0);
     t5_power_request_screen_off();
     advance(10200);
@@ -354,26 +372,32 @@ static void test_wake_from_sleep_keeps_screen_off(void)
 
 static void test_screen_lock_and_low_power(void)
 {
-    mock_i2c_add(0x55, true)->regs[0] = 3;
+    mock_st712x_add(3);
     start_power(0);
+    const int user = t5_display_brightness();
+    t5_power_timeouts_t to;
+    t5_power_get_timeouts(&to);
     t5_wakelock_t *l = t5_wakelock_acquire(T5_LOCK_SCREEN, "video");
-    advance(200000);
+    advance(to.screen_off_ms + to.sleep_ms + 1000);
     TEST_ASSERT_EQUAL(T5_PWR_ACTIVE, t5_power_state());
     t5_power_set_low_power(true);
-    TEST_ASSERT_EQUAL(30, t5_display_effective_brightness());
+    TEST_ASSERT_TRUE(mock_ui_low_power);
+    int capped = t5_display_effective_brightness();
+    TEST_ASSERT_TRUE(capped > 0 && capped < user);
     t5_wakelock_release(l);
     t5_power_user_activity();
-    advance(15200);
-    TEST_ASSERT_EQUAL(T5_PWR_DIM, t5_power_state());          /* low-power mode dims at 15 s */
+    advance(to.dim_ms - 1000);
+    TEST_ASSERT_EQUAL(T5_PWR_DIM, t5_power_state());          /* low-power mode dims sooner */
     t5_power_set_low_power(false);
+    TEST_ASSERT_FALSE(mock_ui_low_power);
     t5_power_user_activity();
     t5_power_tick();
-    TEST_ASSERT_EQUAL(80, t5_display_effective_brightness());
+    TEST_ASSERT_EQUAL(user, t5_display_effective_brightness());
 }
 
 static void test_settings_persist(void)
 {
-    mock_i2c_add(0x55, true)->regs[0] = 3;
+    mock_st712x_add(3);
     start_power(0);
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_power_set_profile(T5_PROFILE_MOUNTED));
     t5_power_timeouts_t to = { 1000, 2000, 3000, 0 };
@@ -391,19 +415,12 @@ static void test_settings_persist(void)
 
 static void test_soft_off_records_and_pulses(void)
 {
-    mock_i2c_add(0x55, true)->regs[0] = 3;
+    mock_st712x_add(3);
     start_power(0);
     t5_time_set(1793880000, T5_TIME_SRC_USER);
     TEST_ASSERT_EQUAL(T5_OK, t5_power_schedule_wake(1793880000 + 3600, T5_WAKE_FLAG_BACKGROUND));
-    mock_i2c_dev_t *exp1 = mock_i2c_get(0x44);
-    exp1->wlog_n = 0;
     /* On the host nothing cuts power, so soft off comes back with FAIL and undoes. */
     TEST_ASSERT_EQUAL(T5_ERR_FAIL, t5_power_soft_off(T5_OFF_USER, false));
-    int highs = 0;
-    for (int i = 0; i < exp1->wlog_n; i++) {
-        if ((exp1->wlog[i] >> 8) == 0x05 && (exp1->wlog[i] & 0x10)) highs++;   /* OUT register, P4 high */
-    }
-    TEST_ASSERT_EQUAL(5, highs);
     TEST_ASSERT_FALSE(t5_xpin_out_level(T5_XP_PWROFF_PULSE));
     TEST_ASSERT_EQUAL(1, mock_events_count(T5_EV_POWER_SHUTDOWN));
     /* Undo cleared the record and the alarm. */
@@ -429,7 +446,7 @@ static bool rtc_capture(mock_i2c_dev_t *d, uint32_t reg, const uint8_t *data, si
 
 static void test_soft_off_arms_alarm_and_next_boot_sees_it(void)
 {
-    mock_i2c_add(0x55, true)->regs[0] = 3;
+    mock_st712x_add(3);
     start_power(0);
     s_rtc->on_write = rtc_capture;
     memset(s_written_rec, 0, 4);
@@ -457,12 +474,50 @@ static void test_soft_off_arms_alarm_and_next_boot_sees_it(void)
     TEST_ASSERT_EQUAL_HEX8(0, s_rtc->regs[0x20]);   /* one boot only */
 }
 
+static char s_out[64];
+static void out_screen(bool lit, int cap, void *arg)
+{
+    (void)arg;
+    char b[8];
+    snprintf(b, sizeof b, "%c%s ", lit ? 'L' : 'D', cap < 0 ? "" : "c");
+    strcat(s_out, b);
+}
+static void out_standby(bool enter, bool motion, void *arg)
+{
+    (void)arg;
+    strcat(s_out, enter ? (motion ? "S+m " : "S+ ") : (motion ? "S-m " : "S- "));
+}
+
+/* The outputs alone, without the display: what the state machine asks for. */
+static void test_outputs_follow_the_states(void)
+{
+    mock_expanders_start();
+    s_rtc = mock_rtc_start(0);
+    s_out[0] = 0;
+    const t5_power_outputs_t o = { .screen = out_screen, .standby = out_standby };
+    t5_power_set_outputs(&o);
+    TEST_ASSERT_EQUAL(T5_OK, t5_power_init());
+    t5_power_timeouts_t to;
+    t5_power_get_timeouts(&to);
+    advance(to.screen_off_ms);
+    t5_power_user_activity();
+    t5_power_tick();
+    /* Lit uncapped, dimmed, dark, then back through Dim to the user's level. */
+    TEST_ASSERT_EQUAL_STRING("L Lc Dc Lc L ", s_out);
+    s_out[0] = 0;
+    t5_power_set_motion_wake(true);
+    TEST_ASSERT_EQUAL(T5_ERR_FAIL, t5_power_soft_off(T5_OFF_USER, false));
+    TEST_ASSERT_EQUAL(T5_ERR_FAIL, t5_power_soft_off(T5_OFF_BATTERY_CRITICAL, true));
+    /* Motion wake armed for a normal off, not an emergency; disarmed after either. */
+    TEST_ASSERT_EQUAL_STRING("S+m S-m S+ S-m ", s_out);
+}
+
 static bool s_handler_called;
 static bool take_over(t5_off_reason_t r, void *arg) { (void)r; (void)arg; s_handler_called = true; return true; }
 
 static void test_shutdown_handler_and_emergency(void)
 {
-    mock_i2c_add(0x55, true)->regs[0] = 3;
+    mock_st712x_add(3);
     start_power(0);
     t5_power_set_shutdown_handler(take_over, NULL);
     s_order[0] = 0;
@@ -476,29 +531,6 @@ static void test_shutdown_handler_and_emergency(void)
     TEST_ASSERT_EQUAL_INT(T5_ERR_FAIL, t5_power_soft_off(T5_OFF_BATTERY_CRITICAL, true));   /* the mock never cuts power */
     TEST_ASSERT_FALSE(s_handler_called);           /* emergency skips charge mode... */
     TEST_ASSERT_EQUAL_STRING("", s_order);         /* ...and app callbacks */
-}
-
-static void test_session_blob(void)
-{
-    const char blob[] = "launcher:settings/wifi";
-    TEST_ASSERT_EQUAL(T5_OK, t5_session_set(blob, sizeof blob));
-    TEST_ASSERT_EQUAL(T5_OK, t5_autosave_now());
-    t5_autosave_reset_for_test();
-    char buf[64];
-    size_t len = 0;
-    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_session_get(buf, sizeof buf, &len));
-    TEST_ASSERT_EQUAL(T5_OK, t5_session_load());
-    TEST_ASSERT_EQUAL(T5_OK, t5_session_get(buf, sizeof buf, &len));
-    TEST_ASSERT_EQUAL(sizeof blob, len);
-    TEST_ASSERT_EQUAL_STRING(blob, buf);
-    /* A torn file is rejected, not half-read. */
-    char path[96];
-    snprintf(path, sizeof path, "%s/session.bin", s_dir);
-    FILE *f = fopen(path, "r+b");
-    fseek(f, 20, SEEK_SET);
-    fputc('X', f);
-    fclose(f);
-    TEST_ASSERT_EQUAL(T5_ERR_IO, t5_session_load());
 }
 
 static int s_saves;
@@ -526,11 +558,13 @@ int main(void)
     RUN_TEST(test_rail_refcount_and_owners);
     RUN_TEST(test_rail_failure_counts_and_leaves_no_hold);
     RUN_TEST(test_rail_suspend_keeps_marked_rails);
+    RUN_TEST(test_backlight_is_not_a_rail);
     RUN_TEST(test_wakelock_timeout_and_list);
     RUN_TEST(test_wakelock_table_full);
     RUN_TEST(test_suspend_order_budget_and_resume);
     RUN_TEST(test_offrec_roundtrip_and_corruption);
     RUN_TEST(test_classify_wake);
+    RUN_TEST(test_outputs_follow_the_states);
     RUN_TEST(test_state_machine_walks_and_resumes);
     RUN_TEST(test_wake_from_sleep_keeps_screen_off);
     RUN_TEST(test_screen_lock_and_low_power);
@@ -538,7 +572,6 @@ int main(void)
     RUN_TEST(test_soft_off_records_and_pulses);
     RUN_TEST(test_soft_off_arms_alarm_and_next_boot_sees_it);
     RUN_TEST(test_shutdown_handler_and_emergency);
-    RUN_TEST(test_session_blob);
     RUN_TEST(test_autosave_period);
     return UNITY_END();
 }

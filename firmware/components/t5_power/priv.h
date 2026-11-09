@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Internals shared between t5_power files and exposed to host tests.
+ * Internals shared between t5_power files and the host tests.
  */
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
 #include "t5_power/power.h"
+#include "t5_power/power_test.h"
 #include "power_hw.h"
 
 /* ---- shutdown record, kept in the RTC's 4 bytes of user RAM ------------- *
@@ -39,19 +40,12 @@ t5_wake_reason_t t5_power_classify_wake(const t5_wake_in_t *in);
  * Returns the number of hooks that failed. *ms_out: total time. */
 int t5_suspend_run(int min_prio, uint32_t *ms_out);
 int t5_resume_run(int min_prio, uint32_t *ms_out);
-void t5_suspend_reset_for_test(void);
 
 /* ---- wake locks (wakelock.c) -------------------------------------------- */
 void t5_wakelock_counts(uint16_t out[T5_LOCK_TYPE_COUNT]);
 /* Drop locks whose timeout passed. Returns how many expired. */
 int t5_wakelock_expire(uint32_t now_ms);
-void t5_wakelock_reset_for_test(void);
-
-/* ---- rails (rail.c) ----------------------------------------------------- */
-void t5_rail_reset_for_test(void);
-
-/* ---- autosave (autosave.c) ---------------------------------------------- */
-void t5_autosave_reset_for_test(void);
 
 /* ---- power.c ------------------------------------------------------------- */
-void t5_power_reset_for_test(void);
+/* The screen output's last state (t5_rail_is_on(T5_RAIL_BACKLIGHT)). */
+bool t5_power_screen_lit(void);

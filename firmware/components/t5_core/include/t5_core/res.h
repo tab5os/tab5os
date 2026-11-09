@@ -34,6 +34,9 @@ typedef enum {
     T5_RES_KIND_COUNT,
 } t5_res_kind_t;
 
+/* "tasks", "timers", "anims", "ui", "ports", "rails", "locks", "other". */
+const char *t5_res_kind_name(t5_res_kind_t kind);
+
 typedef void (*t5_res_release_fn_t)(void *handle);
 
 typedef struct {
@@ -70,6 +73,13 @@ typedef int (*t5_perm_check_fn_t)(uint32_t perm);
 void t5_core_set_perm_check(t5_perm_check_fn_t fn);
 /* T5_OK, T5_ERR_DENIED, or T5_ERR_TIMEOUT if the person didn't answer. */
 int t5_core_perm_check(uint32_t perm);
+
+/* May the calling app read (write: change) path? For services that open
+ * files for an app (camera photos, recordings). The app runtime installs
+ * its file policy; with none installed, or for system callers, yes. */
+typedef bool (*t5_path_check_fn_t)(const char *path, bool write);
+void t5_core_set_path_check(t5_path_check_fn_t fn);
+bool t5_core_path_check(const char *path, bool write);
 
 /* Owner name for the calling task: the app id, or "system". */
 const char *t5_app_ctx_id(void *ctx);

@@ -25,9 +25,7 @@
 
 static const char *TAG = "net.httpd";
 
-#define NH_REQ 0x48524551u      /* "HREQ" */
 #define MAX_CLIENTS 8
-#define HEAD_MAX 16384
 #define DEFAULT_BODY (64 * 1024)
 #define LIMIT_BODY (4 * 1024 * 1024)
 
@@ -128,7 +126,7 @@ static int conn_progress(t5_httpd_t *srv, conn_t *c)
     if (!c->head_end) {
         size_t end = t5np_head_end((const char *)c->buf, c->len);
         if (!end) {
-            if (c->len >= HEAD_MAX) {
+            if (c->len >= NET_HEAD_MAX) {
                 send_simple(c->s, 431, "Request Header Fields Too Large");
                 return 431;
             }
@@ -162,7 +160,7 @@ static int conn_progress(t5_httpd_t *srv, conn_t *c)
 static int conn_read(t5_httpd_t *srv, conn_t *c)
 {
     for (int pass = 0; pass < 8 && !c->done; pass++) {
-        size_t limit = HEAD_MAX + 2 * srv->max_body + 64;
+        size_t limit = NET_HEAD_MAX + 2 * srv->max_body + 64;
         if (c->len + 1024 > c->cap) {
             size_t cap = c->cap ? c->cap * 2 : 2048;
             if (cap > limit) cap = limit;
@@ -206,10 +204,14 @@ static void req_free(t5_httpd_req_t *r)
     free(r);
 }
 
+static void destroy_req(void *h)
+{
+    req_free(h);
+}
+
 static void release_req(void *h)
 {
-    t5_httpd_req_t *r = h;
-    if (nh_unregister(r, NH_REQ) == T5_OK) req_free(r);
+    T5_IGNORE(nh_unregister(h, NH_REQ));
 }
 
 static t5_err_t make_req(t5_httpd_t *srv, int i, t5_httpd_req_t **out)
@@ -242,7 +244,7 @@ static t5_err_t make_req(t5_httpd_t *srv, int i, t5_httpd_req_t **out)
     /* The connection is the request's now. */
     srv->c[i] = srv->c[--srv->n];
     memset(&srv->c[srv->n], 0, sizeof srv->c[srv->n]);
-    t5_err_t e = nh_register(&r->hdr, NH_REQ, release_req);
+    t5_err_t e = nh_register(&r->hdr, NH_REQ, release_req, destroy_req);
     if (e != T5_OK) {
         send_simple(r->s, 503, "Service Unavailable");
         req_free(r);
@@ -346,6 +348,11 @@ static void httpd_free(t5_httpd_t *srv)
     free(srv);
 }
 
+static void destroy_httpd(void *h)
+{
+    httpd_free(h);
+}
+
 static void release_httpd(void *h)
 {
     T5_IGNORE(t5_httpd_stop(h));       /* app exit: nothing to report to */
@@ -380,7 +387,7 @@ t5_err_t t5_httpd_start(uint16_t port, const t5_httpd_cfg_t *cfg, t5_httpd_t **o
     t5_net_addr_t a;
     srv->port = ns_addr(srv->ls, &a, false) == T5_OK ? a.port : port;
     snprintf(srv->hdr.what, sizeof srv->hdr.what, "%s server :%u", srv->cert ? "https" : "http", srv->port);
-    e = nh_register(&srv->hdr, NH_HTTPD, release_httpd);
+    e = nh_register(&srv->hdr, NH_HTTPD, release_httpd, destroy_httpd);
     if (e != T5_OK) {
         httpd_free(srv);
         return e;
@@ -400,9 +407,7 @@ uint16_t t5_httpd_port(t5_httpd_t *srv)
 
 t5_err_t t5_httpd_stop(t5_httpd_t *srv)
 {
-    T5_RETURN_ON_ERR(nh_unregister(srv, NH_HTTPD));
-    httpd_free(srv);
-    return T5_OK;
+    return nh_unregister(srv, NH_HTTPD);
 }
 
 /* ---- reading a request ---------------------------------------------------------------------- */
@@ -521,9 +526,7 @@ static t5_err_t send_head(t5_httpd_req_t *r, int status, const char *ctype, long
 static t5_err_t finish(t5_httpd_req_t *r)
 {
     nh_release(r);
-    T5_RETURN_ON_ERR(nh_unregister(r, NH_REQ));
-    req_free(r);
-    return T5_OK;
+    return nh_unregister(r, NH_REQ);
 }
 
 t5_err_t t5_httpd_respond(t5_httpd_req_t *req, int status, const char *content_type, const void *body, size_t len,
@@ -613,8 +616,7 @@ t5_err_t t5_httpd_websocket(t5_httpd_req_t *req, const char *subprotocol, size_t
     if (e == T5_OK) e = ws_adopt_server(req->s, req->extra, req->extra_len, subprotocol, max_msg, &ws);
     if (e == T5_OK) req->s = NULL;         /* the WebSocket owns the connection now */
     nh_release(req);
-    t5_err_t f = nh_unregister(req, NH_REQ);
-    if (f == T5_OK) req_free(req);
+    T5_IGNORE(nh_unregister(req, NH_REQ));
     if (e != T5_OK) return e;
     *out = ws;
     return T5_OK;

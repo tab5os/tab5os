@@ -4,11 +4,19 @@
 #include <string.h>
 #include <strings.h>
 #include "t5_pkg/manifest.h"
+#include "t5_storage/paths.h"
 
-static const char *const s_protected[] = { "/data/sys", "/data/apps", "/data/appdata", "/sd/apps", "/sd/appdata" };
-static const char *const s_shared[] = { "/data/user",  "/sd/DCIM",  "/sd/Photos",    "/sd/Pictures",
-                                        "/sd/Music",   "/sd/Videos", "/sd/Documents", "/sd/Downloads" };
-static const char *const s_all_roots[] = { "/sd", "/usb", "/data/user" };
+static const char *const s_protected[] = { T5_SYS_DIR, T5_APPS_DATA_DIR, T5_APPDATA_DIR, T5_APPS_SD_DIR };
+static const char *const s_shared[] = { T5_USER_DIR,           T5_DCIM_DIR,           T5_SD_PATH "/Photos",
+                                        T5_SD_PATH "/Pictures", T5_SD_PATH "/Music",    T5_SD_PATH "/Videos",
+                                        T5_SD_PATH "/Documents", T5_SD_PATH "/Downloads" };
+
+const t5_fs_root_t t5_fs_roots[] = {
+    { T5_SD_PATH, "SD card" },
+    { T5_USB_PATH, "USB drive" },
+    { T5_USER_DIR, "Internal storage" },
+};
+const size_t t5_fs_nroots = sizeof t5_fs_roots / sizeof t5_fs_roots[0];
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -81,9 +89,11 @@ t5_fs_verdict_t t5_fs_check(const t5_fs_scope_t *s, const char *abs, bool write,
         *need = (write ? 0 : T5_PERM_SHARED_READ) | T5_PERM_SHARED_WRITE | T5_PERM_ALL_FILES;
         return T5_FS_NEEDS_PERM;
     }
-    if (under_any(abs, s_all_roots, COUNT(s_all_roots))) {
-        *need = T5_PERM_ALL_FILES;
-        return T5_FS_NEEDS_PERM;
+    for (size_t i = 0; i < t5_fs_nroots; i++) {
+        if (t5_fs_under(abs, t5_fs_roots[i].path)) {
+            *need = T5_PERM_ALL_FILES;
+            return T5_FS_NEEDS_PERM;
+        }
     }
     return T5_FS_DENY;
 }

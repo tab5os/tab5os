@@ -20,12 +20,12 @@
 #include <unistd.h>
 #include "lvgl.h"
 #include "md/md.h"
+#include "md/md_diag.h"
 #include "md/md_icons.h"
 #include "sim.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_shell/shell.h"
-#include "shell_sys.h"
-#include "shell_priv.h"   /* launcher_drawer_open */
+#include "shell_priv.h"
 
 /* ---- clock: real for the window, virtual (deterministic) for screenshots -- */
 static bool s_virtual;
@@ -164,10 +164,10 @@ static int shots(const char *dir, const char *check, const char *update)
             lv_screen_load(home);
             run_virtual(500);
             if (s->scene == SCENE_QS) t5_shell_quick_settings(true);
-            if (s->scene == SCENE_WIDGETS) shell_sys_launch("com.t5.widgets", NULL);
+            if (s->scene == SCENE_WIDGETS) sim_show_widgets();
             if (s->scene == SCENE_APPS) {
-                shell_note_launch("com.t5.camera");
-                shell_note_launch("com.t5.files");
+                shell_note_launch(T5_APP_ID_CAMERA);
+                shell_note_launch(T5_APP_ID_FILES);
                 launcher_tick();
                 launcher_drawer_open();
             }
@@ -210,7 +210,7 @@ static int shots(const char *dir, const char *check, const char *update)
             }
             if (f) fclose(f);
         }
-        if (s->scene >= SCENE_LAUNCHER) shell_sim_reset();
+        if (s->scene >= SCENE_LAUNCHER) shell_reset();
         lv_display_delete(d);
         free(s_fb);
     }

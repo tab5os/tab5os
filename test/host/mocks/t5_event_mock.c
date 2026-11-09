@@ -1,31 +1,26 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Host event loop: synchronous dispatch through the real subscriber table.
+ * Host event loop: every post is delivered at once, on the posting task,
+ * through the real post and dispatch code (t5_event.c). Posts are logged.
  */
-#include <string.h>
+#include "t5_event_priv.h"
 #include "t5_mocks.h"
 
-void t5_event_dispatch(t5_event_id_t id, const void *data, size_t len);
-t5_err_t t5_event_table_init(void);
-
-static struct { t5_event_id_t id; } s_log[MOCK_EV_MAX];
+static t5_event_id_t s_log[MOCK_EV_MAX];
 static int s_n;
 
 t5_err_t t5_event_init(void) { return t5_event_table_init(); }
 
-t5_err_t t5_event_post(t5_event_id_t id, const void *data, size_t len)
+t5_err_t t5_event_loop_post(t5_event_id_t id, const t5_event_msg_t *msg)
 {
-    if (len > T5_EVENT_MAX_DATA) return T5_ERR_INVALID_ARG;
-    if (s_n < MOCK_EV_MAX) s_log[s_n++].id = id;
-    uint8_t buf[T5_EVENT_MAX_DATA] = {0};
-    if (data && len) memcpy(buf, data, len);
-    t5_event_dispatch(id, data ? buf : NULL, data ? sizeof buf : 0);
+    if (s_n < MOCK_EV_MAX) s_log[s_n++] = id;
+    t5_event_deliver(id, msg);
     return T5_OK;
 }
 
 int mock_events_count(t5_event_id_t id)
 {
     int n = 0;
-    for (int i = 0; i < s_n; i++) n += s_log[i].id == id;
+    for (int i = 0; i < s_n; i++) n += s_log[i] == id;
     return n;
 }
 

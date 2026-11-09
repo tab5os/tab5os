@@ -5,9 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "md/md.h"
-#include "t5_shell/shell.h"
-#include "t5_ui/t5_ui.h"
+#include "t5/shell.h"
+#include "t5/ui.h"
 #include "codeview.h"
 
 #define INDENT 4
@@ -670,7 +669,7 @@ lv_obj_t *cv_create(lv_obj_t *parent)
     cv->ta = lv_textarea_create(c);
     lv_textarea_set_one_line(cv->ta, true);
     lv_obj_remove_style_all(cv->ta);
-    lv_obj_set_size(cv->ta, 1, cv->lh);
+    lv_obj_set_size(cv->ta, 1, cv->lh);   /* px */
     /* Invisible in every state (the theme outlines a focused text area). */
     lv_obj_set_style_opa(cv->ta, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_ANY);
     lv_obj_set_style_opa(cv->ta, LV_OPA_TRANSP, LV_PART_CURSOR | LV_STATE_ANY);

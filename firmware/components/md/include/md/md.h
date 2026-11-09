@@ -58,8 +58,6 @@ void md_ripple_attach(lv_obj_t *obj);
 /* Return true when a full ripple is affordable. NULL = always. */
 typedef bool (*md_perf_probe_t)(void);
 void md_ripple_set_probe(md_perf_probe_t probe);
-/* Statistics for the rendering gate: presses and how many used the fallback. */
-void md_ripple_stats(uint32_t *presses, uint32_t *fallbacks);
 
 /* ---- motion ---------------------------------------------------------------- */
 void md_anim_set_curve(lv_anim_t *a, md_curve_t curve);
@@ -119,16 +117,6 @@ void md_thaw_screen(lv_obj_t *scr);
 void md_thaw_screens(void);
 bool md_screens_frozen(void);
 void md_screen_load_anim(lv_obj_t *scr, lv_screen_load_anim_t anim, uint32_t time, uint32_t delay, bool auto_del);
-/* Off: animations redraw the live widgets every frame (for comparison). */
-void md_freeze_set_enabled(bool on);
-bool md_freeze_enabled(void);
-/* Which animations use snapshots (all by default). */
-#define MD_FREEZE_TRANSITIONS 1u
-#define MD_FREEZE_DIALOG_BACKDROP 2u
-#define MD_FREEZE_DIALOG_BOX 4u
-#define MD_FREEZE_ALL 7u
-void md_freeze_set_mode(uint32_t mask);
-uint32_t md_freeze_mode(void);
 /* Show a frozen screen under a scrim of `color` at `opa` (0 = none). */
 void md_freeze_dim(lv_obj_t *scr, lv_color_t color, lv_opa_t opa);
 /* Draw into a frozen screen's snapshot once (a scrim, a shadow), so every
@@ -141,22 +129,6 @@ bool md_freeze_draw_into(lv_obj_t *scr, md_freeze_draw_fn_t fn, void *arg);
  * thaws every frozen screen). Cleared by the thaw. */
 typedef void (*md_freeze_thaw_cb_t)(lv_obj_t *scr, void *arg);
 void md_freeze_set_thaw_cb(lv_obj_t *scr, md_freeze_thaw_cb_t cb, void *arg);
-/* The frozen screen's snapshot (RGB565, the screen's size), or NULL. */
-const lv_draw_buf_t *md_freeze_snapshot(const lv_obj_t *scr);
-typedef struct {
-    uint32_t transitions, fallbacks, snapshots, failed;
-    uint32_t snap_ms_last, snap_ms_max;
-    uint32_t bake_ms_last;          /* md_freeze_bake_dim */
-    uint32_t dialog_prep_ms_last;   /* a dialog's snapshots, bake and compose */
-    uint32_t box_snap_ms_last, compose_ms_last;
-} md_freeze_stats_t;
-void md_freeze_note_dialog(uint32_t prep_ms, uint32_t box_snap_ms, uint32_t compose_ms);
-void md_freeze_stats(md_freeze_stats_t *out);
-void md_freeze_print(void);   /* the frozen screens, to the log */
-/* A scrim over a frozen backdrop. bake: into the snapshot (md_freeze_draw_into),
- * everywhere but over the top-layer objects below the scrim (the status bar);
- * !bake: live, over just those objects (from the scrim's DRAW_MAIN_END). */
-void md_scrim_draw(lv_layer_t *layer, lv_obj_t *scrim, lv_opa_t opa, bool bake);
 /* The display's "settled" probe: true when a full-screen change has been
  * copied into every framebuffer. Dialogs start their fade after it, so the
  * fade's frames don't also carry those copies. NULL = always settled. */
@@ -230,27 +202,6 @@ lv_obj_t *md_drawer_panel(lv_obj_t *drawer);
 lv_obj_t *md_drawer_add_item(lv_obj_t *drawer, const char *icon, const char *text, bool selected, md_action_cb_t cb,
                              void *user_data);
 void md_drawer_close(lv_obj_t *drawer);
-
-/* ---- rendering gate (plan 4.8) ---------------------------------------------- */
-/* The test screen from the design: app bar, 100-row list, card grid, FAB and
- * an open dialog. Returns the screen (not loaded). */
-lv_obj_t *md_gate_create(void);
-/* Scripted load for measurements, driven by a timer:
- *   MD_GATE_SCROLL      scroll the list up and down continuously
- *   MD_GATE_TRANSITION  slide between two full screens continuously
- *   MD_GATE_DIALOG      open and close the dialog continuously
- *   MD_GATE_IDLE        stop */
-typedef enum { MD_GATE_IDLE, MD_GATE_SCROLL, MD_GATE_TRANSITION, MD_GATE_DIALOG } md_gate_mode_t;
-void md_gate_run(lv_obj_t *gate, md_gate_mode_t mode);
-const char *md_gate_mode_name(md_gate_mode_t m);
-/* Frame rate while the gate animates (transition and dialog modes): frames
- * and milliseconds counted between consecutive frames with an animation
- * running, leaving out each step's first frame, whose delay (set-up such as
- * snapshots) is start_ms_max. The first call starts counting. */
-typedef struct {
-    uint32_t frames, ms, start_ms_max;
-} md_gate_anim_stats_t;
-void md_gate_anim_stats(md_gate_anim_stats_t *out, bool reset);
 
 #ifdef __cplusplus
 }

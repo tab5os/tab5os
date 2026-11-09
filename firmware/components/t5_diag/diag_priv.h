@@ -19,7 +19,14 @@ void diag_register_app(void);
 void diag_register_media(void);
 void diag_register_prof(void);
 void diag_register_py(void);
+void diag_register_ota(void);
+void diag_register_devmode(void);
 void diag_print_boot_banner(void);
 
 /* Parse "0x43", "67" etc. Returns false if not a number in [min, max]. */
 bool diag_parse_u32(const char *s, uint32_t min, uint32_t max, uint32_t *out);
+
+/* Run fn(arg) on a short-lived task with an internal-RAM stack and wait for
+ * it. The console's own stack is in PSRAM, and IDF forbids that while the
+ * cache is off: flash writes (OS updates) and ELF loading need this. */
+int diag_run_internal(const char *name, uint32_t stack, int (*fn)(void *arg), void *arg);

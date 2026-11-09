@@ -23,16 +23,14 @@
 #include "lvgl.h"
 #include "misc/cache/instance/lv_image_cache.h"
 #include "lwip/sockets.h"
-#include "t5_app/wrappers.h"
 #include <setjmp.h>
+#include "t5_app/apps.h"
+#include "t5_app/fspolicy.h"
+#include "t5_app/wrappers.h"
 #include "t5_core/event.h"
 #include "t5_core/fault.h"
 #include "t5_core/log.h"
-#include "t5_ports/ports.h"
-#include "t5_app/fspolicy.h"
-#include "t5_app/apps.h"
 #include "t5_storage/t5_storage.h"
-#include "t5_camera/camera.h"
 #include "t5_ui/t5_ui.h"
 #include "app_priv.h"
 #include "apps_hw.h"
@@ -41,7 +39,6 @@ static const char *TAG = "t5.app";
 
 /* Kernel objects an app creates: never internal RAM. */
 #define APP_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-#define APP_MAX_TASKS 16
 #define APP_MAX_PRIO 2          /* below every system service that does work */
 #define APP_MAX_SOCKETS 8       /* half of LWIP_MAX_SOCKETS: the OS keeps the rest */
 
@@ -83,7 +80,6 @@ static bool track_or_refuse(t5_res_kind_t kind, void *h, t5_res_release_fn_t rel
     return ok;
 }
 
-/* ---- heap -------------------------------------------------------------------- */
 void *t5_app_malloc(size_t n)
 {
     t5_app_t *a = owner();
@@ -166,15 +162,9 @@ char *t5_app_strdup(const char *s)
     return p;
 }
 
-/* ---- LVGL memory ------------------------------------------------------------------- */
 /* An app's lv_malloc comes from its own heap, so a leak ends with the app.
  * LVGL can be the one to free such a block (lv_event_free_user_data_cb):
  * its allocator asks here about anything outside its pool. */
-static bool lv_foreign_free(void *p)
-{
-    return free_tracked(p);
-}
-
 static void *lv_foreign_realloc(void *p, size_t n, bool *handled)
 {
     *handled = t5_tracker_owns(p);
@@ -183,22 +173,12 @@ static void *lv_foreign_realloc(void *p, size_t n, bool *handled)
 
 void t5_app_lv_mem_install(void)
 {
-    t5_ui_lv_set_foreign(lv_foreign_free, lv_foreign_realloc);
-}
-
-void *t5_app_lv_malloc(size_t n)
-{
-    return t5_app_malloc(n);
+    t5_ui_lv_set_foreign(free_tracked, lv_foreign_realloc);
 }
 
 void *t5_app_lv_malloc_zeroed(size_t n)
 {
     return t5_app_calloc(1, n);
-}
-
-void *t5_app_lv_calloc(size_t num, size_t size)
-{
-    return t5_app_calloc(num, size);
 }
 
 void *t5_app_lv_realloc(void *p, size_t n)
@@ -283,13 +263,12 @@ void t5_app_lv_draw_buf_destroy(lv_draw_buf_t *b)
     lv_draw_buf_destroy(b);
 }
 
-/* ---- FreeRTOS ---------------------------------------------------------------------- */
 static bool tasks_full(void)
 {
     t5_app_t *a = owner();
     if (a && a->exiting) return true;                  /* exit is stopping them */
-    if (!a || t5_tracker_count(&a->trk, T5_RES_TASK) < APP_MAX_TASKS) return false;
-    T5_LOGW(TAG, "%s: already has %d tasks; refused another", a->id, APP_MAX_TASKS);
+    if (!a || t5_tracker_count(&a->trk, T5_RES_TASK) < T5_APP_MAX_TASKS) return false;
+    T5_LOGW(TAG, "%s: already has %d tasks; refused another", a->id, T5_APP_MAX_TASKS);
     return true;
 }
 
@@ -347,7 +326,23 @@ void t5_app_events_check_stuck(void)
     }
 }
 
-/* ---- app code run on OS tasks ------------------------------------------------------- */
+/* An app callback on a system task (event dispatcher, USB driver): a fault
+ * comes back here and ends the app, not the task (fault.h), and one that
+ * never returns is stopped (t5_app_events_check_stuck). */
+static void guarded_call(t5_app_t *a, void (*fn)(void *), void *ctx)
+{
+    if (!a || a->exiting) return;
+    void *saved = t5_app_ctx_get();
+    t5_app_ctx_set(a);
+    guard_t *g = guard_begin(a);
+    t5_fault_point_t fp;
+    t5_fault_push(&fp, a);
+    if (setjmp(fp.jb) == 0) fn(ctx);
+    t5_fault_pop(&fp);
+    guard_end(g);
+    t5_app_ctx_set(saved);
+}
+
 /* Calls the app leaves queued for the UI task must not run after it has
  * gone: its code would no longer be there. */
 typedef struct late {
@@ -465,8 +460,6 @@ void t5_app_ui_noop_log_cb(lv_log_print_g_cb_t cb)
     (void)cb;
 }
 
-/* App callbacks on driver tasks: a fault ends the app, not the device, and
- * one that never returns is stopped (t5_app_events_check_stuck). */
 typedef struct {
     t5_usb_midi_cb_t cb;
     void *arg;
@@ -474,19 +467,23 @@ typedef struct {
 } midi_guard_t;
 static midi_guard_t s_midi;
 
+typedef struct {
+    const midi_guard_t *m;
+    const uint8_t *msg;
+    size_t len;
+} midi_call_t;
+
+static void midi_call(void *p)
+{
+    const midi_call_t *c = p;
+    c->m->cb(c->msg, c->len, c->m->arg);
+}
+
 static void midi_tramp(const uint8_t *msg, size_t len, void *arg)
 {
     midi_guard_t *m = arg;
-    t5_app_t *a = m->app;
-    if (!a || a->exiting) return;
-    t5_app_ctx_set(a);
-    guard_t *g = guard_begin(a);
-    t5_fault_point_t fp;
-    t5_fault_push(&fp, a);
-    if (setjmp(fp.jb) == 0) m->cb(msg, len, m->arg);
-    t5_fault_pop(&fp);
-    guard_end(g);
-    t5_app_ctx_set(NULL);
+    midi_call_t c = { m, msg, len };
+    guarded_call(m->app, midi_call, &c);
 }
 
 static void midi_release(void *p)
@@ -509,38 +506,77 @@ t5_err_t t5_app_usb_midi_listen(t5_usb_midi_cb_t cb, void *arg)
     return t5_usb_midi_listen(midi_tramp, &s_midi);
 }
 
+/* One per open stream: the app's callback, freed when the stream closes or
+ * the app exits (after the stream, which is tracked later). */
 typedef struct {
     t5_usb_uvc_frame_cb_t cb;
     void *arg;
     t5_app_t *app;
+    t5_usb_uvc_t *stream;
 } uvc_guard_t;
-static uvc_guard_t s_uvc_guard;
+
+static void uvc_guard_free(void *g)
+{
+    free(g);
+}
+
+typedef struct {
+    const uvc_guard_t *u;
+    const uint8_t *jpeg;
+    size_t len;
+} uvc_call_t;
+
+static void uvc_call(void *p)
+{
+    const uvc_call_t *c = p;
+    c->u->cb(c->jpeg, c->len, c->u->arg);
+}
 
 static void uvc_tramp(const uint8_t *jpeg, size_t len, void *arg)
 {
     uvc_guard_t *u = arg;
-    t5_app_t *a = u->app;
-    if (!a || a->exiting) return;
-    void *saved = t5_app_ctx_get();
-    t5_app_ctx_set(a);
-    guard_t *g = guard_begin(a);
-    t5_fault_point_t fp;
-    t5_fault_push(&fp, a);
-    if (setjmp(fp.jb) == 0) u->cb(jpeg, len, u->arg);
-    t5_fault_pop(&fp);
-    guard_end(g);
-    t5_app_ctx_set(saved);
+    uvc_call_t c = { u, jpeg, len };
+    guarded_call(u->app, uvc_call, &c);
 }
 
 t5_err_t t5_app_usb_uvc_open(uint16_t w, uint16_t h, uint8_t fps, t5_usb_uvc_frame_cb_t cb, void *arg, t5_usb_uvc_t **out)
 {
     t5_app_t *a = owner();
-    if (!a || !cb) return t5_usb_uvc_open(w, h, fps, cb, arg, out);
-    s_uvc_guard = (uvc_guard_t){ cb, arg, a };
-    return t5_usb_uvc_open(w, h, fps, uvc_tramp, &s_uvc_guard, out);
+    if (!a || !cb || !out) return t5_usb_uvc_open(w, h, fps, cb, arg, out);
+    uvc_guard_t *g = malloc(sizeof *g);
+    if (!g) return T5_ERR_NO_MEM;
+    *g = (uvc_guard_t){ cb, arg, a, NULL };
+    if (!track_or_refuse(T5_RES_OTHER, g, uvc_guard_free)) {
+        free(g);
+        return T5_ERR_NO_MEM;
+    }
+    t5_err_t e = t5_usb_uvc_open(w, h, fps, uvc_tramp, g, out);
+    if (e != T5_OK) {
+        untrack(g);
+        free(g);
+        return e;
+    }
+    g->stream = *out;
+    return T5_OK;
 }
 
-/* ---- files (fspolicy.h) ------------------------------------------------------------ */
+t5_err_t t5_app_usb_uvc_close(t5_usb_uvc_t *u)
+{
+    t5_err_t e = t5_usb_uvc_close(u);
+    t5_app_t *a = owner();
+    if (!a || e != T5_OK) return e;
+    uvc_guard_t *found = NULL;
+    apps_lock();
+    for (int i = 0; i < a->trk.n && !found; i++) {
+        const t5_track_ent_t *t = &a->trk.ent[i];
+        if (t->release == uvc_guard_free && ((uvc_guard_t *)t->handle)->stream == u) found = t->handle;
+    }
+    if (found) t5_tracker_remove(&a->trk, found);
+    apps_unlock();
+    free(found);
+    return e;
+}
+
 /* An app's task is deleted at exit wherever it stands, but not inside a
  * filesystem call: it would die holding the filesystem's lock. Exit waits
  * for the count to reach zero, and once the app is exiting its tasks stop
@@ -558,7 +594,7 @@ static t5_app_t *file_enter(void)
         apps_unlock();
         if (mine) {
             __atomic_sub_fetch(&a->file_calls, 1, __ATOMIC_SEQ_CST);
-            for (;;) t5_delay_ms(1000);     /* until the exit deletes this task */
+            for (;;) vTaskSuspend(NULL);    /* until the exit deletes this task */
         }
     }
     return a;
@@ -655,23 +691,19 @@ t5_err_t t5_app_storage_write_atomic(const char *path, const void *data, size_t 
 {
     if (!path_ok(path, true)) return T5_ERR_DENIED;
     t5_app_t *a = owner();
-    if (a && t5_fs_under(path, a->data_dir) && !t5_app_fs_room(a, len)) return T5_ERR_NO_MEM;
+    if (a && t5_app_fs_quota_applies(a, path) && !t5_app_fs_room(a, len)) return T5_ERR_NO_MEM;
     t5_app_t *fa = file_enter();
     t5_err_t e = t5_storage_write_atomic(path, data, len);
     file_leave(fa);
     return e;
 }
 
-t5_err_t t5_app_camera_photo(t5_camera_t *cam, const char *path, int quality)
+bool apps_path_check(const char *path, bool write)
 {
-    if (!path_ok(path, true)) return T5_ERR_DENIED;
-    return t5_camera_photo(cam, path, quality);
-}
-
-t5_err_t t5_app_camera_record_start(t5_camera_t *cam, const char *path, uint32_t kbps)
-{
-    if (!path_ok(path, true)) return T5_ERR_DENIED;
-    return t5_camera_record_start(cam, path, kbps);
+    t5_app_t *a = t5_app_self();
+    if (!a || t5_app_fs_check(a, path, write)) return true;
+    T5_LOGW(TAG, "%s: no access to %s", a->id, path);
+    return false;
 }
 
 /* Writes that count against the data dir's quota. */
@@ -720,11 +752,6 @@ int t5_app_fgetc(FILE *f)
     int r = fgetc(f);
     file_leave(fa);
     return r;
-}
-
-int t5_app_getc(FILE *f)
-{
-    return t5_app_fgetc(f);
 }
 
 int t5_app_fflush(FILE *f)
@@ -889,7 +916,6 @@ int t5_app_mutexes_held_by(t5_app_t *a, void *task)
     return n;
 }
 
-/* ---- LVGL timers and animations ---------------------------------------------------------- */
 static void timer_release(void *t)
 {
     lv_timer_delete(t);
@@ -932,18 +958,12 @@ static bool anim_alive(const anim_ref_t *r)
     return lv_anim_get(r->var, r->exec) != NULL;
 }
 
-/* Finished animations leave their refs behind; sweep them before adding. */
-static void anim_sweep(t5_app_t *a)
+/* Finished animations leave their refs behind: swept before adding more. */
+static bool anim_keep(void *p)
 {
-    t5_tracker_t *t = &a->trk;
-    for (int i = t->n - 1; i >= 0; i--) {
-        if (t->ent[i].kind != T5_RES_ANIM) continue;
-        anim_ref_t *r = t->ent[i].handle;
-        if (!anim_alive(r)) {
-            t5_tracker_remove(t, r);
-            free(r);
-        }
-    }
+    if (anim_alive(p)) return true;
+    free(p);
+    return false;
 }
 
 lv_anim_t *t5_app_lv_anim_start(const lv_anim_t *a)
@@ -955,13 +975,12 @@ lv_anim_t *t5_app_lv_anim_start(const lv_anim_t *a)
     if (!r) return run;
     *r = (anim_ref_t){ a->var, a->exec_cb, a->custom_exec_cb };
     apps_lock();
-    if (app->trk.counts[T5_RES_ANIM] >= 32) anim_sweep(app);
+    if (t5_tracker_count(&app->trk, T5_RES_ANIM) >= 32) t5_tracker_prune(&app->trk, T5_RES_ANIM, anim_keep);
     if (!t5_tracker_add(&app->trk, T5_RES_ANIM, r, anim_release)) free(r);
     apps_unlock();
     return run;
 }
 
-/* ---- system events ------------------------------------------------------------------------- */
 typedef struct {
     t5_event_id_t id;
     t5_event_handler_t fn;
@@ -969,21 +988,25 @@ typedef struct {
     t5_app_t *app;
 } ev_sub_t;
 
+typedef struct {
+    const ev_sub_t *s;
+    t5_event_id_t id;
+    const void *data;
+    size_t len;
+} ev_call_t;
+
+static void ev_call(void *p)
+{
+    const ev_call_t *c = p;
+    c->s->fn(c->id, c->data, c->len, c->s->arg);
+}
+
+/* The dispatcher carries on with the other subscribers if this one faults. */
 static void ev_tramp(t5_event_id_t id, const void *data, size_t len, void *p)
 {
     ev_sub_t *s = p;
-    if (s->app->exiting) return;
-    void *saved = t5_app_ctx_get();
-    t5_app_ctx_set(s->app);
-    /* The dispatcher is a system task: if the app's handler faults, come
-     * back here and carry on with the other subscribers (fault.h). */
-    t5_fault_point_t fp;
-    t5_fault_push(&fp, s->app);
-    guard_t *g = guard_begin(s->app);
-    if (setjmp(fp.jb) == 0) s->fn(id, data, len, s->arg);
-    guard_end(g);
-    t5_fault_pop(&fp);
-    t5_app_ctx_set(saved);
+    ev_call_t c = { s, id, data, len };
+    guarded_call(s->app, ev_call, &c);
 }
 
 static void ev_release(void *p)
@@ -1031,7 +1054,6 @@ t5_err_t t5_app_event_unsubscribe(t5_event_id_t id, t5_event_handler_t fn, void 
     return T5_OK;
 }
 
-/* ---- files ------------------------------------------------------------------------------------- */
 static void file_release(void *f)
 {
     fclose(f);
@@ -1042,7 +1064,7 @@ FILE *t5_app_fopen(const char *path, const char *mode)
     bool writing = mode && (mode[0] != 'r' || strchr(mode, '+'));
     if (!path_ok(path, writing)) return NULL;
     t5_app_t *a = owner();
-    bool in_data = a && writing && t5_fs_under(path, a->data_dir);
+    bool in_data = a && writing && t5_app_fs_quota_applies(a, path);
     int slot = -1;
     if (in_data) {
         for (int i = 0; slot < 0 && i < (int)(sizeof a->qfiles / sizeof a->qfiles[0]); i++) {
@@ -1074,7 +1096,6 @@ int t5_app_fclose(FILE *f)
     return r;
 }
 
-/* ---- raw lwIP sockets and errno ------------------------------------------------------------- */
 /* A socket is tracked under a key that can't be a heap pointer, so the app
  * runtime closes the fds an app leaves open (t5/net.h handles track
  * themselves). */
@@ -1137,7 +1158,6 @@ int *t5_errno(void)
     return &errno;
 }
 
-/* ---- abort and assert ----------------------------------------------------------------- */
 /* libc's would reboot the device. A bad store instead goes down the path every
  * app fault takes: the app is closed and the crash recorded, and the OS stays
  * up (isolate.h). */
@@ -1159,35 +1179,4 @@ void t5_app_assert_func(const char *file, int line, const char *func, const char
     T5_LOGE(TAG, "%s: assertion failed: %s, %s:%d (%s)", owner() ? owner()->id : "?", expr ? expr : "?",
             file ? file : "?", line, func ? func : "?");
     stop_app();
-}
-
-/* ---- ports: only the ones the manifest declares (plan 5.9) ------------------------------------- */
-static bool port_declared(const t5_app_t *a, const char *name)
-{
-    if (!a) return true;               /* system caller */
-    for (int i = 0; i < a->man.nports; i++) {
-        if (!strcmp(a->man.ports[i], name)) return true;
-    }
-    return false;
-}
-
-t5_err_t t5_app_port_open(const char *name, t5_port_mode_t mode, const void *cfg, t5_port_t **out)
-{
-    t5_app_t *a = owner();
-    if (name && !port_declared(a, name)) {
-        T5_LOGW(TAG, "%s: port %s not in its manifest", a->id, name);
-        return T5_ERR_DENIED;
-    }
-    return t5_port_open(name, mode, cfg, out);
-}
-
-t5_err_t t5_app_port_open_ex(const char *name, t5_port_mode_t mode, const void *cfg, uint32_t flags, t5_port_t **out,
-                             char *why, size_t whylen)
-{
-    t5_app_t *a = owner();
-    if (name && !port_declared(a, name)) {
-        if (why && whylen) snprintf(why, whylen, "port %s is not declared in the app's manifest", name);
-        return T5_ERR_DENIED;
-    }
-    return t5_port_open_ex(name, mode, cfg, flags, out, why, whylen);
 }

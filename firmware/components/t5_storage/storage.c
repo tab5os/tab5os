@@ -4,17 +4,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/crc.h"
 #include "t5_storage/t5_storage.h"
+#include "t5_storage/t5_storage_test.h"
 #include "t5_storage_hw.h"
 
 static const char *TAG = "t5.storage";
 
-#define MAX_SYNC_HOOKS 8
 #define DEAD_POLLS 2   /* consecutive failed status checks before we call it removed */
 
 static bool s_data_ok;
@@ -22,7 +23,6 @@ static t5_mutex_t s_lock;
 static t5_sd_state_t s_sd = T5_SD_ABSENT;
 static uint32_t s_next_try_ms;
 static int s_dead;
-static struct { t5_sync_hook_t fn; void *arg; } s_hooks[MAX_SYNC_HOOKS];
 
 const char *t5_storage_sd_state_str(t5_sd_state_t s)
 {
@@ -37,10 +37,7 @@ const char *t5_storage_sd_state_str(t5_sd_state_t s)
 
 static void lock(void)
 {
-    if (!s_lock) {
-        s_lock = t5_mutex_create();
-    }
-    t5_mutex_lock(s_lock);
+    t5_mutex_lock(t5_mutex_once(&s_lock));
 }
 
 static void unlock(void)
@@ -104,11 +101,21 @@ static void poll_task(void *arg)
     }
 }
 
+static void make_dirs(void)
+{
+    /* EEXIST is fine. */
+    mkdir(t5_sys_dir(), 0755);
+    mkdir(T5_USER_DIR, 0755);
+    mkdir(T5_TMP_DIR, 0755);
+}
+
 t5_err_t t5_storage_init(void)
 {
     t5_err_t err = t5_storage_hw_data_mount();
     s_data_ok = err == T5_OK;
-    if (!s_data_ok) {
+    if (s_data_ok) {
+        make_dirs();
+    } else {
         T5_LOGE(TAG, T5_DATA_PATH " unavailable: %s", t5_err_str(err));
     }
     /* First SD attempt inline so /sd is ready by the time the shell starts. */
@@ -130,9 +137,21 @@ t5_err_t t5_storage_data_usage(uint64_t *total, uint64_t *used)
     return t5_storage_hw_data_usage(total, used);
 }
 
+t5_err_t t5_storage_data_format(void)
+{
+    if (!s_data_ok) return T5_ERR_STATE;
+    T5_RETURN_ON_ERR(t5_storage_hw_data_format());
+    make_dirs();
+    T5_LOGW(TAG, T5_DATA_PATH " erased");
+    return T5_OK;
+}
+
 t5_sd_state_t t5_storage_sd_state(void)
 {
-    return s_sd;
+    lock();
+    t5_sd_state_t st = s_sd;
+    unlock();
+    return st;
 }
 
 t5_err_t t5_storage_sd_info(t5_sd_info_t *out)
@@ -146,18 +165,22 @@ t5_err_t t5_storage_sd_info(t5_sd_info_t *out)
     return err;
 }
 
+static t5_err_t eject_locked(void)
+{
+    if (s_sd != T5_SD_MOUNTED) {
+        return T5_ERR_STATE;
+    }
+    t5_storage_hw_sd_unmount();
+    s_sd = T5_SD_EJECTED;
+    T5_LOGI(TAG, "SD card ejected; safe to remove");
+    t5_event_post(T5_EV_SD_REMOVED, NULL, 0);
+    return T5_OK;
+}
+
 t5_err_t t5_storage_sd_eject(void)
 {
-    t5_storage_sync();
     lock();
-    t5_err_t err = T5_ERR_STATE;
-    if (s_sd == T5_SD_MOUNTED) {
-        t5_storage_hw_sd_unmount();
-        err = T5_OK;
-        T5_LOGI(TAG, "SD card ejected; safe to remove");
-        t5_event_post(T5_EV_SD_REMOVED, NULL, 0);
-    }
-    s_sd = T5_SD_EJECTED;
+    t5_err_t err = eject_locked();
     unlock();
     return err;
 }
@@ -171,7 +194,7 @@ t5_err_t t5_storage_sd_rescan(void)
     }
     unlock();
     t5_storage_sd_poll(t5_time_ms());
-    return s_sd == T5_SD_MOUNTED ? T5_OK : T5_ERR_NOT_FOUND;
+    return t5_storage_sd_state() == T5_SD_MOUNTED ? T5_OK : T5_ERR_NOT_FOUND;
 }
 
 t5_err_t t5_storage_write_atomic(const char *path, const void *data, size_t len)
@@ -268,50 +291,24 @@ t5_err_t t5_storage_blob_read(const char *path, uint16_t version, void *out, siz
     return err;
 }
 
-t5_err_t t5_storage_register_sync(t5_sync_hook_t fn, void *arg)
-{
-    for (int i = 0; i < MAX_SYNC_HOOKS; i++) {
-        if (!s_hooks[i].fn) {
-            s_hooks[i].fn = fn;
-            s_hooks[i].arg = arg;
-            return T5_OK;
-        }
-    }
-    return T5_ERR_NO_MEM;
-}
-
-t5_err_t t5_storage_sync(void)
-{
-    t5_err_t first = T5_OK;
-    for (int i = 0; i < MAX_SYNC_HOOKS; i++) {
-        if (s_hooks[i].fn) {
-            t5_err_t e = s_hooks[i].fn(s_hooks[i].arg);
-            if (e != T5_OK && first == T5_OK) {
-                first = e;
-            }
-        }
-    }
-    return first;
-}
-
 void t5_storage_reset_for_test(void)
 {
     s_sd = T5_SD_ABSENT;
     s_next_try_ms = 0;
     s_dead = 0;
     s_data_ok = false;
-    memset(s_hooks, 0, sizeof s_hooks);
 }
 
-/* USB mass storage (plan 7.8): unmount /sd and hand the raw card over.
- * The poller leaves an ejected card alone until t5_storage_sd_reclaim(). */
+/* The poller leaves an ejected card alone until t5_storage_sd_reclaim(). */
 t5_err_t t5_storage_sd_lend(void **card)
 {
     if (!card) return T5_ERR_INVALID_ARG;
-    if (s_sd == T5_SD_MOUNTED) T5_RETURN_ON_ERR(t5_storage_sd_eject());
     lock();
-    s_sd = T5_SD_EJECTED;
-    t5_err_t e = t5_storage_hw_sd_raw_open(card);
+    t5_err_t e = s_sd == T5_SD_MOUNTED ? eject_locked() : T5_OK;
+    if (e == T5_OK) {
+        s_sd = T5_SD_EJECTED;
+        e = t5_storage_hw_sd_raw_open(card);
+    }
     unlock();
     return e;
 }
@@ -324,7 +321,6 @@ t5_err_t t5_storage_sd_reclaim(void *card)
     return t5_storage_sd_rescan();
 }
 
-/* Erase the SD card: a new FAT filesystem, mounted again at /sd. */
 t5_err_t t5_storage_sd_format(void)
 {
     lock();

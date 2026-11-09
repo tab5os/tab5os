@@ -54,6 +54,10 @@ void t5_orient_init(t5_orient_t *o, const t5_orient_cfg_t *cfg, t5_rotation_t in
  * orientation now in force either way. */
 bool t5_orient_update(t5_orient_t *o, int32_t ux, int32_t uy, int32_t uz, uint32_t now_ms,
                       uint32_t allowed_mask, t5_rotation_t *out);
+/* Where the screen goes when the allowed set no longer includes current:
+ * the 180-degree partner (same aspect), else the first allowed one. current
+ * itself while it is allowed (or nothing is). */
+t5_rotation_t t5_orient_fallback(t5_rotation_t current, uint32_t allowed_mask);
 
 /* The mounting of the IMU: chip axes to panel axes. Each output axis is
  * one chip axis (0 x, 1 y, 2 z) times a sign. */

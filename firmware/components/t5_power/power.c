@@ -7,9 +7,6 @@
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
-#include "t5_display/t5_display.h"
-#include "t5_imu/t5_imu.h"
-#include "t5_input/t5_touch.h"
 #include "t5_pins/pins.h"
 #include "t5_power/arbiter.h"
 #include "t5_power/autosave.h"
@@ -32,6 +29,9 @@ static const char *TAG = "t5.power";
 #define PWROFF_TOGGLES 10         /* M5Unified's sequence: 10 x 50 ms toggles */
 #define PWROFF_STEP_MS 50
 #define PWROFF_GRACE_MS 1500      /* still running after this: the cut failed */
+/* T5_EV_POWER_SHUTDOWN is delivered on the event task, apps' handlers among
+ * them; this is their time to act before the suspend hooks stop the apps. */
+#define SHUTDOWN_NOTICE_MS 50
 #define SETTINGS_VERSION 1
 
 typedef struct {
@@ -52,7 +52,8 @@ static settings_t s_set, s_saved;
 static bool s_low_power;
 static bool s_usb;
 static bool s_inited;
-static t5_rail_hold_t *s_backlight;
+static t5_power_outputs_t s_out;
+static bool s_lit;
 static int64_t s_wake_trigger_us;       /* when something asked to leave Sleep */
 static uint32_t s_state_since_ms;
 static uint32_t s_soft_off_block_until;
@@ -70,8 +71,6 @@ static t5_wake_reason_t s_wake = T5_WAKE_UNKNOWN;
 static bool s_have_last_off;
 static t5_off_reason_t s_last_off;
 static bool s_restore_session;
-
-/* ---- names --------------------------------------------------------------- */
 
 const char *t5_power_state_name(t5_power_state_t s)
 {
@@ -109,7 +108,6 @@ const char *t5_off_reason_name(t5_off_reason_t r)
     case T5_OFF_BATTERY: return "battery";
     case T5_OFF_BATTERY_CRITICAL: return "battery-critical";
     case T5_OFF_CHARGE_UNPLUG: return "charge-unplug";
-    case T5_OFF_TEST: return "test";
     default: return "?";
     }
 }
@@ -129,11 +127,9 @@ const char *t5_wake_reason_name(t5_wake_reason_t r)
     }
 }
 
-/* ---- settings ------------------------------------------------------------ */
-
 static void settings_path(char *out, size_t cap)
 {
-    snprintf(out, cap, "%s/power.bin", t5_autosave_dir());
+    T5_IGNORE(t5_sys_path(out, cap, "power.bin"));
 }
 
 static t5_err_t save_settings(void *arg)
@@ -196,14 +192,24 @@ void t5_power_get_timeouts(t5_power_timeouts_t *out)
     *out = s_set.to;
 }
 
+static int active_dim_cap(void)
+{
+    return s_low_power ? LOW_POWER_PERCENT : -1;
+}
+
+static void screen(bool lit, int cap)
+{
+    s_lit = lit;
+    if (s_out.screen) s_out.screen(lit, cap, s_out.arg);
+}
+
 void t5_power_set_low_power(bool on)
 {
     if (on == s_low_power) return;
     s_low_power = on;
     T5_LOGI(TAG, "low-power mode %s", on ? "on" : "off");
-    if (s_state == T5_PWR_ACTIVE && t5_display_ready()) {
-        t5_display_dim(on ? LOW_POWER_PERCENT : -1);
-    }
+    if (s_state == T5_PWR_ACTIVE) screen(true, active_dim_cap());
+    if (s_out.low_power) s_out.low_power(on, s_out.arg);
     t5_power_hw_notify(false);
 }
 
@@ -217,8 +223,6 @@ void t5_power_set_usb_power(bool present)
     s_usb = present;
 }
 
-/* ---- inputs ------------------------------------------------------------- */
-
 void t5_power_user_activity(void)
 {
     s_last_input_ms = t5_time_ms();
@@ -229,12 +233,6 @@ void t5_power_user_activity(void)
         s_input_pending = true;
         t5_power_hw_notify(false);
     }
-}
-
-static void on_touch(const t5_touch_state_t *st, void *arg)
-{
-    (void)st; (void)arg;
-    t5_power_user_activity();
 }
 
 void t5_power_wake(t5_power_cause_t cause, uint32_t ms)
@@ -263,18 +261,21 @@ void t5_power_request_sleep(void)
     t5_power_request_screen_off();
 }
 
-void t5_power_request_active(void)
-{
-    t5_power_user_activity();
-}
-
 void t5_power_set_shutdown_handler(t5_shutdown_handler_t fn, void *arg)
 {
     s_shutdown_arg = arg;
     s_shutdown_fn = fn;
 }
 
-/* ---- scheduled wake ------------------------------------------------------ */
+void t5_power_set_outputs(const t5_power_outputs_t *out)
+{
+    s_out = out ? *out : (t5_power_outputs_t){ 0 };
+}
+
+bool t5_power_screen_lit(void)
+{
+    return s_lit;
+}
 
 t5_err_t t5_power_schedule_wake(time_t utc, uint32_t flags)
 {
@@ -298,8 +299,6 @@ time_t t5_power_next_wake(uint32_t *flags)
     return s_wake_at;
 }
 
-/* ---- state transitions --------------------------------------------------- */
-
 static void effective_timeouts(t5_power_timeouts_t *to)
 {
     *to = s_set.to;
@@ -309,24 +308,16 @@ static void effective_timeouts(t5_power_timeouts_t *to)
     }
 }
 
-static int active_dim_cap(void)
-{
-    return s_low_power ? LOW_POWER_PERCENT : -1;
-}
-
 /* One step deeper, from s_state. */
 static void enter_deeper(void)
 {
     switch (s_state) {
     case T5_PWR_ACTIVE:                         /* -> Dim */
-        if (t5_display_ready()) t5_display_dim(DIM_PERCENT);
+        screen(true, DIM_PERCENT);
         s_state = T5_PWR_DIM;
         break;
     case T5_PWR_DIM:                            /* -> Screen off */
-        if (s_backlight) {
-            T5_LOG_ON_ERR(TAG, t5_rail_release(s_backlight));
-            s_backlight = NULL;
-        }
+        screen(false, DIM_PERCENT);
         s_state = T5_PWR_SCREEN_OFF;
         break;
     case T5_PWR_SCREEN_OFF: {                   /* -> Sleep */
@@ -359,9 +350,7 @@ static void exit_to_shallower(void)
         break;
     }
     case T5_PWR_SCREEN_OFF:                     /* -> Dim */
-        if (!s_backlight) {
-            T5_LOG_ON_ERR(TAG, t5_rail_acquire(T5_RAIL_BACKLIGHT, "power", 0, &s_backlight));
-        }
+        screen(true, DIM_PERCENT);
         if (s_wake_trigger_us) {
             uint32_t ms = (uint32_t)((t5_time_us() - s_wake_trigger_us) / 1000);
             s_stats.last_resume_ms = ms;
@@ -371,7 +360,7 @@ static void exit_to_shallower(void)
         s_state = T5_PWR_DIM;
         break;
     case T5_PWR_DIM:                            /* -> Active */
-        if (t5_display_ready()) t5_display_dim(active_dim_cap());
+        screen(true, active_dim_cap());
         s_state = T5_PWR_ACTIVE;
         break;
     default:
@@ -390,9 +379,7 @@ static void account(uint32_t now)
 void t5_power_tick(void)
 {
     uint32_t now = t5_time_ms();
-    if (t5_wakelock_expire(now)) {
-        /* fine: the arbiter below sees the new counts */
-    }
+    t5_wakelock_expire(now);   /* the arbiter below sees the new counts */
 
     /* A scheduled wake while running: hold the CPU so the alarm work can run. */
     if (s_wake_at && t5_time_valid() && t5_time_now() >= s_wake_at) {
@@ -485,9 +472,7 @@ void t5_power_stats(t5_power_stats_t *out)
     out->cpu_mhz = t5_power_hw_cpu_mhz();
 }
 
-/* ---- soft off ------------------------------------------------------------ */
-
-static bool alarm_tm(time_t at, struct tm *out)
+static void alarm_tm(time_t at, struct tm *out)
 {
     /* The RX8130 alarm has minute resolution and ignores seconds: round up,
      * and keep it at least a minute out so it can't match while we shut down. */
@@ -495,7 +480,6 @@ static bool alarm_tm(time_t at, struct tm *out)
     if (at < now + 60) at = now + 60;
     at = (at + 59) / 60 * 60;
     gmtime_r(&at, out);
-    return true;
 }
 
 static void pwroff_pulse(void)
@@ -512,14 +496,13 @@ t5_err_t t5_power_soft_off(t5_off_reason_t reason, bool emergency)
     s_in_soft_off = true;
     T5_LOGW(TAG, "soft off: %s%s", t5_off_reason_name(reason), emergency ? " (emergency)" : "");
     t5_event_post(T5_EV_POWER_SHUTDOWN, NULL, 0);
-    t5_delay_ms(emergency ? 0 : 50);   /* let event handlers run */
+    if (!emergency) t5_delay_ms(SHUTDOWN_NOTICE_MS);
 
     /* Apps first (skipped in an emergency), then the system hooks, then save. */
     uint32_t ms = 0;
     int min_prio = emergency ? T5_SUSPEND_PRIO_SYSTEM : 0;
     t5_suspend_run(min_prio, &ms);
     T5_LOG_ON_ERR(TAG, t5_autosave_now());
-    t5_storage_sync();
 
     /* Charge mode takes over here when USB is attached. On the device it
      * doesn't return; if it declines, soft off carries on. */
@@ -542,16 +525,10 @@ t5_err_t t5_power_soft_off(t5_off_reason_t reason, bool emergency)
                     tm.tm_hour, tm.tm_min);
         }
     }
-    if (s_set.motion_wake && !emergency && t5_imu_status() == T5_IMU_READY) {
-        /* Active-low latched any-motion: drives the PMS150G trigger (bench 0.7). */
-        t5_imu_motion_cfg_t m = { .threshold_mg = 80, .duration_ms = 100, .pins = T5_IMU_INT1 | T5_IMU_INT2,
-                                  .active_high = false, .open_drain = false, .latched = true };
-        t5_imu_motion_enable(&m);
-    }
     uint8_t raw[T5_RTC_RAM_LEN];
     t5_offrec_encode(&rec, raw);
     t5_rtc_ram_write(raw);
-    if (t5_display_ready()) t5_display_sleep();
+    if (s_out.standby) s_out.standby(true, s_set.motion_wake && !emergency, s_out.arg);
 
     pwroff_pulse();
     t5_delay_ms(PWROFF_GRACE_MS);
@@ -561,10 +538,9 @@ t5_err_t t5_power_soft_off(t5_off_reason_t reason, bool emergency)
     T5_LOGE(TAG, "power was not cut");
     t5_xpin_output(T5_XP_PWROFF_PULSE, false);
     if (alarm) t5_rtc_alarm_clear();
-    if (s_set.motion_wake) t5_imu_motion_disable();
     memset(raw, 0, sizeof raw);
     t5_rtc_ram_write(raw);
-    if (t5_display_ready()) t5_display_wake();
+    if (s_out.standby) s_out.standby(false, s_set.motion_wake, s_out.arg);
     t5_resume_run(min_prio, &ms);
     s_in_soft_off = false;
     t5_power_user_activity();
@@ -595,8 +571,6 @@ bool t5_power_motion_wake(void)
 {
     return s_set.motion_wake;
 }
-
-/* ---- wake reason ---------------------------------------------------------- */
 
 static bool s_wake_read;
 
@@ -643,8 +617,6 @@ bool t5_power_should_restore_session(void)
     return s_restore_session;
 }
 
-/* ---- init ---------------------------------------------------------------- */
-
 static t5_err_t rails_suspend(void *arg)
 {
     (void)arg;
@@ -655,12 +627,6 @@ static t5_err_t rails_resume(void *arg)
 {
     (void)arg;
     return t5_rail_resume();
-}
-
-static t5_err_t storage_suspend(void *arg)
-{
-    (void)arg;
-    return t5_storage_sync();
 }
 
 static void task_step(void)
@@ -674,23 +640,20 @@ t5_err_t t5_power_init(void)
     if (s_inited) return T5_OK;
     t5_power_read_wake_reason();
     load_settings();
-    T5_IGNORE(t5_session_load());   /* none saved (first boot) is normal */
     T5_RETURN_ON_ERR(t5_power_hw_init());
 
     s_last_input_ms = t5_time_ms();
     s_state_since_ms = s_last_input_ms;
     s_state = T5_PWR_ACTIVE;
-    T5_RETURN_ON_ERR(t5_rail_acquire(T5_RAIL_BACKLIGHT, "power", 0, &s_backlight));
+    screen(true, active_dim_cap());
 
     const t5_suspend_hook_t hooks[] = {
-        { .name = "storage", .prio = T5_SUSPEND_PRIO_STORAGE, .budget_ms = 500, .suspend = storage_suspend },
         { .name = "rails", .prio = T5_SUSPEND_PRIO_RAILS, .budget_ms = 100, .suspend = rails_suspend, .resume = rails_resume },
     };
     for (size_t i = 0; i < sizeof hooks / sizeof hooks[0]; i++) {
         T5_LOG_ON_ERR(TAG, t5_power_register_hook(&hooks[i]));
     }
     T5_LOG_ON_ERR(TAG, t5_autosave_register("power", save_settings, NULL));
-    t5_touch_set_activity_hook(on_touch, NULL);
     s_inited = true;
     T5_LOGI(TAG, "profile %s: dim %us, screen off %us, sleep +%us, soft off +%uh",
             s_set.profile == T5_PROFILE_MOUNTED ? "mounted" : "handheld", (unsigned)(s_set.to.dim_ms / 1000),
@@ -709,7 +672,8 @@ void t5_power_reset_for_test(void)
     s_low_power = false;
     s_usb = false;
     s_inited = false;
-    s_backlight = NULL;
+    s_out = (t5_power_outputs_t){ 0 };
+    s_lit = false;
     s_wake_trigger_us = 0;
     s_state_since_ms = s_last_input_ms;
     s_soft_off_block_until = 0;

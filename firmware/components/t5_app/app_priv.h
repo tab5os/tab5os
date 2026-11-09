@@ -1,18 +1,20 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
-#include <stdio.h>
-#include "t5_app/fspolicy.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "lvgl.h"
 #include "t5_app/apps.h"
+#include "t5_app/fspolicy.h"
 #include "t5_app/tracker.h"
 #include "t5_core/fault.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
 #include "t5_pkg/manifest.h"
 #include "t5_pkg/pkg.h"
+
+#define T5_APP_MAX_TASKS 16      /* tasks one app may have */
 
 typedef enum {
     APP_LOADING,
@@ -24,7 +26,7 @@ typedef enum {
 
 struct t5_app {
     t5_app_ctx_hdr_t hdr;           /* first: services read the id through it */
-    char id[64];
+    char id[T5_APP_ID_LEN];
     t5_manifest_t man;
     char install_dir[T5_PKG_PATH_MAX];
     char data_dir[T5_PKG_PATH_MAX];
@@ -62,7 +64,6 @@ struct t5_app {
 void apps_lock(void);
 void apps_unlock(void);
 void apps_fs_add_pick(t5_app_t *a, const char *path, bool write);
-uint64_t apps_data_bytes(const t5_app_t *a);
 void picker_app_gone(t5_app_t *app);
 bool picker_dismiss(void);
 void picker_init(void);
@@ -72,22 +73,22 @@ t5_err_t perm_check_any(t5_app_t *a, uint32_t mask);
 t5_app_t *apps_by_instance(uint32_t instance);
 /* The foreground (or headless) app, for wrappers called without a context. */
 t5_app_t *apps_fallback(void);
-/* Releasing a task handle: ask nicely, then delete. */
-void apps_task_release(void *task);
 
 /* wrappers.c: how many of the app's own mutexes and semaphores task holds
  * (apps lock held). */
 int t5_app_mutexes_held_by(t5_app_t *a, void *task);
 /* perm.c */
-void perm_prompt(t5_app_t *app, uint32_t perm, t5_perm_cb_t cb, void *user);
 void perm_app_gone(t5_app_t *app);     /* UI task: close its open prompts */
+/* Installed as t5_core's permission check, which services call before using
+ * the camera or mic on an app's behalf. System callers always pass. */
+int perm_check_self(uint32_t perm);
+/* wrappers.c: installed as t5_core's path check (the file policy for the
+ * calling app). */
+bool apps_path_check(const char *path, bool write);
 /* anr.c */
 t5_err_t anr_init(void);
 void anr_app_changed(t5_app_t *app);
-/* launcher.c: the fallback home screen */
-lv_obj_t *launcher_screen(void);
-void launcher_refresh(void);
-/* lifecycle.c: the registered home screen, or the fallback */
+/* lifecycle.c: the registered home screen */
 lv_obj_t *apps_home_screen(void);
 void apps_home_refresh(void);
 /* energy accounting (lifecycle.c) */

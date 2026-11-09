@@ -4,15 +4,8 @@
  */
 #include <stdio.h>
 #include "esp_console.h"
-#include "esp_log.h"
 #include "t5_core/logring.h"
-#include "t5_diag/t5_diag.h"
 #include "diag_priv.h"
-
-void t5_diag_log_capture_start(void)
-{
-    t5_log_capture_start();
-}
 
 static int cmd_dmesg(int argc, char **argv)
 {

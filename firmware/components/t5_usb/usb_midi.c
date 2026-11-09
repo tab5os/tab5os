@@ -53,7 +53,7 @@ void usb_midi_check(usb_device_handle_t h, uint8_t addr, const usb_config_desc_t
     const usb_standard_desc_t *d = (const usb_standard_desc_t *)cfg;
     while ((d = usb_parse_next_descriptor_of_type(d, cfg->wTotalLength, USB_B_DESCRIPTOR_TYPE_INTERFACE, &off))) {
         const usb_intf_desc_t *i = (const usb_intf_desc_t *)d;
-        if (i->bInterfaceClass != USB_CLASS_AUDIO || i->bInterfaceSubClass != 3) continue;
+        if (i->bInterfaceClass != USB_CLASS_AUDIO || i->bInterfaceSubClass != USB_SUBCLASS_MIDISTREAMING) continue;
         midi_t m = { .dev = h, .addr = addr, .iface = i->bInterfaceNumber };
         int eoff = off;
         for (int k = 0; k < i->bNumEndpoints; k++) {

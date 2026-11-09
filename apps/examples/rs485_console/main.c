@@ -30,13 +30,14 @@ typedef struct {
     size_t len;
     int baud_i;
     volatile bool reading;
+    bool reader_up;             /* started and not yet joined */
+    SemaphoreHandle_t reader_done;
     t5_task_t task;
 } con_t;
 
 static const uint32_t s_bauds[] = { 9600, 19200, 38400, 57600, 115200 };
 #define NBAUD (sizeof s_bauds / sizeof s_bauds[0])
 
-/* ---- the log (UI task) ---------------------------------------------------------------------- */
 static void log_add(con_t *c, const char *s)
 {
     size_t n = strlen(s);
@@ -75,7 +76,6 @@ static void post_line(con_t *c, const char *line)
     if (t5_ui_async(posted, p) != T5_OK) free(p);
 }
 
-/* ---- reception (app task) ---------------------------------------------------------------- */
 static void reader(void *arg)
 {
     con_t *c = arg;
@@ -97,13 +97,17 @@ static void reader(void *arg)
         line[k] = 0;
         post_line(c, line);
     }
+    xSemaphoreGive(c->reader_done);
 }
 
-/* ---- actions (UI task) ------------------------------------------------------------------------ */
 static void close_port(con_t *c)
 {
     c->reading = false;
-    vTaskDelay(pdMS_TO_TICKS(120));     /* the reader leaves its loop */
+    if (c->reader_up) {
+        /* One pass of its loop: a 50 ms read, plus waiting for a Modbus exchange to finish. */
+        xSemaphoreTake(c->reader_done, pdMS_TO_TICKS(2000));
+        c->reader_up = false;
+    }
     t5_mutex_lock(c->lock);
     if (c->port) T5_IGNORE(t5_port_close(c->port));   /* closing on exit */
     c->port = NULL;
@@ -133,7 +137,7 @@ static void open_clicked(lv_event_t *e)
     log_add(c, msg);
     lv_label_set_text(lv_obj_get_child(c->open_btn, 0), "Close");
     c->reading = true;
-    t5_task_create("rs485_rx", reader, c, 4096, 4, T5_CORE_ANY, &c->task);
+    c->reader_up = t5_task_create("rs485_rx", reader, c, 4096, 4, T5_CORE_ANY, &c->task) == T5_OK;
 }
 
 static void baud_clicked(lv_event_t *e)
@@ -209,6 +213,7 @@ static void on_create(t5_app_t *app)
     c->app = app;
     c->text = calloc(1, LOG_MAX);
     c->lock = t5_mutex_create();
+    c->reader_done = xSemaphoreCreateBinary();
     c->baud_i = 4;
     lv_obj_t *bar;
     lv_obj_t *page = md_page_create(t5_app_screen(app), "RS-485 Console", back, NULL, &bar);
@@ -249,6 +254,7 @@ static void on_destroy(t5_app_t *app)
     if (!c) return;
     close_port(c);
     t5_mutex_delete(c->lock);
+    vSemaphoreDelete(c->reader_done);
     free(c->text);
     free(c);
 }

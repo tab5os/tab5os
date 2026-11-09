@@ -24,15 +24,14 @@ t5_err_t t5_time_init(void);
 bool t5_time_valid(void);
 t5_time_source_t t5_time_source(void);
 time_t t5_time_now(void);
-/* Set wall time (UTC) in the system clock and the RTC. */
+/* Set wall time (UTC): the system clock, then the RTC that keeps it across
+ * power-off. T5_OK once the clock is set; an RTC that can't be written is
+ * logged, and only costs the time at the next power-off. */
 t5_err_t t5_time_set(time_t utc, t5_time_source_t src);
 
-/* ---- time zone (plan 6.5) ---------------------------------------------------
- * The clock stays in UTC; the zone is a POSIX TZ string, so localtime_r()
- * gives local time once it is applied. t5_time_tz_load() applies the saved
- * zone (main, after storage). */
-#include <stdbool.h>
-struct tm;
+/* Time zone. The clock stays in UTC; the zone is a POSIX TZ string, so
+ * localtime_r() gives local time once it is applied. t5_time_tz_load()
+ * applies the saved zone (main, after storage). */
 void t5_time_tz_load(void);
 t5_err_t t5_time_set_tz(const char *posix);
 const char *t5_time_tz(void);

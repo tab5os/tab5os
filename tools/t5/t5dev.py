@@ -3,7 +3,7 @@
 """The app developer half of the t5 CLI (plan 8.6).
 
   t5 new NAME [--python] [--id ID] [--dir DIR]   an app from the C or Python template
-  t5 build [DIR]                                 build (C) and pack into DIR/build/<id>.t5app
+  t5 app-build [DIR]                             build (C) and pack into DIR/build/<id>.t5app
   t5 pack [DIR] [-o OUT] [--sign KEY]            pack only (signed or unsigned)
   t5 keygen KEY.pem                              an ECDSA P-256 signing key
   t5 run [DIR] [--host H] [--usb] [--no-logs]    build, push, launch and stream the log
@@ -17,21 +17,20 @@
   t5 ota [FILE.t5os] [--no-restart]              push an OS update to the paired Tab5
 
 Wi-Fi first: commands talk to the developer-mode endpoint of the paired
-Tab5 (`t5 pair` stores a token in ~/.config/t5/devices.json). `t5 run` falls
-back to the USB-C console when the Tab5 isn't reachable over Wi-Fi (or with
---usb): the package goes across as base64 lines (`app put`), then
-`app install` and `app run`, and the console output streams.
+Tab5 (`t5 pair` stores a token in ~/.config/t5/devices.json); --host picks
+another one. `t5 run` falls back to the USB-C console when the Tab5 isn't
+reachable over Wi-Fi (or with --usb): the package goes across with `app put`
+(t5link.py), then `app install` and `app run`, and the console output
+streams.
 
 Stdlib only, plus pyserial for the USB path (the ESP-IDF Python has it).
 """
 import argparse
-import base64
 import json
 import os
 import re
 import shutil
 import socket
-import struct
 import subprocess
 import sys
 import time
@@ -39,21 +38,26 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
-import zlib
+
+import t5const
+import t5img
+import t5link
+import t5pack
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ota"))
+import sign  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 SDK = os.path.join(ROOT, "sdk")
 CONFIG = os.path.join(os.path.expanduser("~"), ".config", "t5", "devices.json")
-PORT = 8350
-sys.path.insert(0, HERE)
+DEV_PORT = t5const.define("t5_dev/include/t5_dev/dev.h", "T5_DEV_PORT")
 
 
 class CliError(Exception):
     pass
 
 
-# ---- device config ---------------------------------------------------------------------------
 def load_config():
     try:
         with open(CONFIG) as f:
@@ -80,9 +84,8 @@ def target(host=None):
     return host, dev["token"] if dev else None
 
 
-# ---- HTTP ---------------------------------------------------------------------------------------
 def api(host, path, method="GET", body=None, token=None, timeout=20, headers=None, raw=False):
-    url = f"http://{host}:{PORT}/api/{path}"
+    url = f"http://{host}:{DEV_PORT}/api/{path}"
     h = dict(headers or {})
     if token:
         h["Authorization"] = "Bearer " + token
@@ -103,7 +106,7 @@ def api(host, path, method="GET", body=None, token=None, timeout=20, headers=Non
             pass
         raise CliError(f"{e.code}: {msg}") from None
     except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
-        raise CliError(f"can't reach {host}:{PORT} ({getattr(e, 'reason', e)}). Is developer mode on and the "
+        raise CliError(f"can't reach {host}:{DEV_PORT} ({getattr(e, 'reason', e)}). Is developer mode on and the "
                        "Tab5 on this network?") from None
 
 
@@ -115,7 +118,6 @@ def reachable(host):
         return False
 
 
-# ---- app projects -------------------------------------------------------------------------------
 def read_manifest(app_dir):
     path = os.path.join(app_dir, "manifest.toml")
     if not os.path.isfile(path):
@@ -125,20 +127,18 @@ def read_manifest(app_dir):
 
 
 def firmware_build():
-    rev = os.environ.get("T5_REV", "rev1")
-    return os.path.join(ROOT, "firmware", f"build-{rev}")
+    return os.path.join(ROOT, "firmware", "build")
 
 
 def build(app_dir, sign=None):
     """Build (native) or stage (Python) and pack; returns the .t5app path."""
-    import t5pack
     m = read_manifest(app_dir)
     out_dir = os.path.join(app_dir, "build")
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"{m['id']}.t5app")
     if m.get("runtime") == "native":
         fw = firmware_build()
-        if not os.path.isfile(os.path.join(fw, "project_description.json")):
+        if not os.path.isfile(os.path.join(fw, "compile_commands.json")):
             raise CliError(f"no firmware build at {fw}: run `t5 build` in the repo first (apps compile against it)")
         if not shutil.which("riscv32-esp-elf-gcc"):
             raise CliError("the RISC-V compiler isn't on PATH: run `. tools/env.sh`")
@@ -154,7 +154,10 @@ def build(app_dir, sign=None):
         if sign:
             # Re-pack the build's staging dir with a signature.
             stage = src[:-len(".t5app")] + ".pkg"
-            t5pack.pack(stage, out, sign)
+            try:
+                t5pack.pack(stage, out, sign)
+            except t5pack.PackError as e:
+                raise CliError(str(e)) from None
         elif src != out:
             shutil.copyfile(src, out)
         return out
@@ -165,32 +168,41 @@ def build(app_dir, sign=None):
     return out
 
 
-# ---- commands -----------------------------------------------------------------------------------------
+PLACEHOLDER = re.compile(r"@([A-Z0-9_]+)@")
+
+
+def render_template(tmpl, dest, values):
+    """Copy the template folder tmpl to dest, replacing @KEY@ with values[KEY]
+    in every file. An unknown placeholder is an error (dest is removed)."""
+    shutil.copytree(tmpl, dest)
+    try:
+        for fn in sorted(os.listdir(dest)):
+            p = os.path.join(dest, fn)
+            with open(p, encoding="utf-8") as f:
+                text = f.read()
+            unknown = sorted(set(PLACEHOLDER.findall(text)) - set(values))
+            if unknown:
+                raise CliError(f"{os.path.join(tmpl, fn)}: unknown placeholder(s) {', '.join(unknown)}")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(PLACEHOLDER.sub(lambda m: values[m.group(1)], text))
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+
+
 def cmd_new(a):
     name = a.name
+    if '"' in name or "\\" in name:
+        raise CliError("the name can't contain quotes or backslashes")
     slug = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_") or "app"
     app_id = a.id or f"com.example.{slug}"
-    if not re.match(r"^[a-z0-9_]+(\.[a-z0-9_]+)+$", app_id):
+    if not t5pack.ID_RE.match(app_id):
         raise CliError(f"bad id '{app_id}': reverse DNS, lower case, like com.you.{slug}")
     dest = os.path.abspath(a.dir or slug)
     if os.path.exists(dest):
         raise CliError(f"{dest} exists")
     tmpl = os.path.join(SDK, "templates", "python" if a.python else "c")
-    shutil.copytree(tmpl, dest)
-    for fn in os.listdir(dest):
-        p = os.path.join(dest, fn)
-        with open(p, encoding="utf-8") as f:
-            t = f.read()
-        t = t.replace("com.example.hello", app_id).replace('name = "Hello"', f'name = "{name}"')
-        t = t.replace('t5.ui.screen("Hello")', f't5.ui.screen("{name}")')
-        if fn == "CMakeLists.txt":
-            t = t.replace("project(hello C)", f"project({slug} C)").replace("t5_app(hello ", f"t5_app({slug} ")
-            t = t.replace("set(T5_SDK ${CMAKE_CURRENT_LIST_DIR}/../..)   # inside the repo; `t5 new` writes the real path",
-                          f"set(T5_SDK {SDK})")
-        if fn == "main.c":
-            t = t.replace('md_appbar_create(scr, "Hello"', f'md_appbar_create(scr, "{name}"')
-        with open(p, "w", encoding="utf-8") as f:
-            f.write(t)
+    render_template(tmpl, dest, {"APP_ID": app_id, "APP_NAME": name, "APP_SLUG": slug, "T5_SDK": SDK})
     print(f"{dest}: {'Python' if a.python else 'C'} app {app_id}")
     print(f"next: cd {os.path.relpath(dest)} && t5 run")
 
@@ -200,7 +212,6 @@ def cmd_build(a):
 
 
 def cmd_pack(a):
-    import t5pack
     try:
         t5pack.pack(os.path.abspath(a.dir or "."), a.output, a.sign)
     except t5pack.PackError as e:
@@ -210,13 +221,13 @@ def cmd_pack(a):
 def cmd_keygen(a):
     if os.path.exists(a.key):
         raise CliError(f"{a.key} exists")
-    if subprocess.run(["openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", a.key]).returncode:
-        raise CliError("openssl failed")
-    os.chmod(a.key, 0o600)
-    pub = subprocess.run(["openssl", "pkey", "-in", a.key, "-pubout", "-outform", "DER"], capture_output=True).stdout
-    import hashlib
-    print(f"{a.key}: ECDSA P-256, key {hashlib.sha256(pub).hexdigest()}")
-    print("Keep it private. Sign packages with `t5 pack --sign`, OS images with `t5 ota-sign`.")
+    try:
+        sign.generate(a.key)
+        kid = sign.key_id(sign.public_der(a.key))
+    except sign.SignError as e:
+        raise CliError(str(e)) from None
+    print(f"{a.key}: ECDSA P-256, key {kid.hex()}")
+    print("Keep it private. Sign packages with `t5 pack --sign`, OS updates with `t5 ota-pack --sign`.")
 
 
 def cmd_pair(a):
@@ -244,11 +255,9 @@ def cmd_devices(a):
         print(f"{mark} {host}  paired {time.strftime('%Y-%m-%d', time.localtime(d.get('paired', 0)))}  {state}")
 
 
-def push(host, token, pkg):
+def install(host, token, pkg):
     with open(pkg, "rb") as f:
-        data = f.read()
-    r = api(host, "install", "POST", data, token, timeout=120)
-    return r
+        return api(host, "install", "POST", f.read(), token, timeout=120)
 
 
 def stream_logs(host, token, pos=None, match=None, until=None):
@@ -284,7 +293,7 @@ def run_wifi(host, token, pkg, m, logs):
     t0 = time.time()
     _, h = api(host, "logs?wait=0", token=token, raw=True)
     pos = int(h.get("X-Log-Pos", "0"))
-    r = push(host, token, pkg)
+    r = install(host, token, pkg)
     print(f"installed {r.get('id')} {r.get('version')} ({time.time() - t0:.1f} s)")
     api(host, "launch?" + urllib.parse.urlencode({"id": m["id"]}), "POST", b"", token)
     print(f"launched {m['id']} ({time.time() - t0:.1f} s); log follows, Ctrl-C to stop watching")
@@ -293,73 +302,25 @@ def run_wifi(host, token, pkg, m, logs):
 
 
 def run_usb(port, pkg, m, logs):
-    from t5link import Tab5
     with open(pkg, "rb") as f:
         data = f.read()
     t0 = time.time()
-    remote = f"/data/tmp/{m['id']}.t5app"
-    with Tab5(port) as t:
-        ser = t.ser
-        ser.write(f"app put {remote} {len(data)}\r\n".encode())
-        buf = b""
-        end = time.time() + 10
-        while b"READY" not in buf and time.time() < end:
-            buf += ser.read(256)
-        if b"READY" not in buf:
-            raise CliError("the Tab5 didn't answer `app put` (update its firmware?)")
-        # One 150-byte line at a time with its CRC-32 (it and the base64 fit
-        # the console's 256-byte receive ring, which drops overflow). "@ok"
-        # acknowledges; "@re" asks for the line again.
-        acc = b""
-        i = 0
-        retries = 0
-        while i < len(data):
-            part = data[i:i + 150]
-            ser.write(base64.b64encode(part) + b" %08x\n" % (zlib.crc32(part) & 0xffffffff))
-            end = time.time() + 3
-            nudged = False
-            while b"@ok" not in acc and b"@re" not in acc:
-                acc += ser.read(max(1, ser.in_waiting))
-                if b"put:" in acc:
-                    raise CliError("transfer failed: " + acc.decode(errors="replace").strip())
-                if time.time() > end:
-                    if nudged:
-                        break
-                    # The line's newline may have been dropped: end it; the
-                    # damaged line is refused ("@re") and sent again.
-                    ser.write(b"\n")
-                    nudged = True
-                    end = time.time() + 3
-            if b"@ok" in acc:
-                acc = acc.split(b"@ok", 1)[1]
-                i += 150
-                retries = 0
-            elif b"@re" in acc:
-                acc = acc.split(b"@re", 1)[1]
-                retries += 1
-                if retries > 5:
-                    raise CliError("transfer keeps failing at byte %d" % i)
-            else:
-                raise CliError("transfer stalled")
-        tail = acc
-        end = time.time() + 5
-        while b"OK " not in tail and time.time() < end:
-            tail += ser.read(256)
-        mm = re.search(rb"OK (\d+) ([0-9a-f]{8})", tail)
-        if not mm or int(mm.group(2), 16) != (zlib.crc32(data) & 0xffffffff):
-            raise CliError("transfer check failed")
-        t._read_until_prompt(5)
-        print(f"sent {len(data)} bytes over USB ({time.time() - t0:.1f} s)")
-        t.cmd("app exit", timeout=10)          # a running copy can't be replaced
-        out = t.cmd(f"app install {remote}", timeout=60)
-        if "OK" not in out:
-            raise CliError("install failed:\n" + out)
+    try:
+        t = t5link.Tab5(port).open()
+    except (RuntimeError, *t5link.SERIAL_ERRORS) as e:
+        raise CliError(str(e)) from None
+    with t:
+        try:
+            t.install(data, m["id"])
+        except (RuntimeError, ValueError) as e:
+            raise CliError(str(e)) from None
+        print(f"sent and installed {len(data)} bytes over USB ({time.time() - t0:.1f} s)")
         t.cmd(f"app run {m['id']}", timeout=20)
         print(f"launched {m['id']} ({time.time() - t0:.1f} s); console follows, Ctrl-C to stop watching")
         if logs:
             try:
                 while True:
-                    d = ser.read(1024)
+                    d = t.ser.read(1024)
                     if d:
                         sys.stdout.write(d.decode(errors="replace"))
                         sys.stdout.flush()
@@ -384,7 +345,7 @@ def cmd_run(a):
 
 
 def need_target(a):
-    host, token = target(getattr(a, "host", None))
+    host, token = target(a.host)
     if not token:
         raise CliError(f"{host} isn't paired: run `t5 pair {host}`")
     return host, token
@@ -392,7 +353,7 @@ def need_target(a):
 
 def cmd_push(a):
     host, token = need_target(a)
-    print(push(host, token, a.file))
+    print(install(host, token, a.file))
 
 
 def cmd_launch(a):
@@ -438,41 +399,13 @@ def cmd_py(a):
         sys.exit(1)
 
 
-def write_png(path, w, h, rgb):
-    def chunk(t, d):
-        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
-    raw = b"".join(b"\0" + bytes(rgb[y * w * 3:(y + 1) * w * 3]) for y in range(h))
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
-    png += chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b"")
-    with open(path, "wb") as f:
-        f.write(png)
-
-
 def cmd_screenshot(a):
     host, token = need_target(a)
     data, h = api(host, f"screenshot?div={a.div}", token=token, raw=True, timeout=30)
-    w, hh, rot = int(h["X-Width"]), int(h["X-Height"]), int(h["X-Rotation"])
-    px = struct.unpack("<%dH" % (w * hh), data[:w * hh * 2])
-
-    def rgb(v):
-        return ((v >> 11) & 0x1f) * 255 // 31, ((v >> 5) & 0x3f) * 255 // 63, (v & 0x1f) * 255 // 31
-
-    # Native portrait: rotate to how the screen is held (as t5shot.py does).
-    if rot in (90, 270):
-        ow, oh = hh, w
-        out = bytearray(ow * oh * 3)
-        for y in range(hh):
-            for x in range(w):
-                nx, ny = (y, w - 1 - x) if rot == 90 else (hh - 1 - y, x)
-                o = (ny * ow + nx) * 3
-                out[o:o + 3] = bytes(rgb(px[y * w + x]))
-    else:
-        ow, oh = w, hh
-        out = bytearray(ow * oh * 3)
-        for i in range(w * hh):
-            j = i if rot == 0 else w * hh - 1 - i
-            out[i * 3:i * 3 + 3] = bytes(rgb(px[j]))
-    write_png(a.out, ow, oh, out)
+    try:
+        ow, oh = t5img.save(a.out, data, int(h["X-Width"]), int(h["X-Height"]), int(h["X-Rotation"]))
+    except ValueError as e:
+        raise CliError(f"bad screenshot: {e}") from None
     print(f"{a.out}: {ow}x{oh}")
 
 
@@ -481,7 +414,7 @@ def paced_post(host, path, data, token, chunk=16384, pause=0.02):
     C6) drops packets when a sender floods it, so big uploads go at a few
     hundred KB/s."""
     import http.client
-    c = http.client.HTTPConnection(host, PORT, timeout=120)
+    c = http.client.HTTPConnection(host, DEV_PORT, timeout=120)
     try:
         c.putrequest("POST", "/api/" + path)
         c.putheader("Authorization", "Bearer " + token)
@@ -540,68 +473,44 @@ def cmd_ota(a):
 
 
 def main(argv=None):
+    # --host and --port go before or after the command. On the commands they
+    # default to SUPPRESS, so they don't overwrite a value given before it.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--host", default=argparse.SUPPRESS,
+                        help="Tab5 address (default: the last one paired, or $T5_HOST)")
+    common.add_argument("--port", default=argparse.SUPPRESS, help="USB serial port for the fallback")
     ap = argparse.ArgumentParser(prog="t5", description=__doc__.split("\n")[0])
     ap.add_argument("--host", help="Tab5 address (default: the last one paired, or $T5_HOST)")
     ap.add_argument("--port", help="USB serial port for the fallback")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("new", help="create an app")
-    p.add_argument("name")
-    p.add_argument("--python", action="store_true", help="a Python app (default C)")
-    p.add_argument("--id")
-    p.add_argument("--dir")
-    p.set_defaults(fn=cmd_new)
-    for name, fn in (("build", cmd_build), ("run", cmd_run)):
-        p = sub.add_parser(name)
-        p.add_argument("dir", nargs="?")
-        p.add_argument("--sign", metavar="KEY")
-        if name == "run":
-            p.add_argument("--usb", action="store_true", help="skip Wi-Fi")
-            p.add_argument("--no-logs", action="store_true")
+
+    def command(name, fn, *args, parents=(common,), **kw):
+        p = sub.add_parser(name, parents=list(parents), **kw)
+        for flags, opts in args:
+            p.add_argument(*flags, **opts)
         p.set_defaults(fn=fn)
-    p = sub.add_parser("pack")
-    p.add_argument("dir", nargs="?")
-    p.add_argument("-o", "--output")
-    p.add_argument("--sign", metavar="KEY")
-    p.set_defaults(fn=cmd_pack)
-    p = sub.add_parser("keygen")
-    p.add_argument("key")
-    p.set_defaults(fn=cmd_keygen)
-    p = sub.add_parser("pair")
-    p.add_argument("host")
-    p.add_argument("--name", help="how the Tab5 lists this computer")
-    p.set_defaults(fn=cmd_pair)
-    sub.add_parser("devices").set_defaults(fn=cmd_devices)
-    p = sub.add_parser("push")
-    p.add_argument("file")
-    p.set_defaults(fn=cmd_push)
-    p = sub.add_parser("launch")
-    p.add_argument("id")
-    p.set_defaults(fn=cmd_launch)
-    sub.add_parser("stop").set_defaults(fn=cmd_stop)
-    p = sub.add_parser("rm")
-    p.add_argument("id")
-    p.add_argument("--keep-data", action="store_true")
-    p.set_defaults(fn=cmd_rm)
-    sub.add_parser("ls").set_defaults(fn=cmd_ls)
-    p = sub.add_parser("logs")
-    p.add_argument("--grep")
-    p.set_defaults(fn=cmd_logs)
-    p = sub.add_parser("py")
-    p.add_argument("file", nargs="?")
-    p.add_argument("-c", dest="code")
-    p.set_defaults(fn=cmd_py)
-    p = sub.add_parser("screenshot")
-    p.add_argument("out", nargs="?", default="screenshot.png")
-    p.add_argument("--div", type=int, default=2)
-    p.set_defaults(fn=cmd_screenshot)
-    p = sub.add_parser("ota-pack")
-    p.add_argument("-o", "--output")
-    p.add_argument("--sign", metavar="KEY")
-    p.set_defaults(fn=cmd_ota_pack)
-    p = sub.add_parser("ota")
-    p.add_argument("file", nargs="?")
-    p.add_argument("--no-restart", action="store_true")
-    p.set_defaults(fn=cmd_ota)
+        return p
+
+    command("new", cmd_new, (["name"], {}), (["--python"], dict(action="store_true", help="a Python app (default C)")),
+            (["--id"], {}), (["--dir"], {}), help="create an app")
+    command("app-build", cmd_build, (["dir"], dict(nargs="?")), (["--sign"], dict(metavar="KEY")))
+    command("run", cmd_run, (["dir"], dict(nargs="?")), (["--sign"], dict(metavar="KEY")),
+            (["--usb"], dict(action="store_true", help="skip Wi-Fi")), (["--no-logs"], dict(action="store_true")))
+    command("pack", cmd_pack, (["dir"], dict(nargs="?")), (["-o", "--output"], {}), (["--sign"], dict(metavar="KEY")))
+    command("keygen", cmd_keygen, (["key"], {}))
+    command("pair", cmd_pair, (["host"], {}), (["--name"], dict(help="how the Tab5 lists this computer")), parents=())
+    command("devices", cmd_devices)
+    command("push", cmd_push, (["file"], {}))
+    command("launch", cmd_launch, (["id"], {}))
+    command("stop", cmd_stop)
+    command("rm", cmd_rm, (["id"], {}), (["--keep-data"], dict(action="store_true")))
+    command("ls", cmd_ls)
+    command("logs", cmd_logs, (["--grep"], {}))
+    command("py", cmd_py, (["file"], dict(nargs="?")), (["-c"], dict(dest="code")))
+    command("screenshot", cmd_screenshot, (["out"], dict(nargs="?", default="screenshot.png")),
+            (["--div"], dict(type=int, default=2)))
+    command("ota-pack", cmd_ota_pack, (["-o", "--output"], {}), (["--sign"], dict(metavar="KEY")))
+    command("ota", cmd_ota, (["file"], dict(nargs="?")), (["--no-restart"], dict(action="store_true")))
     a = ap.parse_args(argv)
     if a.cmd == "py" and a.code is None and not a.file:
         ap.error("py needs a file or -c CODE")

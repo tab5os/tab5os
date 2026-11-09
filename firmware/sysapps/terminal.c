@@ -21,10 +21,8 @@
 #include "t5/usb.h"
 #include "t5/sys.h"
 #include "t5/system.h"
-#include "sysapp_system.h"
 #include "t5_core/logring.h"
 #include "t5_py/py.h"
-#include "t5_shell/shell.h"
 #include "sysapps_priv.h"
 
 #define HIST 32
@@ -62,7 +60,7 @@ static void repl_start(term_t *t)
     t5_py_cfg_t cfg = {
         .repl = true,
         .ui_parent = t5_app_screen(t->app),
-        .cwd = "/data/user",
+        .cwd = T5_USER_DIR,
         .out = repl_out,
         .done = repl_done,
         .arg = t,
@@ -234,7 +232,7 @@ static void on_create(t5_app_t *app)
     lv_obj_set_flex_flow(py, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollable(py, false);
     t->con = t5_py_console_create(py);
-    lv_obj_set_height(t->con, 1);
+    lv_obj_set_height(t->con, 1);   /* px: flex-grow sets it */
     lv_obj_set_flex_grow(t->con, 1);
     t->input = lv_textarea_create(py);
     lv_textarea_set_one_line(t->input, true);
@@ -281,14 +279,12 @@ static void on_destroy(t5_app_t *app)
 
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };
 
-static const char *const s_ports[] = { "grove", "ext", "rs485", "mbus.i2c", "mbus.uart", "mbus.spi", "stamp", NULL };
-
 const t5_builtin_app_t sysapp_terminal = {
-    .id = "com.t5.terminal",
+    .id = T5_APP_ID_TERMINAL,
     .name = "Terminal",
     .desc = &s_desc,
     .perms = T5_PERM_PORTS | T5_PERM_NET | T5_PERM_USB | T5_PERM_STORAGE,
     .orientation = T5_ORIENT_ANY,
-    .ports = s_ports,
+    .ports = sa_all_ports,
     .icon = MD_ICON_TERMINAL,
 };

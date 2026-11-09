@@ -19,6 +19,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "t5_bsp/panel.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,8 +32,8 @@ typedef enum {
     T5_ROT_270,
 } t5_rotation_t;
 
-#define T5_PANEL_W 720
-#define T5_PANEL_H 1280
+#define T5_PANEL_W T5_PANEL_NATIVE_W
+#define T5_PANEL_H T5_PANEL_NATIVE_H
 
 /* Inclusive corners, like lv_area_t. */
 typedef struct {

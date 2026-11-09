@@ -21,8 +21,7 @@ static t5_mutex_t s_mtx;
 
 static void lock(void)
 {
-    if (!s_mtx) s_mtx = t5_mutex_create();
-    t5_mutex_lock(s_mtx);
+    t5_mutex_lock(t5_mutex_once(&s_mtx));
 }
 
 t5_err_t t5_power_register_hook(const t5_suspend_hook_t *h)

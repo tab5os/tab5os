@@ -2,35 +2,46 @@
 """Containment check (plan 8.2): every module the firmware's MicroPython
 registers must be on the allowlist.
 
-usage: check_modules.py MODULEDEFS_H ALLOWLIST [STAMP]
+usage: check_modules.py MODULEDEFS_H ALLOWLIST CONTAINMENT_H [STAMP]
 
 MODULEDEFS_H is MicroPython's generated genhdr/moduledefs.h (every
 MP_REGISTER_MODULE in the build). ALLOWLIST has one module name per line
 (# comments). Exits 1, naming the modules, if anything else is registered:
 that would be a way for Python code to reach something `t5` doesn't check.
-Also fails on the names that must never appear (machine, uctypes, ...), in
-case someone adds them to the allowlist by accident.
+Also fails on the names that must never appear as C modules (machine,
+uctypes, ...: t5_py/containment.h), in case someone adds them to the
+allowlist by accident.
 """
 import re
 import sys
-
-NEVER = {"machine", "uctypes", "esp", "esp32", "network", "_thread", "ffi", "pyb", "vfs", "lwip", "usocket",
-         "bluetooth", "rp2", "espnow", "ssl", "tls", "onewire", "framebuf"}
 # Names allowed only when they are Tab5 OS's own implementation: `socket` must
 # be mod_socket.c (t5 handles), never MicroPython's lwIP module.
 OURS = {"socket": "py_mod_socket"}
 
 
+def never_modules(header):
+    with open(header) as f:
+        text = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S).replace("\\\n", " ")
+    names = set()
+    for macro in ("T5_PY_FORBIDDEN_MODULES", "T5_PY_FROZEN_ONLY_MODULES"):
+        m = re.search(r"#\s*define\s+%s\s+(.*)" % macro, text)
+        if not m:
+            sys.exit("check_modules.py: %s not in %s" % (macro, header))
+        names |= set(re.findall(r'"(\w+)"', m.group(1)))
+    return names
+
+
 def main(argv):
-    if len(argv) < 3:
+    if len(argv) < 4:
         sys.exit(__doc__)
     with open(argv[1]) as f:
         defs = f.read()
+    never = never_modules(argv[3])
     registered = set(re.findall(r"MP_ROM_QSTR\(MP_QSTR_(\w+)\)", defs))
     with open(argv[2]) as f:
         allowed = {l.split("#", 1)[0].strip() for l in f}
     allowed.discard("")
-    bad_list = sorted(allowed & NEVER)
+    bad_list = sorted(allowed & never)
     if bad_list:
         sys.exit("t5_py: modules_allowed.txt lists modules that must never be built: " + ", ".join(bad_list))
     for name, sym in OURS.items():
@@ -41,8 +52,8 @@ def main(argv):
     if extra:
         sys.exit("t5_py: MicroPython registers modules outside the allowlist (plan 8.2): " + ", ".join(extra) +
                  "\n  turn them off in mpconfigport.h, or review and add them to modules_allowed.txt")
-    if len(argv) > 3:
-        with open(argv[3], "w") as f:
+    if len(argv) > 4:
+        with open(argv[4], "w") as f:
             f.write("\n".join(sorted(registered)) + "\n")
     print("t5_py: %d modules, all on the allowlist" % len(registered))
 

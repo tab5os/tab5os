@@ -104,17 +104,13 @@ static void indev_event(lv_event_t *e)
     }
 }
 
-void shell_attach_indev(lv_indev_t *indev)
-{
-    if (!indev) return;
-    lv_indev_add_event_cb(indev, indev_event, LV_EVENT_PRESSED, NULL);
-    lv_indev_add_event_cb(indev, indev_event, LV_EVENT_CLICKED, NULL);
-}
-
-void gesture_init(void)
+void gesture_attach_all(void)
 {
     for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) {
-        if (lv_indev_get_type(i) == LV_INDEV_TYPE_POINTER) shell_attach_indev(i);
+        if (lv_indev_get_type(i) != LV_INDEV_TYPE_POINTER) continue;
+        lv_indev_remove_event_cb_with_user_data(i, indev_event, NULL);
+        lv_indev_add_event_cb(i, indev_event, LV_EVENT_PRESSED, NULL);
+        lv_indev_add_event_cb(i, indev_event, LV_EVENT_CLICKED, NULL);
     }
 }
 

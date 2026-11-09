@@ -71,7 +71,8 @@ int t5_profile_parse(const char *json, size_t len, t5_profile_t *out, int max);
 /* Built-ins plus every .json under dir (adds to what is loaded). Returns the
  * number of profiles added from dir. */
 int t5_profiles_load_dir(const char *dir);
-/* Drop loaded profiles, keep built-ins, load /data/profiles and /sd/profiles. */
+/* Drop loaded profiles, keep built-ins, load T5_PROFILES_DATA_DIR and
+ * T5_PROFILES_SD_DIR (t5_storage/paths.h). */
 int t5_profiles_reload(void);
 int t5_profiles_count(void);
 const t5_profile_t *t5_profiles_get(int i);
@@ -84,9 +85,6 @@ int t5_profiles_scan(const char *port, uint8_t *found, int max);
  * matched addresses, then ones that list the port, then fewer missing.
  * Returns the number of suggestions written (at most max). */
 int t5_profiles_suggest(const char *port, const uint8_t *found, int nfound, t5_profile_match_t *out, int max);
-
-/* For tests: forget loaded profiles. */
-void t5_profiles_reset(void);
 
 #ifdef __cplusplus
 }

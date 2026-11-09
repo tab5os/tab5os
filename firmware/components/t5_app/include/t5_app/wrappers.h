@@ -13,12 +13,10 @@
 #include "lvgl.h"
 #include "t5_core/event.h"
 #include "t5_core/os.h"
-#include "t5_ports/ports.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_usb/usb.h"
 #include <sys/stat.h>
 #include <dirent.h>
-#include "t5_camera/camera.h"
 #include "lwip/sockets.h"
 
 #ifdef __cplusplus
@@ -31,9 +29,7 @@ void *t5_app_realloc(void *p, size_t n);
 void t5_app_free(void *p);
 char *t5_app_strdup(const char *s);
 
-void *t5_app_lv_malloc(size_t n);
 void *t5_app_lv_malloc_zeroed(size_t n);
-void *t5_app_lv_calloc(size_t num, size_t size);
 void *t5_app_lv_realloc(void *p, size_t n);
 void *t5_app_lv_reallocf(void *p, size_t n);
 char *t5_app_lv_strdup(const char *s);
@@ -59,20 +55,18 @@ int t5_app_stat(const char *path, struct stat *st);
 size_t t5_app_fread(void *buf, size_t size, size_t n, FILE *f);
 char *t5_app_fgets(char *s, int n, FILE *f);
 int t5_app_fgetc(FILE *f);
-int t5_app_getc(FILE *f);
 int t5_app_fflush(FILE *f);
 int t5_app_fseek(FILE *f, long off, int whence);
 struct dirent *t5_app_readdir(DIR *d);
 DIR *t5_app_opendir(const char *path);
 int t5_app_closedir(DIR *d);
 T5_MUST_CHECK t5_err_t t5_app_storage_write_atomic(const char *path, const void *data, size_t len);
-T5_MUST_CHECK t5_err_t t5_app_camera_photo(t5_camera_t *cam, const char *path, int quality);
-T5_MUST_CHECK t5_err_t t5_app_camera_record_start(t5_camera_t *cam, const char *path, uint32_t kbps);
 int t5_app_remove(const char *path);
 int t5_app_rename(const char *from, const char *to);
 int t5_app_mkdir(const char *path, mode_t mode);
 T5_MUST_CHECK t5_err_t t5_app_usb_midi_listen(t5_usb_midi_cb_t cb, void *arg);
 T5_MUST_CHECK t5_err_t t5_app_usb_uvc_open(uint16_t w, uint16_t h, uint8_t fps, t5_usb_uvc_frame_cb_t cb, void *arg, t5_usb_uvc_t **out);
+T5_MUST_CHECK t5_err_t t5_app_usb_uvc_close(t5_usb_uvc_t *u);
 /* Not bound to apps: installed at start, polled by the watchdog. */
 void t5_app_lv_mem_install(void);
 void t5_app_events_check_stuck(void);
@@ -97,10 +91,6 @@ T5_MUST_CHECK t5_err_t t5_app_event_unsubscribe(t5_event_id_t id, t5_event_handl
 
 FILE *t5_app_fopen(const char *path, const char *mode);
 int t5_app_fclose(FILE *f);
-
-T5_MUST_CHECK t5_err_t t5_app_port_open(const char *name, t5_port_mode_t mode, const void *cfg, t5_port_t **out);
-T5_MUST_CHECK t5_err_t t5_app_port_open_ex(const char *name, t5_port_mode_t mode, const void *cfg, uint32_t flags, t5_port_t **out,
-                             char *why, size_t whylen);
 
 int t5_app_lwip_socket(int domain, int type, int protocol);
 int t5_app_lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen);

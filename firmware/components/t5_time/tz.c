@@ -1,19 +1,21 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Time zone (plan 6.5, Settings > Time). The RTC and the system clock stay
  * in UTC; the zone is a POSIX TZ string applied with tzset(), so
- * localtime_r() gives local time. Kept in /data/sys/tz and applied at boot.
+ * localtime_r() gives local time. Kept in the system directory ("tz") and
+ * applied at boot.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "t5_core/log.h"
+#include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_time/t5_time.h"
 
 static const char *TAG = "t5.time";
 
-#define TZ_FILE T5_DATA_PATH "/sys/tz"
+#define TZ_FILE "tz"
 
 typedef struct {
     const char *name;
@@ -87,12 +89,15 @@ t5_err_t t5_time_set_tz(const char *posix)
     snprintf(s_tz, sizeof s_tz, "%s", posix);
     apply();
     T5_LOGI(TAG, "time zone %s", s_tz);
-    return t5_storage_write_atomic(TZ_FILE, s_tz, strlen(s_tz) + 1);
+    char path[96];
+    T5_RETURN_ON_ERR(t5_sys_path(path, sizeof path, TZ_FILE));
+    return t5_storage_write_atomic(path, s_tz, strlen(s_tz) + 1);
 }
 
 void t5_time_tz_load(void)
 {
-    FILE *f = fopen(TZ_FILE, "r");
+    char path[96];
+    FILE *f = t5_sys_path(path, sizeof path, TZ_FILE) == T5_OK ? fopen(path, "r") : NULL;
     if (f) {
         char buf[64] = "";
         size_t n = fread(buf, 1, sizeof buf - 1, f);
@@ -106,7 +111,7 @@ void t5_time_tz_load(void)
 bool t5_time_local(struct tm *out)
 {
     if (!out) return false;
-    time_t now = time(NULL);
+    time_t now = t5_time_now();
     localtime_r(&now, out);
     return t5_time_valid();
 }

@@ -8,14 +8,14 @@ one place. This scans calls that take a length (lv_obj_set_size,
 lv_obj_set_style_pad_*, lv_obj_align...) and reports any bare number other
 than 0, unless the line carries a /* px */ comment (a deliberate hairline).
 
-    tools/lint_px.py [paths...]     default: firmware/components/md firmware/components/t5_shell
+    tools/lint_px.py [paths...]     default: md, t5_shell and the system apps
 """
 import os
 import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT = ["firmware/components/md", "firmware/components/t5_shell"]
+DEFAULT = ["firmware/components/md", "firmware/components/t5_shell", "firmware/sysapps"]
 
 # function -> indexes of length arguments
 LENGTH_FUNCS = {

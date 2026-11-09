@@ -18,102 +18,53 @@ FetchContent_Declare(unity
 FetchContent_MakeAvailable(unity)
 
 set(FW ${CMAKE_CURRENT_LIST_DIR}/../../firmware/components)
-
-# All service logic plus mocks, as one library.
-add_library(t5_host STATIC
-    ${FW}/t5_core/t5_err.c
-    ${FW}/t5_core/t5_event.c
-    ${FW}/t5_core/t5_event_names.c
-    ${FW}/t5_pins/t5_pins_names.c
-    ${FW}/t5_i2c/t5_i2c.c
-    ${FW}/t5_bsp/xpin.c
-    ${FW}/t5_time/rtc.c
-    ${FW}/t5_time/t5_time.c
-    ${FW}/t5_imu/bmi270.c
-    ${FW}/t5_imu/bmi270_config.c
-    ${FW}/t5_storage/storage.c
-    ${FW}/t5_display/display.c
-    ${FW}/t5_input/touch.c
-    ${FW}/t5_core/t5_crc.c
-    ${FW}/t5_core/t5_res.c
-    ${FW}/t5_power/arbiter.c
-    ${FW}/t5_power/wake_reason.c
-    ${FW}/t5_power/rail.c
-    ${FW}/t5_power/wakelock.c
-    ${FW}/t5_power/suspend.c
-    ${FW}/t5_power/autosave.c
-    ${FW}/t5_power/power.c
-    ${FW}/t5_battery/ina226.c
-    ${FW}/t5_battery/gauge.c
-    ${FW}/t5_battery/policy.c
-    ${FW}/t5_battery/history.c
-    ${FW}/t5_battery/battery.c
-    ${FW}/t5_net/netcfg.c
-    ${FW}/t5_net/c6img.c
-    ${FW}/t5_net/ble_util.c
-    ${FW}/t5_net/netproto.c
-    ${FW}/t5_pkg/inflate.c
-    ${FW}/t5_pkg/zip.c
-    ${FW}/t5_pkg/toml.c
-    ${FW}/t5_pkg/manifest.c
-    ${FW}/t5_app/fspolicy.c
-    ${FW}/t5_pkg/pkg.c
-    mocks/power_hw_mock.c
-    mocks/chips_mock.c
-    mocks/t5_os_mock.c
-    mocks/t5_event_mock.c
-    mocks/t5_i2c_hw_mock.c
-    ${FW}/t5_ports/ports_table.c
-    ${FW}/t5_ports/broker.c
-    ${FW}/t5_ports/ports.c
-    ${FW}/t5_ports/modbus.c
-    ${FW}/t5_ports/profiles.c
-    mocks/ports_hw_mock.c
-    ${FW}/t5_ui/rotation.c
-    ${FW}/t5_ui/orient.c
-    ${FW}/t5_ui/fbtrack.c
-    ${FW}/md/md_tokens.c
-    mocks/hw_stubs_mock.c)
-target_include_directories(t5_host PUBLIC
-    mocks
-    ${FW}/t5_core/include ${FW}/t5_core
-    ${FW}/t5_pins/include
-    ${FW}/t5_i2c/include ${FW}/t5_i2c
-    ${FW}/t5_bsp/include
-    ${FW}/t5_time/include ${FW}/t5_time
-    ${FW}/t5_imu/include
-    ${FW}/t5_storage/include ${FW}/t5_storage
-    ${FW}/t5_display/include ${FW}/t5_display
-    ${FW}/t5_input/include ${FW}/t5_input
-    ${FW}/t5_power/include ${FW}/t5_power
-    ${FW}/t5_battery/include ${FW}/t5_battery
-    ${FW}/t5_net/include ${FW}/t5_net
-    ${FW}/t5_pkg/include
-    ${FW}/t5_app/include
-    ${FW}/t5_ports/include ${FW}/t5_ports)
-target_include_directories(t5_host PUBLIC ${FW}/t5_ui/include ${FW}/md/include)
+# All service logic plus mocks, as one library: every component (and main)
+# with a portable.cmake lists the files that build here in it
+# (T5_<NAME>_PORTABLE_SRCS). Their include/ directories are public; their
+# private directories are visible to the library's sources only (not to the
+# tests), so the device build is what keeps components out of each other's. t5_bootfmt and t5_ota
+# are headers only here (bootctl, espimg, the slot and source rules).
+file(GLOB T5_HOST_PORTABLE ${FW}/*/portable.cmake ${FW}/../main/portable.cmake)
+set(T5_HOST_SRCS)
+set(T5_HOST_INCS mocks ${FW}/t5_bootfmt/include ${FW}/t5_ota/include)
+set(T5_HOST_PRIV)
+foreach(pc ${T5_HOST_PORTABLE})
+    get_filename_component(dir ${pc} DIRECTORY)
+    get_filename_component(name ${dir} NAME)
+    string(TOUPPER ${name} var)
+    if(NOT var MATCHES "^T5_")
+        set(var T5_${var})
+    endif()
+    include(${pc})
+    list(APPEND T5_HOST_SRCS ${${var}_PORTABLE_SRCS})
+    if(EXISTS ${dir}/include)
+        list(APPEND T5_HOST_INCS ${dir}/include)
+    endif()
+    list(APPEND T5_HOST_PRIV ${dir})
+endforeach()
+file(GLOB T5_HOST_MOCKS ${CMAKE_CURRENT_LIST_DIR}/mocks/*.c)
+add_library(t5_host STATIC ${T5_HOST_SRCS} ${T5_HOST_MOCKS})
+target_include_directories(t5_host PUBLIC ${T5_HOST_INCS} PRIVATE ${T5_HOST_PRIV})
 target_link_libraries(t5_host PUBLIC unity m)
 
 enable_testing()
-foreach(t test_bsp_names test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch test_power test_battery test_net test_ports test_pkg test_ui)
+foreach(t test_pins test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch test_power test_battery test_net test_ota test_ports test_pkg test_ui test_app test_media)
     add_executable(${t} ${t}.c)
+    target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
     target_link_libraries(${t} PRIVATE t5_host)
     add_test(NAME ${t} COMMAND ${t})
 endforeach()
-
-# Phase 5 runtime logic. Separate from t5_host: it brings its own small ABI
-# table instead of the generated one.
-add_executable(test_app test_app.c
-    ${FW}/t5_app/tracker.c ${FW}/t5_app/crashguard.c ${FW}/t5_app/elfsym.c ${FW}/t5_app/abi.c
-    ${FW}/t5_app/isolate.c)
-target_include_directories(test_app PRIVATE ${FW}/t5_app/include ${FW}/t5_pkg/include ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(test_app PRIVATE t5_host)
-add_test(NAME test_app COMMAND test_app)
-
-# Phase 6 and 7 pure logic: audio DSP, per-app energy, charge history, USB
-# protocol helpers.
-add_executable(test_media test_media.c
-    ${FW}/t5_audio/dsp.c ${FW}/t5_app/energy.c ${FW}/t5_usb/usb_proto.c)
-target_include_directories(test_media PRIVATE ${FW}/t5_audio/include ${FW}/t5_app/include ${FW}/t5_usb)
-target_link_libraries(test_media PRIVATE t5_host)
-add_test(NAME test_media COMMAND test_media)
+# Tests of a component's internals see its private directory.
+target_include_directories(test_app PRIVATE ${FW}/t5_app)
+target_include_directories(test_display_touch PRIVATE ${FW}/t5_display)
+target_include_directories(test_media PRIVATE ${FW}/t5_usb)
+target_include_directories(test_net PRIVATE ${FW}/t5_net)
+target_include_directories(test_ota PRIVATE ${FW}/t5_ota)
+target_include_directories(test_pkg PRIVATE ${FW}/t5_pkg)
+target_include_directories(test_ports PRIVATE ${FW}/t5_ports)
+target_include_directories(test_power PRIVATE ${FW}/t5_power ${FW}/../main)
+target_include_directories(test_ui PRIVATE ${FW}/t5_shell)
+# test_ota runs tools/ota/t5ota.py (the .t5os header both sides agree on),
+# test_pkg tools/t5/t5pack.py (the manifest rules).
+target_compile_definitions(test_ota PRIVATE T5_REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../..")
+target_compile_definitions(test_pkg PRIVATE T5_REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../..")

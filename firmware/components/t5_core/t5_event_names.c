@@ -42,6 +42,7 @@ const char *t5_event_name(t5_event_id_t id)
     case T5_EV_BLE_DISCONNECTED: return "ble.disconnected";
     case T5_EV_UI_ROTATE: return "ui.rotate";
     case T5_EV_UI_STALL: return "ui.stall";
+    case T5_EV_UI_INPUT_ADDED: return "ui.input_added";
     case T5_EV_APP_STARTED: return "app.started";
     case T5_EV_APP_STOPPED: return "app.stopped";
     case T5_EV_APP_CRASHED: return "app.crashed";

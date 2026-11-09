@@ -131,7 +131,7 @@ It's useful for checking how Material widgets look and for working on the shell.
 - It doesn't load `.t5app` packages. Apps run on the device.
 - Frame rates are desktop numbers. The only meaningful performance run is on the device (`ui gate`).
 
-`t5 sim-shots` renders screens and compares them against `sim/golden`.
+`t5 sim-shots [DIR]` renders screens into DIR (default `sim/build/shots`) and compares them against `sim/golden`.
 
 ## Static checks
 

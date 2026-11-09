@@ -24,8 +24,7 @@ static t5_mutex_t s_lock;
 
 static void lock(void)
 {
-    if (!s_lock) s_lock = t5_mutex_create();
-    t5_mutex_lock(s_lock);
+    t5_mutex_lock(t5_mutex_once(&s_lock));
 }
 
 static void unlock(void)
@@ -79,10 +78,13 @@ static void release_hold(void *h)
     T5_LOG_ON_ERR(TAG, t5_rail_release(h));
 }
 
-t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out)
+static t5_err_t acquire(t5_rail_t rail, const char *owner, uint32_t flags, void *app, t5_rail_hold_t **out)
 {
     if (rail >= T5_RAIL_COUNT || !out) {
         return T5_ERR_INVALID_ARG;
+    }
+    if (rail == T5_RAIL_BACKLIGHT) {
+        return T5_ERR_NOT_SUPPORTED;
     }
     lock();
     t5_rail_hold_t *h = NULL;
@@ -96,17 +98,27 @@ t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_r
         unlock();
         return T5_ERR_NO_MEM;
     }
-    *h = (struct t5_rail_hold){ .used = true, .rail = (uint8_t)rail, .flags = flags, .app = t5_app_ctx_get() };
+    *h = (struct t5_rail_hold){ .used = true, .rail = (uint8_t)rail, .flags = flags, .app = app };
     strncpy(h->owner, owner ? owner : "?", sizeof h->owner - 1);
     t5_err_t err = apply(rail);
     if (err != T5_OK) {
         h->used = false;
         h = NULL;
     }
-    if (h) t5_res_add(T5_RES_RAIL, h, release_hold);   /* under the lock: see t5_wakelock_acquire */
+    if (h && app) t5_res_add(T5_RES_RAIL, h, release_hold);   /* under the lock: see t5_wakelock_acquire */
     unlock();
     *out = h;
     return err;
+}
+
+t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out)
+{
+    return acquire(rail, owner, flags, t5_app_ctx_get(), out);
+}
+
+t5_err_t t5_rail_acquire_system(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out)
+{
+    return acquire(rail, owner, flags, NULL, out);
 }
 
 t5_err_t t5_rail_release(t5_rail_hold_t *h)
@@ -126,6 +138,7 @@ t5_err_t t5_rail_release(t5_rail_hold_t *h)
 
 bool t5_rail_is_on(t5_rail_t r)
 {
+    if (r == T5_RAIL_BACKLIGHT) return t5_power_screen_lit();
     return r < T5_RAIL_COUNT && s_on[r];
 }
 
@@ -162,8 +175,7 @@ t5_err_t t5_rail_suspend(bool keep_all)
     t5_err_t err = T5_OK;
     lock();
     for (int r = 0; r < T5_RAIL_COUNT; r++) {
-        /* The backlight follows the display state, not Sleep. */
-        if (r == T5_RAIL_BACKLIGHT || keep_all || count_locked((t5_rail_t)r, true)) {
+        if (keep_all || count_locked((t5_rail_t)r, true)) {
             continue;
         }
         s_suspended[r] = true;

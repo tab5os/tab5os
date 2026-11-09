@@ -1,0 +1,49 @@
+# Tab5 board settings, shared by the OS (firmware/) and the recovery image
+# (recovery/): both list this file first in SDKCONFIG_DEFAULTS.
+CONFIG_IDF_TARGET="esp32p4"
+
+# ESP32-P4 revision v1.x (e.g. Unit A, v1.3). IDF caps the CPU at 360 MHz here.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+
+# Flash: 16 MB, fixed partition layout (firmware/partitions.csv; each project
+# names it relative to itself)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_OFFSET=0x10000
+
+# Console on USB-C (USB Serial/JTAG)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# PSRAM: 32 MB. 200 MHz is an experimental IDF option; drop to 80M if
+# `psram test` reports errors on a unit.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# Code and read-only data (fonts) run from PSRAM, copied there at boot: the
+# 200 MHz hex bus beats QIO flash, worth about 10% on the rendering gate.
+# Costs about 4 MB of PSRAM; flash writes no longer stall code fetches.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+# Crash evidence survives reboot
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS=4
+
+# OS updates boot on trial (ESP-IDF app rollback).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Size first (Phase 7 brought the image near the 4 MB slot); the OS's
+# rendering and audio paths get -O2 back in firmware/CMakeLists.txt.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Filesystems: long names on the SD card, /data on LittleFS.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+CONFIG_LITTLEFS_MAX_PARTITIONS=1

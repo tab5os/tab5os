@@ -1,13 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Files for Python (plan 8.2): open(), a small `os`, and module import, all
- * confined to a few roots.
+ * Files for Python (plan 8.2): open(), a small `os`, and module import.
  *
  *   an app's files follow t5_app/fspolicy.h, as for native apps
- *   the console's VM (no app)          /data/user, /sd, /usb, read-write
+ *   the console's VM (no app)          t5_fs_roots[] read-write, its working dir read-only
  *
- * Every path is made absolute against the working dir and normalised; any
- * ".." is refused outright rather than resolved, so there is no way to walk
- * out of a root. There are no symlinks on LittleFS or FAT.
+ * Every path is made absolute against the working dir and normalised by
+ * t5_fs_normalise(), which refuses "..": there is no way to walk out of a
+ * root. There are no symlinks on LittleFS or FAT.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -26,86 +25,38 @@
 #include "t5_app/fspolicy.h"
 #include "py_priv.h"
 
-/* ---- roots ------------------------------------------------------------------------- */
-static void add_root(t5_py_t *vm, const char *path, bool writable)
+static bool join(const char *in, const char *cwd, char *out, size_t n)
 {
-    if (!path || !path[0] || vm->nroots >= PY_MAX_ROOTS) return;
-    for (int i = 0; i < vm->nroots; i++) {
-        if (!strcmp(vm->roots[i].path, path)) {
-            vm->roots[i].writable |= writable;
-            return;
-        }
-    }
-    snprintf(vm->roots[vm->nroots].path, PY_PATH_MAX, "%s", path);
-    vm->roots[vm->nroots].writable = writable;
-    vm->nroots++;
-}
-
-void py_fs_setup_roots(t5_py_t *vm)
-{
-    vm->nroots = 0;
-    if (!vm->app) {
-        add_root(vm, "/data/user", true);
-        add_root(vm, "/sd", true);
-        add_root(vm, "/usb", true);
-    }
-    add_root(vm, vm->cwd, false);   /* readable at least; writable if a root above covers it */
-}
-
-/* Join with the working dir and normalise. false for "..", too long, or empty. */
-static bool normalise(const char *in, const char *cwd, char *out, size_t n)
-{
-    char tmp[PY_PATH_MAX * 2];
+    char tmp[T5_FS_PATH_MAX * 2];
     if (!in || !in[0]) in = ".";
     if (in[0] == '/') snprintf(tmp, sizeof tmp, "%s", in);
     else snprintf(tmp, sizeof tmp, "%s/%s", cwd, in);
-    size_t len = 0;
-    out[0] = 0;
-    char *save = NULL;
-    for (char *seg = strtok_r(tmp, "/", &save); seg; seg = strtok_r(NULL, "/", &save)) {
-        if (!strcmp(seg, ".")) continue;
-        if (!strcmp(seg, "..")) return false;
-        size_t sl = strlen(seg);
-        if (len + 1 + sl + 1 > n) return false;
-        out[len++] = '/';
-        memcpy(out + len, seg, sl);
-        len += sl;
-        out[len] = 0;
-    }
-    if (!len) {
-        if (n < 2) return false;
-        strcpy(out, "/");
-    }
-    return true;
+    return t5_fs_normalise(tmp, out, n);
 }
 
-bool py_path_allowed(const char *abs, bool write)
+static bool allowed(const char *abs, bool write)
 {
     t5_py_t *vm = py_vm;
     if (!vm) return false;
     if (vm->app) return t5_app_fs_check(vm->app, abs, write);
-    for (int i = 0; i < vm->nroots; i++) {
-        const py_root_t *r = &vm->roots[i];
-        size_t rl = strlen(r->path);
-        if (strncmp(abs, r->path, rl) || (abs[rl] != 0 && abs[rl] != '/')) continue;
-        if (!write || r->writable) return true;
+    for (size_t i = 0; i < t5_fs_nroots; i++) {
+        if (t5_fs_under(abs, t5_fs_roots[i].path)) return true;
     }
-    return false;
+    return !write && t5_fs_under(abs, vm->cwd);
 }
 
 void py_resolve_path(const char *in, bool write, char *out, size_t n)
 {
-    if (!normalise(in, py_vm ? py_vm->cwd : "/", out, n)) {
+    if (!join(in, py_vm ? py_vm->cwd : "/", out, n)) {
         mp_raise_msg_varg(&mp_type_ValueError, MP_ERROR_TEXT("bad path: %s"), in);
     }
-    if (!py_path_allowed(out, write)) {
-        char msg[PY_PATH_MAX + 32];
+    if (!allowed(out, write)) {
+        char msg[T5_FS_PATH_MAX + 32];
         snprintf(msg, sizeof msg, "%s is outside this app's files", out);
         py_raise_perm(msg);
     }
 }
 
-/* ---- file objects -------------------------------------------------------------------- */
 typedef struct {
     mp_obj_base_t base;
     int fd;
@@ -236,23 +187,25 @@ static mp_obj_t py_open(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
         default: mp_raise_ValueError(MP_ERROR_TEXT("bad mode"));
         }
     }
-    char path[PY_PATH_MAX];
+    char path[T5_FS_PATH_MAX];
     py_resolve_path(mp_obj_str_get_str(a[ARG_file].u_obj), writes, path, sizeof path);
+    t5_app_t *app = py_vm ? py_vm->app : NULL;
+    bool quota = writes && app && t5_app_fs_quota_applies(app, path);
+    if (quota && !t5_app_fs_room(app, 0)) mp_raise_OSError(MP_ENOSPC);
     py_file_t *o = mp_obj_malloc_with_finaliser(py_file_t, type);
     o->fd = -1;
     int fd = open(path, rw | x, 0644);
     if (fd < 0) mp_raise_OSError(errno);
     o->fd = fd;
-    o->quota = writes && py_vm && py_vm->app && t5_fs_under(path, t5_app_data_dir(py_vm->app));
+    o->quota = quota;
     return MP_OBJ_FROM_PTR(o);
 }
 MP_DEFINE_CONST_FUN_OBJ_KW(mp_builtin_open_obj, 1, py_open);
 
-/* ---- import ------------------------------------------------------------------------------- */
 mp_import_stat_t mp_import_stat(const char *path)
 {
-    char abs[PY_PATH_MAX];
-    if (!py_vm || !normalise(path, py_vm->cwd, abs, sizeof abs) || !py_path_allowed(abs, false)) {
+    char abs[T5_FS_PATH_MAX];
+    if (!py_vm || !join(path, py_vm->cwd, abs, sizeof abs) || !allowed(abs, false)) {
         return MP_IMPORT_STAT_NO_EXIST;
     }
     struct stat st;
@@ -264,7 +217,7 @@ mp_import_stat_t mp_import_stat(const char *path)
 
 mp_lexer_t *mp_lexer_new_from_file(qstr filename)
 {
-    char abs[PY_PATH_MAX];
+    char abs[T5_FS_PATH_MAX];
     py_resolve_path(qstr_str(filename), false, abs, sizeof abs);
     int fd = open(abs, O_RDONLY);
     if (fd < 0) mp_raise_OSError(errno);
@@ -285,10 +238,9 @@ mp_lexer_t *mp_lexer_new_from_file(qstr filename)
     return mp_lexer_new_from_str_len(filename, buf, got, len ? len : 1);
 }
 
-/* ---- os ---------------------------------------------------------------------------------------- */
 static mp_obj_t os_listdir(size_t n_args, const mp_obj_t *args)
 {
-    char path[PY_PATH_MAX];
+    char path[T5_FS_PATH_MAX];
     py_resolve_path(n_args ? mp_obj_str_get_str(args[0]) : ".", false, path, sizeof path);
     DIR *d = opendir(path);
     if (!d) mp_raise_OSError(errno);
@@ -305,7 +257,7 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(os_listdir_obj, 0, 1, os_listdir);
 
 static mp_obj_t os_stat(mp_obj_t p)
 {
-    char path[PY_PATH_MAX];
+    char path[T5_FS_PATH_MAX];
     py_resolve_path(mp_obj_str_get_str(p), false, path, sizeof path);
     struct stat st;
     if (stat(path, &st) != 0) mp_raise_OSError(errno);
@@ -321,7 +273,7 @@ static MP_DEFINE_CONST_FUN_OBJ_1(os_stat_obj, os_stat);
 #define OS_PATH_FN(name, call)                                          \
     static mp_obj_t os_##name(mp_obj_t p)                               \
     {                                                                   \
-        char path[PY_PATH_MAX];                                         \
+        char path[T5_FS_PATH_MAX];                                         \
         py_resolve_path(mp_obj_str_get_str(p), true, path, sizeof path); \
         if (call != 0) mp_raise_OSError(errno);                         \
         return mp_const_none;                                           \
@@ -334,7 +286,7 @@ OS_PATH_FN(mkdir, mkdir(path, 0755));
 
 static mp_obj_t os_rename(mp_obj_t a, mp_obj_t b)
 {
-    char pa[PY_PATH_MAX], pb[PY_PATH_MAX];
+    char pa[T5_FS_PATH_MAX], pb[T5_FS_PATH_MAX];
     py_resolve_path(mp_obj_str_get_str(a), true, pa, sizeof pa);
     py_resolve_path(mp_obj_str_get_str(b), true, pb, sizeof pb);
     if (rename(pa, pb) != 0) mp_raise_OSError(errno);

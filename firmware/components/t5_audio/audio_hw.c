@@ -70,7 +70,7 @@ static void ctrl_init(t5_ctrl_t *t, t5_i2c_dev_t *dev)
 static esp_codec_dev_sample_info_t fs(void)
 {
     esp_codec_dev_sample_info_t f = {
-        .bits_per_sample = 16, .channel = 2, .sample_rate = 48000, .mclk_multiple = 256,
+        .bits_per_sample = 16, .channel = T5_AUDIO_CH, .sample_rate = T5_AUDIO_RATE, .mclk_multiple = 256,
     };
     return f;
 }
@@ -90,12 +90,12 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
     if (!dac && !adc) return T5_ERR_NOT_FOUND;
 
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    cc.dma_desc_num = 4;
-    cc.dma_frame_num = 240;          /* 5 ms a descriptor: 20 ms of output latency */
+    cc.dma_desc_num = AUDIO_HW_DMA_DESC;
+    cc.dma_frame_num = AUDIO_HW_DMA_FRAMES;
     cc.auto_clear = true;            /* silence, not old samples, on underrun */
     if (i2s_new_channel(&cc, &s_tx, &s_rx) != ESP_OK) return T5_ERR_IO;
     i2s_std_config_t std = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(48000),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(T5_AUDIO_RATE),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = T5_PIN_I2S_MCLK, .bclk = T5_PIN_I2S_SCLK, .ws = T5_PIN_I2S_LRCK,
@@ -235,7 +235,7 @@ bool audio_hw_headphones(void)
 
 t5_err_t audio_hw_speaker(bool on)
 {
-    if (on && !s_spk) return t5_rail_acquire(T5_RAIL_SPK, "audio", 0, &s_spk);
+    if (on && !s_spk) return t5_rail_acquire_system(T5_RAIL_SPK, "audio", 0, &s_spk);
     if (!on && s_spk) {
         t5_err_t e = t5_rail_release(s_spk);
         s_spk = NULL;

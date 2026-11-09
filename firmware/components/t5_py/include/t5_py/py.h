@@ -1,18 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0
  * MicroPython runtime (plan 8.1-8.3).
  *
- * One VM at a time, on its own task, with a GC heap taken from PSRAM for
- * the app that started it (the heap and the task are charged to that app,
- * so a crash or exit frees them). The VM runs a script file, a string, or
- * an interactive REPL fed with t5_py_input().
+ * One VM at a time, on its own task, with a GC heap taken from PSRAM. The
+ * VM is recorded as a resource of the app that started it, so a crash or
+ * exit stops it and frees the heap; the heap itself is a plain PSRAM block,
+ * not counted in the app's heap figures. The VM runs a script file, a
+ * string, or an interactive REPL fed with t5_py_input().
  *
  * Containment (plan 8.2): the build has no `machine`, `uctypes`, native or
- * viper emitters, inline assembler, .mpy loading or raw sockets. Files are
- * reachable only under the app's own directories (and /sd, /usb and
- * /data/user with the storage permission). Everything else goes through
- * the `t5` module, which checks the app's permissions like the native ABI.
- * tools/py/check_modules.py fails the build if a module outside the
- * allowlist appears.
+ * viper emitters, inline assembler, .mpy loading or raw sockets. An app's
+ * files follow t5_app/fspolicy.h, as for native apps. Everything else goes
+ * through the `t5` module, which checks the app's permissions like the
+ * native ABI. tools/py/check_modules.py fails the build if a module outside
+ * the allowlist appears.
  *
  * Python apps (runtime = "micropython") are launched by the app runtime
  * through the descriptor t5_py_init() registers. The Terminal (REPL) and the
@@ -37,6 +37,9 @@ typedef enum {
     T5_PY_EXCEPTION,       /* an uncaught exception (printed to the output) */
     T5_PY_STOPPED,         /* stopped from outside (app exit, Stop button) */
 } t5_py_state_t;
+
+/* "running", "done", "exception", "stopped" (the developer API's X-Py-State). */
+const char *t5_py_state_name(t5_py_state_t st);
 
 /* Output sink: called on the VM task with stdout bytes (also tracebacks). */
 typedef void (*t5_py_out_fn_t)(const char *s, size_t n, void *arg);
@@ -75,7 +78,11 @@ void t5_py_interrupt(t5_py_t *vm);
  * it holds the UI lock. Waits up to timeout_ms for the code to unwind, then
  * kills the task. vm is invalid afterwards. */
 t5_err_t t5_py_stop(t5_py_t *vm, uint32_t timeout_ms);
-t5_py_state_t t5_py_state(const t5_py_t *vm);
+/* Wait up to timeout_ms (T5_PY_FOREVER: no limit) for the VM to finish:
+ * true once it has (its done callback has run). By its owner, before
+ * t5_py_stop(). */
+#define T5_PY_FOREVER UINT32_MAX
+bool t5_py_wait(t5_py_t *vm, uint32_t timeout_ms);
 /* A VM exists (running or finished but not yet freed). */
 bool t5_py_busy(void);
 
@@ -87,8 +94,6 @@ bool t5_py_busy(void);
 struct _lv_obj_t *t5_py_console_create(struct _lv_obj_t *parent);
 void t5_py_console_write(struct _lv_obj_t *con, const char *s, size_t n);
 void t5_py_console_clear(struct _lv_obj_t *con);
-/* An out sink that writes to a console (pass the console as arg). */
-void t5_py_console_sink(const char *s, size_t n, void *con);
 
 /* ---- for tests and the console ------------------------------------------- */
 /* Run source text headless (system context), collect output, wait for it.

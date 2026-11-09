@@ -6,10 +6,10 @@
 # which saves about 690 KB of the 4 MB app slot. The simulator builds the
 # committed files as they are.
 set(T5_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../..")
-file(GLOB MD_ASSET_SRC "${CMAKE_CURRENT_LIST_DIR}/assets/fonts/*.c" "${CMAKE_CURRENT_LIST_DIR}/assets/shadows/*.c")
+include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 set(MD_ZDIR "${CMAKE_BINARY_DIR}/md_zassets")
 set(MD_ASSETS "${MD_ZDIR}/md_zassets_table.c")
-foreach(src ${MD_ASSET_SRC})
+foreach(src ${T5_MD_ASSET_SRCS})
     get_filename_component(name ${src} NAME)
     list(APPEND MD_ASSETS "${MD_ZDIR}/${name}")
 endforeach()
@@ -18,17 +18,16 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     idf_build_get_property(python PYTHON)
     set(ZPACK "${T5_ROOT}/tools/assets/zpack.py")
     execute_process(
-        COMMAND ${python} ${ZPACK} ${MD_ZDIR} ${MD_ASSET_SRC}
+        COMMAND ${python} ${ZPACK} ${MD_ZDIR} ${T5_MD_ASSET_SRCS}
         RESULT_VARIABLE zpack_rc)
     if(NOT zpack_rc EQUAL 0)
         message(FATAL_ERROR "tools/assets/zpack.py failed")
     endif()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${ZPACK} ${MD_ASSET_SRC})
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${ZPACK} ${T5_MD_ASSET_SRCS})
 endif()
 
 idf_component_register(
-    SRCS "md_tokens.c" "md_theme.c" "md_text.c" "md_ripple.c" "md_shadow.c" "md_widgets.c" "md_controls.c" "md_gate.c" "md_freeze.c"
-         "md_zasset.c" ${MD_ASSETS}
+    SRCS ${T5_MD_PORTABLE_SRCS} ${T5_MD_LVGL_SRCS} ${MD_ASSETS}
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES lvgl__lvgl

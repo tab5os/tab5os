@@ -7,6 +7,7 @@
 #include "t5_core/os.h"
 #include "t5_i2c/t5_i2c.h"
 #include "t5_imu/t5_imu.h"
+#include "t5_imu/t5_imu_test.h"
 #include "t5_pins/pins.h"
 
 static const char *TAG = "t5.imu";
@@ -49,19 +50,20 @@ extern const size_t t5_bmi270_config_len;
 static t5_i2c_dev_t *s_dev;
 static volatile t5_imu_status_t s_status = T5_IMU_OFF;
 static int s_attempts;
-static t5_mutex_t s_lock;
 
 static t5_imu_cb_t s_cb;
 static void *s_cb_arg;
 static volatile uint32_t s_stream_hz;
 static bool s_stream_task;
 
-int16_t t5_imu_raw_to_mg(int16_t raw)
+/* +-4 g range */
+static int16_t raw_to_mg(int16_t raw)
 {
     return (int16_t)(((int32_t)raw * 1000) / 8192);
 }
 
-void t5_imu_pack_any_motion(uint16_t threshold_mg, uint16_t duration_ms, bool enable, uint8_t out[4])
+/* The 4-byte any-motion block (feature page 1, offset 0x0C). */
+static void pack_any_motion(uint16_t threshold_mg, uint16_t duration_ms, bool enable, uint8_t out[4])
 {
     /* duration: 13 bits in 20 ms steps; threshold: 11 bits, 1 LSB = 1/2048 g. */
     uint32_t dur = duration_ms / 20;
@@ -118,15 +120,25 @@ static t5_err_t init_once(void)
     return T5_OK;
 }
 
+static t5_err_t give_up(t5_err_t err)
+{
+    s_status = T5_IMU_FAILED;
+    T5_LOGE(TAG, "BMI270 failed after %d attempts: %s", s_attempts, t5_err_str(err));
+    int32_t e = err;
+    t5_event_post(T5_EV_IMU_FAILED, &e, sizeof e);
+    return err;
+}
+
 t5_err_t t5_imu_init_blocking(void)
 {
-    if (!s_lock) {
-        s_lock = t5_mutex_create();
-    }
-    if (!s_dev) {
-        T5_RETURN_ON_ERR(t5_i2c_open(T5_I2C_ADDR_BMI270, 400000, "imu", &s_dev));
-    }
     s_status = T5_IMU_STARTING;
+    s_attempts = 0;
+    if (!s_dev) {
+        t5_err_t err = t5_i2c_open(T5_I2C_ADDR_BMI270, T5_SYS_I2C_HZ, "imu", &s_dev);
+        if (err != T5_OK) {
+            return give_up(err);
+        }
+    }
     t5_err_t err = T5_ERR_FAIL;
     for (s_attempts = 1; s_attempts <= T5_IMU_INIT_ATTEMPTS; s_attempts++) {
         err = init_once();
@@ -136,17 +148,13 @@ t5_err_t t5_imu_init_blocking(void)
         T5_LOGW(TAG, "init attempt %d failed: %s", s_attempts, t5_err_str(err));
         t5_delay_ms(50);
     }
-    if (err == T5_OK) {
-        s_status = T5_IMU_READY;
-        T5_LOGI(TAG, "BMI270 ready (attempt %d)", s_attempts);
-    } else {
+    if (err != T5_OK) {
         s_attempts = T5_IMU_INIT_ATTEMPTS;
-        s_status = T5_IMU_FAILED;
-        T5_LOGE(TAG, "BMI270 failed after %d attempts", T5_IMU_INIT_ATTEMPTS);
-        int32_t e = err;
-        t5_event_post(T5_EV_IMU_FAILED, &e, sizeof e);
+        return give_up(err);
     }
-    return err;
+    s_status = T5_IMU_READY;
+    T5_LOGI(TAG, "BMI270 ready (attempt %d)", s_attempts);
+    return T5_OK;
 }
 
 static void init_task(void *arg)
@@ -161,7 +169,8 @@ t5_err_t t5_imu_start(void)
         return T5_OK;
     }
     s_status = T5_IMU_STARTING;
-    return t5_task_create_lp("t5_imu_init", init_task, NULL, 4096, 5, 0, NULL);
+    t5_err_t err = t5_task_create_lp("t5_imu_init", init_task, NULL, 4096, 5, 0, NULL);
+    return err == T5_OK ? T5_OK : give_up(err);
 }
 
 t5_imu_status_t t5_imu_status(void)
@@ -174,15 +183,6 @@ int t5_imu_attempts(void)
     return s_attempts;
 }
 
-t5_imu_status_t t5_imu_wait(uint32_t ms)
-{
-    uint32_t start = t5_time_ms();
-    while (s_status == T5_IMU_STARTING && t5_time_ms() - start < ms) {
-        t5_delay_ms(10);
-    }
-    return s_status;
-}
-
 t5_err_t t5_imu_read_accel(t5_imu_accel_t *out)
 {
     if (s_status != T5_IMU_READY) {
@@ -190,9 +190,9 @@ t5_err_t t5_imu_read_accel(t5_imu_accel_t *out)
     }
     uint8_t b[6];
     T5_RETURN_ON_ERR(t5_i2c_read(s_dev, REG_ACC_X, b, sizeof b));
-    out->x = t5_imu_raw_to_mg((int16_t)(b[0] | (b[1] << 8)));
-    out->y = t5_imu_raw_to_mg((int16_t)(b[2] | (b[3] << 8)));
-    out->z = t5_imu_raw_to_mg((int16_t)(b[4] | (b[5] << 8)));
+    out->x = raw_to_mg((int16_t)(b[0] | (b[1] << 8)));
+    out->y = raw_to_mg((int16_t)(b[2] | (b[3] << 8)));
+    out->z = raw_to_mg((int16_t)(b[4] | (b[5] << 8)));
     return T5_OK;
 }
 
@@ -264,9 +264,9 @@ t5_err_t t5_imu_motion_enable(const t5_imu_motion_cfg_t *cfg)
         return T5_ERR_INVALID_ARG;
     }
     uint8_t block[4];
-    t5_imu_pack_any_motion(cfg->threshold_mg, cfg->duration_ms, true, block);
+    pack_any_motion(cfg->threshold_mg, cfg->duration_ms, true, block);
     uint8_t io = (uint8_t)(0x08 | (cfg->open_drain ? 0x04 : 0) | (cfg->active_high ? 0x02 : 0));
-    T5_RETURN_ON_ERR(t5_i2c_lock(1000));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     t5_err_t err = write_any_motion(block);
     if (err == T5_OK) err = t5_i2c_write_u8(s_dev, REG_INT_LATCH, cfg->latched ? 1 : 0);
     if (err == T5_OK) err = t5_i2c_write_u8(s_dev, REG_INT1_IO_CTRL, (cfg->pins & T5_IMU_INT1) ? io : 0);
@@ -283,8 +283,8 @@ t5_err_t t5_imu_motion_disable(void)
         return T5_ERR_STATE;
     }
     uint8_t block[4];
-    t5_imu_pack_any_motion(100, 100, false, block);
-    T5_RETURN_ON_ERR(t5_i2c_lock(1000));
+    pack_any_motion(100, 100, false, block);
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     t5_err_t err = write_any_motion(block);
     if (err == T5_OK) err = t5_i2c_write_u8(s_dev, REG_INT1_MAP_FEAT, 0);
     if (err == T5_OK) err = t5_i2c_write_u8(s_dev, REG_INT2_MAP_FEAT, 0);

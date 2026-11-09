@@ -7,11 +7,13 @@
  * (T5_RAIL_KEEP_IN_SLEEP), unless a T5_LOCK_RAIL wake lock is held, and puts
  * it back on resume. Holds survive that: the count never changes in sleep.
  *
- *   USB5V      USB-A port 5 V           (EXP1 P3)
- *   EXT5V      Grove, M5-Bus, ext 5 V   (EXP0 P2)
- *   WLAN       ESP32-C6 power           (EXP1 P0)
- *   SPK        speaker amplifier        (EXP0 P1)
- *   BACKLIGHT  LCD backlight; off means the display is blanked, not asleep
+ *   USB5V      USB-A port 5 V
+ *   EXT5V      Grove, M5-Bus, ext 5 V
+ *   WLAN       ESP32-C6 power
+ *   SPK        speaker amplifier
+ *   BACKLIGHT  not switchable: the backlight follows the power state (hold
+ *              a T5_LOCK_SCREEN wake lock to keep it on). Acquiring it is
+ *              refused; t5_rail_is_on() reports whether the screen is lit.
  */
 #pragma once
 
@@ -38,8 +40,12 @@ typedef enum {
 
 typedef struct t5_rail_hold t5_rail_hold_t;
 
-/* owner is copied (truncated to T5_RAIL_OWNER_LEN - 1). */
+/* owner is copied (truncated to T5_RAIL_OWNER_LEN - 1). The hold belongs to
+ * the calling app, if any, and is released when it exits. */
 T5_MUST_CHECK t5_err_t t5_rail_acquire(t5_rail_t rail, const char *owner, uint32_t flags, t5_rail_hold_t **out);
+/* The same, held by the system whoever the caller is (a service's own hold). */
+T5_MUST_CHECK t5_err_t t5_rail_acquire_system(t5_rail_t rail, const char *owner, uint32_t flags,
+                                              t5_rail_hold_t **out);
 T5_MUST_CHECK t5_err_t t5_rail_release(t5_rail_hold_t *hold);
 
 const char *t5_rail_name(t5_rail_t rail);

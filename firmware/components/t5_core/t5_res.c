@@ -5,6 +5,21 @@
 
 static const t5_res_hooks_t *s_hooks;
 
+const char *t5_res_kind_name(t5_res_kind_t kind)
+{
+    switch (kind) {
+    case T5_RES_TASK: return "tasks";
+    case T5_RES_TIMER: return "timers";
+    case T5_RES_ANIM: return "anims";
+    case T5_RES_UI: return "ui";
+    case T5_RES_PORT: return "ports";
+    case T5_RES_RAIL: return "rails";
+    case T5_RES_LOCK: return "locks";
+    case T5_RES_OTHER: return "other";
+    default: return "?";
+    }
+}
+
 void t5_res_set_hooks(const t5_res_hooks_t *hooks)
 {
     s_hooks = hooks;
@@ -52,4 +67,16 @@ void t5_core_set_perm_check(t5_perm_check_fn_t fn)
 int t5_core_perm_check(uint32_t perm)
 {
     return s_perm ? s_perm(perm) : 0;
+}
+
+static t5_path_check_fn_t s_path;
+
+void t5_core_set_path_check(t5_path_check_fn_t fn)
+{
+    s_path = fn;
+}
+
+bool t5_core_path_check(const char *path, bool write)
+{
+    return s_path ? s_path(path, write) : true;
 }

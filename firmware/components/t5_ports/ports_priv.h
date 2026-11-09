@@ -18,7 +18,7 @@ typedef struct {
     uint8_t npins;
     uint8_t gpio[T5_PORT_MAX_PINS];
     const char *label[T5_PORT_MAX_PINS];
-    uint32_t modes;             /* 1u << t5_port_mode_t */
+    uint32_t modes;             /* 1u << t5_port_mode_t; ADC is added by ports_modes() */
     int8_t i2c[2];              /* pin index: sda, scl */
     int8_t uart[3];             /* pin index: tx, rx, rts (-1 none) */
     int8_t spi[3];              /* pin index: sck, mosi, miso */
@@ -30,7 +30,11 @@ typedef struct {
 int ports_table_count(void);
 const port_def_t *ports_table_get(int i);
 const port_def_t *ports_table_find(const char *name);
+/* The modes a port offers. */
+uint32_t ports_modes(const port_def_t *d);
 bool ports_pin_risky(uint8_t gpio);
+/* Input only, and never configured or reset (the power key line). */
+bool ports_pin_hands_off(uint8_t gpio);
 /* ADC unit (1, 2) and channel for a GPIO; false if it has none. */
 bool ports_pin_adc(uint8_t gpio, int *unit, int *channel);
 /* Why a risky pin is risky, for error strings. */
@@ -54,5 +58,8 @@ int broker_release(const void *handle);
 const broker_pin_t *broker_pin(uint8_t gpio);
 void broker_reset(void);
 
-/* For tests. */
+/* profiles.c: forget the loaded profiles (the built-in ones stay). */
+void profiles_reset(void);
+
+/* For tests: forget open handles, claims, loaded profiles and the access check. */
 void t5_ports_reset_for_test(void);

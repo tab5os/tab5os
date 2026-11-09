@@ -18,7 +18,6 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
 #include "lvgl.h"
 #include "md/md.h"
 #include "t5_app/app.h"
@@ -36,7 +35,6 @@ typedef struct {
     lv_obj_t *console;
     char line[160];
     size_t llen;
-    volatile bool alarm_done;
 } pyapp_t;
 
 static pyapp_t s_pa;    /* one Python app at a time (one VM) */
@@ -67,7 +65,7 @@ static void reveal_console(void *arg)
 {
     pyapp_t *p = arg;
     t5_py_t *vm = p->vm;
-    /* The script's UI covered the console; show the traceback. */
+    /* The script's UI covers the console with the traceback. */
     if (vm && vm->ui_root) {
         lv_obj_delete(vm->ui_root);
         vm->ui_root = NULL;
@@ -78,8 +76,7 @@ static void app_done(t5_py_t *vm, t5_py_state_t how, void *arg)
 {
     pyapp_t *p = arg;
     if (p->llen) log_line(p);
-    T5_LOGI(TAG, "%s: %s", t5_app_id(p->app),
-            how == T5_PY_DONE ? "finished" : how == T5_PY_EXCEPTION ? "stopped by an exception" : "stopped");
+    T5_LOGI(TAG, "%s: %s", t5_app_id(p->app), t5_py_state_name(how));
     if (how == T5_PY_EXCEPTION) {
         if (vm->ui_root) t5_ui_async(reveal_console, p);
     } else if (how == T5_PY_DONE && (vm->back || vm->ui_used)) {
@@ -157,8 +154,7 @@ static void alarm_done(t5_py_t *vm, t5_py_state_t how, void *arg)
     (void)vm;
     pyapp_t *p = arg;
     if (p->llen) log_line(p);
-    T5_LOGI(TAG, "%s: background run %s", t5_app_id(p->app), how == T5_PY_DONE ? "done" : "failed");
-    p->alarm_done = true;
+    T5_LOGI(TAG, "%s: background run %s", t5_app_id(p->app), t5_py_state_name(how));
 }
 
 static void on_alarm(t5_app_t *app)
@@ -168,7 +164,6 @@ static void on_alarm(t5_app_t *app)
     p->app = app;
     const char *entry = t5_apps_entry_path(app);
     if (!entry || !entry[0]) return;
-    /* import <module>; <module>.<fn>() */
     const char *base = strrchr(entry, '/');
     base = base ? base + 1 : entry;
     char mod[64];
@@ -180,7 +175,8 @@ static void on_alarm(t5_app_t *app)
     t5_py_cfg_t cfg = { .path = entry, .code = code, .out = app_out, .done = alarm_done, .arg = p,
                         .heap_bytes = t5_apps_min_heap(app) };
     if (t5_py_start(&cfg, &p->vm) != T5_OK) return;
-    while (!p->alarm_done && t5_app_running(app)) t5_delay_ms(20);
+    /* Past max_seconds the app runtime deletes this task and stops the VM. */
+    (void)t5_py_wait(p->vm, T5_PY_FOREVER);
     t5_py_stop(p->vm, 500);
     p->vm = NULL;
 }
@@ -197,8 +193,5 @@ static const t5_app_desc_t s_desc = {
 
 t5_err_t t5_py_init(void)
 {
-    /* The shared user folder (storage permission) and the Editor's scripts. */
-    mkdir("/data/user", 0755);
-    mkdir("/data/user/scripts", 0755);
     return t5_apps_set_runtime(T5_RUNTIME_MICROPYTHON, &s_desc);
 }

@@ -9,8 +9,8 @@ set(T5_FW "${CMAKE_CURRENT_LIST_DIR}/../firmware")
 set(EXTRA_COMPONENT_DIRS
     "${T5_FW}/components/t5_core" "${T5_FW}/components/t5_pins" "${T5_FW}/components/t5_i2c"
     "${T5_FW}/components/t5_bsp" "${T5_FW}/components/t5_display" "${T5_FW}/components/t5_input"
-    "${T5_FW}/components/t5_storage" "${T5_FW}/components/t5_ota")
-set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+    "${T5_FW}/components/t5_storage" "${T5_FW}/components/t5_bootfmt" "${T5_FW}/components/t5_ota")
+set(SDKCONFIG_DEFAULTS "${T5_FW}/sdkconfig.board;sdkconfig.defaults")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(MINIMAL_BUILD ON)
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../VERSION" T5_VERSION LIMIT_COUNT 1)

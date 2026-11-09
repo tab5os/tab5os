@@ -19,7 +19,7 @@ Plain stdio works: `fopen`, `fread`, `fwrite`, `fclose`, `fseek`, `ftell`, `fget
 | [A file the person picks](#letting-the-person-choose) | That file, until the app exits | Nothing |
 | Shared folders: `/sd/DCIM`, `/sd/Photos`, `/sd/Pictures`, `/sd/Music`, `/sd/Videos`, `/sd/Documents`, `/sd/Downloads`, `/data/user` | Read, or read and write | `shared_read`, or `shared_write` |
 | The rest of `/sd` and `/usb` | Read and write | `all_files` |
-| OS files and other apps' folders: `/data/sys`, `/data/apps`, `/data/appdata`, `/sd/apps`, `/sd/appdata` | Never | |
+| OS files and other apps' folders: `/data/sys`, `/data/apps`, `/data/appdata`, `/sd/apps` | Never | |
 
 The rules apply to `fopen`, `opendir`, `stat`, `mkdir`, `remove`, `rename`, `t5_storage_write_atomic`, and to the paths given to the camera. A refused call returns `NULL` or -1 with `errno` set to `EACCES`, or `T5_ERR_DENIED`.
 

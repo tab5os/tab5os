@@ -118,10 +118,6 @@ static uintptr_t resolve(const char *name)
         }
         return a;
     }
-    if (t5_abi_is_runtime_helper(name)) {
-        a = elf_find_sym_default(name);
-        if (a) return a;
-    }
     s_missing++;
     T5_LOGE(TAG, "%s imports %s, which API level %d doesn't export", s_loading ? s_loading->id : "?", name,
             T5_API_LEVEL);
@@ -336,14 +332,6 @@ bool apps_hw_heap_contains(const t5_tracker_t *t, const void *p)
     return false;
 }
 
-size_t apps_hw_heap_chunks_bytes(const t5_tracker_t *t)
-{
-    const arena_t *ar = t->arena;
-    size_t n = 0;
-    for (const chunk_t *c = ar ? ar->chunks : NULL; c; c = c->next) n += (size_t)(c->hi - c->lo);
-    return n;
-}
-
 /* ---- internal RAM reserve (isolate.h) ------------------------------------------- */
 static void *volatile s_reserve;
 
@@ -466,11 +454,6 @@ void apps_hw_task_delete(void *task)
 void apps_hw_restart(void)
 {
     esp_restart();
-}
-
-size_t apps_hw_free_heap(void)
-{
-    return esp_get_free_heap_size();
 }
 
 /* A periodic callback on the esp_timer task (energy accounting). */

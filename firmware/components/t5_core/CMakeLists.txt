@@ -1,5 +1,6 @@
+include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS "t5_err.c" "t5_crc.c" "t5_event.c" "t5_event_names.c" "t5_event_idf.c" "t5_os_idf.c" "t5_res.c" "t5_sbfix_idf.c" "t5_logring_idf.c" "t5_fault_idf.c"
+    SRCS ${T5_CORE_PORTABLE_SRCS} "t5_event_idf.c" "t5_os_idf.c" "t5_sbfix_idf.c" "t5_logring_idf.c" "t5_fault_idf.c"
     INCLUDE_DIRS "include"
     REQUIRES esp_event
     PRIV_REQUIRES esp_timer heap freertos log riscv spi_flash esp_hw_support esp_system hal soc

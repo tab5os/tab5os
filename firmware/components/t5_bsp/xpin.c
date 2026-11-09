@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include <string.h>
 #include "t5_bsp/xpin.h"
+#include "t5_bsp/xpin_test.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_i2c/t5_i2c.h"
+#include "t5_pins/table.h"
 
 static const char *TAG = "t5.xpin";
 
@@ -86,7 +88,7 @@ t5_err_t t5_xpin_init(void)
     for (int i = 0; i < 2; i++) {
         exp_t *e = &s_exp[i];
         if (!e->dev) {
-            T5_RETURN_ON_ERR(t5_i2c_open(e->addr, 400000, i ? "exp1" : "exp0", &e->dev));
+            T5_RETURN_ON_ERR(t5_i2c_open(e->addr, T5_SYS_I2C_HZ, i ? "exp1" : "exp0", &e->dev));
         }
         T5_RETURN_ON_ERR(adopt(e));
         e->valid = true;
@@ -134,7 +136,7 @@ t5_err_t t5_xpin_output(t5_xpin_t pin, bool level)
         return T5_ERR_INVALID_ARG;
     }
     uint8_t b = (uint8_t)(1u << T5_XPIN_NUM(pin));
-    T5_RETURN_ON_ERR(t5_i2c_lock(1000));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     t5_err_t err = set_bit(e, REG_OUT, &e->out, b, level);
     if (err == T5_OK) err = set_bit(e, REG_OUT_HIZ, &e->hiz, b, false);
     if (err == T5_OK) err = set_bit(e, REG_DIR, &e->dir, b, true);
@@ -149,7 +151,7 @@ t5_err_t t5_xpin_input(t5_xpin_t pin, t5_xpin_pull_t pull)
         return T5_ERR_INVALID_ARG;
     }
     uint8_t b = (uint8_t)(1u << T5_XPIN_NUM(pin));
-    T5_RETURN_ON_ERR(t5_i2c_lock(1000));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     /* Pull first so the line is held while the driver lets go. */
     t5_err_t err = T5_OK;
     if (pull != T5_XPIN_PULL_NONE) {
@@ -219,17 +221,13 @@ t5_err_t t5_xpin_apply_boot_defaults(void)
     T5_RETURN_ON_ERR(t5_xpin_input(T5_XP_CHG_STAT, T5_XPIN_PULL_NONE));
     /* Never driven high here. Output-low is its idle state. */
     T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_PWROFF_PULSE, false));
-    /* Switchable rails off until a service acquires them (Phase 2 refcounts). */
-    T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_SPK_EN, false));
-    T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_EXT5V_EN, false));
-    T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_USB5V_EN, false));
-    T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_WLAN_PWR_EN, false));
+    /* Switchable rails off until a service acquires them. */
+    for (int i = 0; i < T5_PINS_RAIL_COUNT; i++) T5_RETURN_ON_ERR(t5_xpin_output(t5_pins_rail_en[i], false));
     T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_RF_ANT_SEL, false));   /* internal antenna */
     T5_RETURN_ON_ERR(t5_xpin_output(T5_XP_CAM_RST, false));      /* camera held in reset */
     return t5_xpin_input(T5_XP_HP_DET, T5_XPIN_PULL_NONE);
 }
 
-/* Host tests only. */
 void t5_xpin_reset_for_test(void)
 {
     for (int i = 0; i < 2; i++) {

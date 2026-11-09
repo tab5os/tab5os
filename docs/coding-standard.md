@@ -49,12 +49,12 @@ Parameters coming from outside the module are validated and refused with an erro
 
 ```sh
 t5 build                  # zero warnings or it fails
-t5 analyze                # -fanalyzer on the strict components (build-analyze-<rev>/)
-t5 lint                   # tools/lint_std.py with the UI density lint and the ABI check
+t5 analyze                # -fanalyzer on the strict components, firmware and recovery (build-analyze/)
+t5 lint                   # tools/lint_std.py with the UI density lint, the ABI check and the API reference
 t5 host-test
 ```
 
-CI runs all of them (the `analyze` and `lint` jobs in `.github/workflows/ci.yml`), plus the analyzer on the recovery image.
+CI runs all of them (the `analyze` and `lint` jobs in `.github/workflows/ci.yml`).
 
 ## What the first pass found
 

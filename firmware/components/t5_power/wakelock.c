@@ -21,8 +21,7 @@ static t5_mutex_t s_mtx;
 
 static void lock(void)
 {
-    if (!s_mtx) s_mtx = t5_mutex_create();
-    t5_mutex_lock(s_mtx);
+    t5_mutex_lock(t5_mutex_once(&s_mtx));
 }
 
 const char *t5_lock_type_name(t5_lock_type_t t)
@@ -42,7 +41,7 @@ static void release_lock(void *l)
     t5_wakelock_release(l);
 }
 
-t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owner, uint32_t timeout_ms)
+static t5_wakelock_t *acquire(t5_lock_type_t type, const char *owner, uint32_t timeout_ms, void *app)
 {
     if (type >= T5_LOCK_TYPE_COUNT) {
         return NULL;
@@ -53,7 +52,7 @@ t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owne
         if (!s_locks[i].used) {
             l = &s_locks[i];
             *l = (struct t5_wakelock){ .used = true, .type = (uint8_t)type, .t0_ms = t5_time_ms(),
-                                       .timeout_ms = timeout_ms, .app = t5_app_ctx_get() };
+                                       .timeout_ms = timeout_ms, .app = app };
             strncpy(l->owner, owner ? owner : "?", sizeof l->owner - 1);
             break;
         }
@@ -61,7 +60,7 @@ t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owne
     /* Tracked before the table lock is released: an exiting app's task can't
      * be stopped while it holds a lock, so it can't be left with an untracked
      * slot (t5_app quiesce). */
-    if (l) t5_res_add(T5_RES_LOCK, l, release_lock);
+    if (l && app) t5_res_add(T5_RES_LOCK, l, release_lock);
     t5_mutex_unlock(s_mtx);
     if (!l) {
         T5_LOGE(TAG, "table full, %s lock for %s refused", t5_lock_type_name(type), owner ? owner : "?");
@@ -72,9 +71,19 @@ t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owne
     return l;
 }
 
+t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owner, uint32_t timeout_ms)
+{
+    return acquire(type, owner, timeout_ms, t5_app_ctx_get());
+}
+
 t5_wakelock_t *t5_wakelock_acquire(t5_lock_type_t type, const char *owner)
 {
-    return t5_wakelock_acquire_timeout(type, owner, 0);
+    return acquire(type, owner, 0, t5_app_ctx_get());
+}
+
+t5_wakelock_t *t5_wakelock_acquire_system(t5_lock_type_t type, const char *owner)
+{
+    return acquire(type, owner, 0, NULL);
 }
 
 void t5_wakelock_release(t5_wakelock_t *l)

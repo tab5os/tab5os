@@ -16,9 +16,9 @@
 /* ---- Internal I2C bus (system bus) [bsp] -------------------------------- */
 #define T5_PIN_SYS_I2C_SDA      31
 #define T5_PIN_SYS_I2C_SCL      32
-#define T5_SYS_I2C_HZ           400000
+#define T5_SYS_I2C_HZ           400000  /* every chip on the system bus runs at this */
 
-/* ---- Internal I2C addresses (7-bit) -------------------------------------
+/* Internal I2C addresses (7-bit). Names and the reserved list: t5_pins/table.h.
  * Unit A scan (2026-11-05): 0x10 0x28 0x32 0x40 0x41 0x43 0x44 0x55 0x68 answer.
  * GT911 (0x14) is absent (ST7123 panel); the camera (0x36) answers once CAM_RST is released.
  */
@@ -34,33 +34,30 @@
 #define T5_I2C_ADDR_EXP1        0x44    /* PI4IOE5V6408, ADDR high  [verified] */
 #define T5_I2C_ADDR_ST712X      0x55    /* touch, ST7123/ST7121     [verified] */
 #define T5_I2C_ADDR_BMI270      0x68    /* IMU                      [verified] */
+#define T5_I2C_ADDR_BMI270_ALT  0x69    /* BMI270 with SDO high (Bosch datasheet) */
 
-/* ---- I/O expander pins ---------------------------------------------------
- * Encoded as (address << 8) | pin so one value names an expander pin.
- * EXP0 = 0x43, EXP1 = 0x44. The design doc's "E1.P0" (antenna) is EXP0.P0.
- * Pin names match the schematic and M5Unified's Tab5 table. Rail and charger
- * pins are named, not yet verified by effect (bench-results.md, 0.4).
- */
+/* I/O expander pins, encoded as (address << 8) | pin so one value names an
+ * expander pin. The design doc's "E1.P0" (antenna) is EXP0.P0. Pin names match
+ * the schematic and M5Unified's Tab5 table. Rail and charger pins are named,
+ * not yet verified by effect (bench-results.md, 0.4). */
 #define T5_XPIN(addr, pin)      (((addr) << 8) | (pin))
 #define T5_XPIN_ADDR(x)         ((uint8_t)((x) >> 8))
 #define T5_XPIN_NUM(x)          ((uint8_t)((x) & 0x7))
 
-/* EXP0 (0x43) */
-#define T5_XP_RF_ANT_SEL        T5_XPIN(0x43, 0) /* internal / MMCX antenna    [docs] */
-#define T5_XP_SPK_EN            T5_XPIN(0x43, 1) /* speaker amp                [bsp]  */
-#define T5_XP_EXT5V_EN          T5_XPIN(0x43, 2) /* Grove, M5-Bus, ext 5V      [docs] */
-#define T5_XP_LCD_RST           T5_XPIN(0x43, 4) /* BSP calls it LCD_EN        [verified] */
-#define T5_XP_TP_RST            T5_XPIN(0x43, 5) /* touch reset                [verified] */
-#define T5_XP_CAM_RST           T5_XPIN(0x43, 6) /* BSP calls it CAMERA_EN     [verified] */
-#define T5_XP_HP_DET            T5_XPIN(0x43, 7) /* headphone detect, input    [docs] */
+#define T5_XP_RF_ANT_SEL        T5_XPIN(T5_I2C_ADDR_EXP0, 0) /* internal / MMCX antenna    [docs] */
+#define T5_XP_SPK_EN            T5_XPIN(T5_I2C_ADDR_EXP0, 1) /* speaker amp                [bsp]  */
+#define T5_XP_EXT5V_EN          T5_XPIN(T5_I2C_ADDR_EXP0, 2) /* Grove, M5-Bus, ext 5V      [docs] */
+#define T5_XP_LCD_RST           T5_XPIN(T5_I2C_ADDR_EXP0, 4) /* BSP calls it LCD_EN        [verified] */
+#define T5_XP_TP_RST            T5_XPIN(T5_I2C_ADDR_EXP0, 5) /* touch reset                [verified] */
+#define T5_XP_CAM_RST           T5_XPIN(T5_I2C_ADDR_EXP0, 6) /* BSP calls it CAMERA_EN     [verified] */
+#define T5_XP_HP_DET            T5_XPIN(T5_I2C_ADDR_EXP0, 7) /* headphone detect, input    [docs] */
 
-/* EXP1 (0x44) */
-#define T5_XP_WLAN_PWR_EN       T5_XPIN(0x44, 0) /* C6 power                   [bsp]  */
-#define T5_XP_USB5V_EN          T5_XPIN(0x44, 3) /* USB-A 5V                   [bsp]  */
-#define T5_XP_PWROFF_PULSE      T5_XPIN(0x44, 4) /* PWROFF_PLUSE: U7 pin 6 [sch]. Driving it high cuts power */
-#define T5_XP_NCHG_QC_EN        T5_XPIN(0x44, 5) /* fast charge, active low    [docs] */
-#define T5_XP_CHG_STAT          T5_XPIN(0x44, 6) /* charger status, input      [docs] */
-#define T5_XP_CHG_EN            T5_XPIN(0x44, 7) /* charger enable             [docs] */
+#define T5_XP_WLAN_PWR_EN       T5_XPIN(T5_I2C_ADDR_EXP1, 0) /* C6 power                   [bsp]  */
+#define T5_XP_USB5V_EN          T5_XPIN(T5_I2C_ADDR_EXP1, 3) /* USB-A 5V                   [bsp]  */
+#define T5_XP_PWROFF_PULSE      T5_XPIN(T5_I2C_ADDR_EXP1, 4) /* PWROFF_PLUSE: U7 pin 6 [sch]. Driving it high cuts power */
+#define T5_XP_NCHG_QC_EN        T5_XPIN(T5_I2C_ADDR_EXP1, 5) /* fast charge, active low    [docs] */
+#define T5_XP_CHG_STAT          T5_XPIN(T5_I2C_ADDR_EXP1, 6) /* charger status, input      [docs] */
+#define T5_XP_CHG_EN            T5_XPIN(T5_I2C_ADDR_EXP1, 7) /* charger enable             [docs] */
 
 /* ---- Display and touch [bsp] -------------------------------------------- */
 #define T5_PIN_LCD_BACKLIGHT    22      /* [verified] */
@@ -73,13 +70,8 @@
 #define T5_PIN_I2S_DOUT         26
 #define T5_PIN_I2S_DIN          28
 
-/* ---- microSD, 4-bit SDIO [bsp]. No card-detect GPIO (bench check 9) ------ */
-#define T5_PIN_SD_D0            39
-#define T5_PIN_SD_D1            40
-#define T5_PIN_SD_D2            41
-#define T5_PIN_SD_D3            42
-#define T5_PIN_SD_CLK           43
-#define T5_PIN_SD_CMD           44
+/* microSD, 4-bit SDIO on SDMMC slot 0's IO MUX pins 39-44 (D0-D3, CLK, CMD),
+ * which the driver selects itself [bsp]. No card-detect GPIO (bench check 9). */
 
 /* ---- System lines [docs] ------------------------------------------------ */
 #define T5_PIN_PWR_KEY          35      /* strap, power key, shared with PMS150G. Keep its pad config in sleep */

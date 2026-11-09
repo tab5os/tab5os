@@ -12,16 +12,12 @@
 #include <sys/stat.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-#include "freertos/task.h"
 #include "t5/audio.h"
 #include "t5/camera.h"
 #include "t5/shell.h"
 #include "t5/storage.h"
 #include "t5/sys.h"
 #include "sysapps_priv.h"
-
-#define DCIM T5_SD_PATH "/DCIM"
 
 #define MAX_FILES 200
 
@@ -41,14 +37,14 @@ static sa_nav_t s_nav;            /* gallery pages */
 
 static void make_dcim(void)
 {
-    mkdir(DCIM, 0755);
+    mkdir(T5_DCIM_DIR, 0755);
 }
 
 static void stamp(char *out, size_t n, const char *prefix, const char *ext)
 {
     struct tm tm;
     t5_time_local(&tm);
-    snprintf(out, n, DCIM "/%s_%04d%02d%02d_%02d%02d%02d.%s", prefix, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+    snprintf(out, n, T5_DCIM_DIR "/%s_%04d%02d%02d_%02d%02d%02d.%s", prefix, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
              tm.tm_hour, tm.tm_min, tm.tm_sec, ext);
 }
 
@@ -238,7 +234,7 @@ static void gal_click(uint32_t i, void *ud)
     gallery_t *g = ud;
     if ((int)i >= g->n || !sa_photo_can_open(g->names[i])) return;
     char path[96];
-    snprintf(path, sizeof path, DCIM "/%s", g->names[i]);
+    snprintf(path, sizeof path, T5_DCIM_DIR "/%s", g->names[i]);
     sa_photo_open(s.scr, path, NULL);
 }
 
@@ -256,7 +252,7 @@ static void open_gallery(lv_event_t *e)
     (void)e;
     gallery_t *g = calloc(1, sizeof *g);
     if (!g) return;
-    DIR *d = opendir(DCIM);
+    DIR *d = opendir(T5_DCIM_DIR);
     struct dirent *de;
     while (d && g->n < MAX_FILES && (de = readdir(d))) {
         if (de->d_name[0] == '.') continue;
@@ -268,7 +264,7 @@ static void open_gallery(lv_event_t *e)
     for (int i = 0; i < g->n; i++) {
         char path[96];
         struct stat st;
-        snprintf(path, sizeof path, DCIM "/%s", g->names[i]);
+        snprintf(path, sizeof path, T5_DCIM_DIR "/%s", g->names[i]);
         g->sizes[i] = stat(path, &st) == 0 ? (uint32_t)st.st_size : 0;
     }
     cam_stop();
@@ -473,7 +469,7 @@ static const t5_app_desc_t s_desc = {
 };
 
 const t5_builtin_app_t sysapp_camera = {
-    .id = "com.t5.camera",
+    .id = T5_APP_ID_CAMERA,
     .name = "Camera",
     .desc = &s_desc,
     .perms = T5_PERM_CAMERA | T5_PERM_MIC | T5_PERM_STORAGE,

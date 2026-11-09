@@ -16,6 +16,9 @@ extern "C" {
 #endif
 
 #define T5_INA226_SHUNT_UOHM 5000
+/* What the ID registers read; the low die-ID nibble is the revision. */
+#define T5_INA226_MANUF_ID 0x5449
+#define T5_INA226_DIE_ID 0x2260
 
 typedef struct {
     uint16_t mv;          /* bus voltage */
@@ -34,6 +37,9 @@ uint16_t t5_ina226_bus_to_mv(uint16_t raw);          /* 1.25 mV/LSB */
 int32_t t5_ina226_shunt_to_ma10(int16_t raw);        /* 2.5 uV/LSB through the shunt */
 
 #define T5_INA226_CONFIG 0x4527   /* AVG 16, VBUSCT 1.1 ms, VSHCT 1.1 ms, shunt+bus continuous */
+/* After init, the first result to trust: the averaged sample in progress
+ * when the config was written, then a whole one (16 x 2 x 1.1 ms = 35 ms). */
+#define T5_INA226_FIRST_SAMPLE_MS 80
 
 #ifdef __cplusplus
 }

@@ -3,6 +3,7 @@
 #include "t5_i2c/t5_i2c.h"
 #include "t5_mocks.h"
 #include "t5_pins/pins.h"
+#include "t5_pins/table.h"
 
 void setUp(void) { mock_reset_all(); }
 void tearDown(void) {}
@@ -11,7 +12,7 @@ static void test_register_read_write(void)
 {
     mock_i2c_dev_t *m = mock_i2c_add(0x50, false);
     t5_i2c_dev_t *d;
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_open(0x50, 400000, "x", &d));
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_open(0x50, 0, "x", &d));
     const uint8_t w[3] = { 1, 2, 3 };
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_write(d, 0x10, w, 3));
     TEST_ASSERT_EQUAL_HEX8_ARRAY(w, &m->regs[0x10], 3);
@@ -27,7 +28,7 @@ static void test_16bit_registers(void)
     mock_i2c_dev_t *m = mock_i2c_add(0x55, true);
     m->regs[0x1234] = 0x77;
     t5_i2c_dev_t *d;
-    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x55, 400000, "t", &d));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x55, 0, "t", &d));
     uint8_t v = 0;
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read16(d, 0x1234, &v, 1));
     TEST_ASSERT_EQUAL_HEX8(0x77, v);
@@ -35,9 +36,10 @@ static void test_16bit_registers(void)
 
 static void test_reserved_addresses(void)
 {
-    TEST_ASSERT_TRUE(t5_i2c_addr_reserved(T5_I2C_ADDR_INA226));
-    TEST_ASSERT_TRUE(t5_i2c_addr_reserved(T5_I2C_ADDR_SC2356));
-    TEST_ASSERT_TRUE(t5_i2c_addr_reserved(T5_I2C_ADDR_UNKNOWN28));
+    for (size_t i = 0; i < t5_pins_chip_count; i++) {
+        TEST_ASSERT_EQUAL(t5_pins_chips[i].reserved, t5_i2c_addr_reserved(t5_pins_chips[i].addr));
+    }
+    TEST_ASSERT_TRUE(t5_i2c_addr_reserved(T5_I2C_ADDR_BMI270_ALT));
     TEST_ASSERT_FALSE(t5_i2c_addr_reserved(0x3C));
 }
 
@@ -132,8 +134,8 @@ static void test_lock_nests_and_no_handoff_when_idle(void)
     mock_i2c_add(0x50, false);
     t5_i2c_dev_t *d;
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x50, 0, "x", &d));
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock(10));
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock(10));            /* recursive */
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock());
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_lock());            /* recursive */
     uint8_t v;
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read_u8(d, 0, &v));   /* nested lock inside */
     t5_i2c_unlock();
@@ -142,6 +144,30 @@ static void test_lock_nests_and_no_handoff_when_idle(void)
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read_u8(d, 0, &v));
     TEST_ASSERT_EQUAL(0, t5_i2c_handoffs());              /* nobody waiting: no step-aside */
     TEST_ASSERT_EQUAL_INT64(before, t5_time_us());        /* and no delay */
+}
+
+static void test_lock_timeout_is_counted(void)
+{
+    mock_mutex_timeout_next(1);
+    TEST_ASSERT_EQUAL(T5_ERR_BUSY, t5_i2c_lock());
+    t5_i2c_bus_stats_t st;
+    t5_i2c_bus_stats(&st);
+    TEST_ASSERT_EQUAL(1, st.lock_timeouts);
+}
+
+static void test_close_frees_the_handle_even_when_the_bus_is_busy(void)
+{
+    mock_i2c_add(0x50, false);
+    t5_i2c_dev_t *d[T5_I2C_MAX_DEVICES];
+    for (int i = 0; i < T5_I2C_MAX_DEVICES; i++) {
+        TEST_ASSERT_EQUAL(T5_OK, t5_i2c_open(0x50, 0, "x", &d[i]));
+    }
+    t5_i2c_dev_t *extra;
+    TEST_ASSERT_EQUAL(T5_ERR_NO_MEM, t5_i2c_open(0x50, 0, "x", &extra));
+    mock_mutex_timeout_next(1);
+    t5_i2c_close(d[0]);
+    TEST_ASSERT_EQUAL(T5_I2C_MAX_DEVICES - 1, t5_i2c_dev_stats(NULL, 0));
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_open(0x50, 0, "x", &extra));
 }
 
 static void test_probe(void)
@@ -164,6 +190,8 @@ int main(void)
     RUN_TEST(test_fault_isolation_and_recovery);
     RUN_TEST(test_trace_ring_keeps_newest);
     RUN_TEST(test_lock_nests_and_no_handoff_when_idle);
+    RUN_TEST(test_lock_timeout_is_counted);
+    RUN_TEST(test_close_frees_the_handle_even_when_the_bus_is_busy);
     RUN_TEST(test_probe);
     return UNITY_END();
 }

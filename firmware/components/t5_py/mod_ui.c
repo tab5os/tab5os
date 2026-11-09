@@ -52,8 +52,6 @@ MP_REGISTER_ROOT_POINTER(void *t5_py_wtab);   /* py_widget_t *[s_wcap], in the G
 #define WTAB ((py_widget_t **)MP_STATE_VM(t5_py_wtab))
 
 extern const mp_obj_type_t py_type_widget;
-uintptr_t py_slot_put(mp_obj_t fn);
-mp_obj_t py_slot_take(uintptr_t h);
 
 void py_ui_reset(void)
 {
@@ -63,16 +61,14 @@ void py_ui_reset(void)
 
 static inline void *tag(uint32_t slot)
 {
-    return (void *)(((uintptr_t)(py_gen & 0xffff) << 16) | slot);
+    return (void *)py_tag(slot);
 }
 
 /* UI task (under the lock): the widget an event's user data names, or NULL. */
 static py_widget_t *untag(void *ud)
 {
-    uintptr_t h = (uintptr_t)ud;
-    if ((h >> 16) != (py_gen & 0xffff) || !py_vm || py_vm->closing) return NULL;
-    uint32_t i = h & 0xffff;
-    if (i >= s_wcap || !WTAB) return NULL;
+    int i = py_untag((uintptr_t)ud);
+    if (i < 0 || (uint32_t)i >= s_wcap || !WTAB) return NULL;
     return WTAB[i];
 }
 
@@ -145,9 +141,8 @@ static void back_late(void *arg)
 
 static void back_cb(lv_event_t *e)
 {
-    uintptr_t h = (uintptr_t)lv_event_get_user_data(e);
     t5_py_t *vm = py_vm;
-    if ((h >> 16) != (py_gen & 0xffff) || !vm || vm->closing) return;
+    if (py_untag((uintptr_t)lv_event_get_user_data(e)) < 0) return;
     if (vm->cfg.repl) {
         /* At the prompt: back just takes the script's UI away. */
         if (vm->ui_root) lv_obj_delete_async(vm->ui_root);
@@ -247,13 +242,15 @@ static const char *text_arg(mp_obj_t o)
     return mp_obj_str_get_str(o);
 }
 
+/* md's role names; "h4" is short for "headline4". */
 static md_type_role_t role_arg(mp_obj_t r)
 {
-    static const char *const names[] = { "h4", "h5", "h6", "subtitle1", "body1", "body2", "button", "caption",
-                                         "overline" };
     const char *s = mp_obj_str_get_str(r);
-    for (int i = 0; i < (int)MP_ARRAY_SIZE(names); i++) {
-        if (!strcmp(s, names[i])) return (md_type_role_t)i;
+    for (int i = 0; i < MD_TYPE_COUNT; i++) {
+        const char *n = md_type((md_type_role_t)i)->name;
+        if (!strcmp(s, n) || (s[0] == 'h' && !strncmp(n, "headline", 8) && !strcmp(s + 1, n + 8))) {
+            return (md_type_role_t)i;
+        }
     }
     mp_raise_ValueError(MP_ERROR_TEXT("role is h4, h5, h6, subtitle1, body1, body2, button, caption or overline"));
 }

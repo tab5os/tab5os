@@ -5,36 +5,42 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 FW="$ROOT/firmware"
-REV="${T5_REV:-rev1}"
 PORT="${T5_PORT:-}"
 DOCKER=0
 
 usage() {
     cat <<USAGE
-usage: t5 [--rev rev1|rev3] [--port PORT] [--docker] <command>
+usage: t5 [--port PORT] [--docker] <command>
 
-  build            build firmware (build-<rev>/)
+  build            build firmware (firmware/build/)
+  size-check       fail if the OS image is over its budget (90% of an OTA slot)
   flash            flash bootloader, partition table and OS to ota_0
   monitor          serial console
   fm               flash then monitor
   chip             print chip revision (esptool chip-id)
   size             image size report
-  clean            remove build-<rev>/
+  clean            remove firmware/build/
   host-test        build and run host unit tests
+  device-build     build the on-device tests (test/device/build/)
   device-test      build, flash and run the on-device tests (replaces the OS; run 'flash' after)
   console CMD...   run bring-up console commands and print the replies
-  sim [ARGS]       build and run the SDL simulator (sim/build/t5sim; --help for ARGS)
-  sim-shots        render the simulator's screenshots and check them against sim/golden
-  lint             UI density lint (raw pixel values), coding standard lint, ABI symbol file check
-  analyze          build with GCC's static analyzer on the strict components (build-analyze-<rev>/)
-  apps             build the SDK test apps (test/apps/build/*.t5app) against build-<rev>
+  sim-build        build the SDL simulator (sim/build/t5sim)
+  sim [ARGS]       build and run it (--help for ARGS)
+  sim-shots [DIR]  render its screenshots into DIR (sim/build/shots) and check them against sim/golden
+  lint             UI density lint (raw pixel values), coding standard lint, simulator LVGL config,
+                   ABI symbol file check, docs/api-reference.md up to date
+  analyze          firmware and recovery with GCC's static analyzer on the strict components
+                   (firmware/build-analyze/, recovery/build-analyze/)
+  apps             build the SDK test apps (test/apps/build/*.t5app) against firmware/build
   examples         build the example apps (apps/examples/build/*.t5app)
   shot [OUT.png]   screenshot over the console (tools/t5/t5shot.py; --cam for the camera)
-  abi-check [REF]  check the app ABI against sdk/abi/*.lock: symbols and struct layouts (needs a firmware build)
-  recovery-build   build the recovery image (recovery/build/, plan 9.2)
-  recovery-flash   write it to the recovery partition (0x50000); the OS is untouched
-  c6-build         build the ESP32-C6 radio firmware (c6/build/)
+  abi-check [REF]  check the struct layouts against sdk/abi/*.lock (needs a firmware build), and with
+                   REF the symbol file against REF's
+  recovery-build   build the recovery image (recovery/build/, plan 9.2); fails if it doesn't fit
+  recovery-flash   write it to the recovery partition; the OS is untouched
+  c6-build         build the ESP32-C6 radio firmware (c6/build/); fails if it doesn't fit c6fw
   c6-stage         write that image to the c6fw partition; then 'net update' on the device
+  hil NAME [ARGS]  run a bench script, test/hil/NAME.py, with the IDF Python (--help for ARGS)
 
 Apps (tools/t5/t5dev.py; Wi-Fi to a paired Tab5 in developer mode, USB-C fallback):
   new NAME [--python]          app from the C or Python template
@@ -46,13 +52,12 @@ Apps (tools/t5/t5dev.py; Wi-Fi to a paired Tab5 in developer mode, USB-C fallbac
   push FILE | launch ID | stop | rm ID | ls | logs | py FILE | screenshot OUT.png
   ota-pack [--sign KEY] | ota [FILE.t5os]   OS updates (plan 9.1)
 
-Defaults: rev from \$T5_REV (rev1), port auto-detected (/dev/cu.usbmodem*).
+Default port: the first USB serial port (tools/t5/t5link.py PORT_GLOBS).
 USAGE
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --rev) REV="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
         --docker) DOCKER=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -60,26 +65,60 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ $# -ge 1 ] || { usage; exit 1; }
-case "$REV" in rev1|rev3) ;; *) echo "bad --rev $REV" >&2; exit 1 ;; esac
-BUILD="build-$REV"
 IDF_VER="$(tr -d '[:space:]' < "$FW/idf_version.txt")"
 IDF_PYTHON="${IDF_PYTHON_ENV_PATH:+$IDF_PYTHON_ENV_PATH/bin/python}"
 IDF_PYTHON="${IDF_PYTHON:-python3}"
+export PYTHONPATH="$ROOT/tools/t5${PYTHONPATH:+:$PYTHONPATH}"
+# The OS image may use this share of an OTA slot: the rest is headroom for a fix.
+BUDGET_PCT=90
 
 detect_port() {
     if [ -z "$PORT" ]; then
-        PORT="$(ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null | head -1 || true)"
+        PORT="$(python3 -c 'import t5link; print(t5link.find_port() or "")')"
         [ -n "$PORT" ] || { echo "no Tab5 found; pass --port" >&2; exit 1; }
     fi
 }
 
+need_idf() {
+    command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+}
+
+const() { python3 "$ROOT/tools/t5/t5const.py" "$@"; }
+
+# fits IMAGE LIMIT WHAT: fail unless IMAGE is at most LIMIT bytes.
+fits() {
+    [ -f "$1" ] || { echo "no $1" >&2; exit 1; }
+    local size
+    size=$(stat -f %z "$1" 2>/dev/null || stat -c %s "$1")
+    echo "$(basename "$1"): $size bytes, $3 $(($2))"
+    [ "$size" -le $(($2)) ] || { echo "$(basename "$1") is over $3" >&2; exit 1; }
+}
+
+# The last sector of the recovery partition is the boot-control record.
+recovery_room() {
+    echo $(( $(const partition recovery size) - $(const define t5_bootfmt/include/t5_bootfmt/bootctl.h T5_BOOTCTL_SECTOR_FROM_END) ))
+}
+
+sim_build() {
+    cmake -S "$ROOT/sim" -B "$ROOT/sim/build" -G Ninja >/dev/null
+    cmake --build "$ROOT/sim/build"
+}
+
+# idf_project DIR TARGET BUILD ARGS...: build an IDF project other than firmware/.
+idf_project() {
+    local dir="$1" tgt="$2" b="$3"
+    shift 3
+    need_idf
+    (cd "$dir" && { [ -f sdkconfig ] || idf.py -B "$b" set-target "$tgt"; } && idf.py -B "$b" "$@")
+}
+
 idf() {
     if [ "$DOCKER" = 1 ]; then
-        docker run --rm -v "$ROOT":/project -w /project/firmware -e T5_REV="$REV" \
-            "espressif/idf:$IDF_VER" idf.py -B "$BUILD" -D T5_REV="$REV" "$@"
+        docker run --rm -v "$ROOT":/project -w /project/firmware \
+            "espressif/idf:$IDF_VER" idf.py -B build "$@"
     else
-        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
-        (cd "$FW" && idf.py -B "$BUILD" -D T5_REV="$REV" "$@")
+        need_idf
+        (cd "$FW" && idf.py -B build "$@")
     fi
 }
 
@@ -87,78 +126,92 @@ cmd="$1"; shift
 case "$cmd" in
     build) idf build "$@" ;;
     size) idf size "$@" ;;
-    clean) rm -rf "$FW/$BUILD" "$FW/sdkconfig.$REV" ;;
+    size-check)
+        fits "$FW/build/tab5os.bin" "$(const partition ota_0 size) * $BUDGET_PCT / 100" "budget ($BUDGET_PCT% of an OTA slot)" ;;
+    clean) rm -rf "$FW/build" "$FW/sdkconfig" ;;
     flash) detect_port; DOCKER=0 idf -p "$PORT" flash "$@" ;;
     monitor) detect_port; DOCKER=0 idf -p "$PORT" monitor "$@" ;;
     fm) detect_port; DOCKER=0 idf -p "$PORT" flash monitor "$@" ;;
     chip) detect_port; esptool --port "$PORT" chip-id ;;
+    device-build)
+        need_idf
+        (cd "$ROOT/test/device" && idf.py -B build build "$@") ;;
     device-test)
         detect_port
-        (cd "$ROOT/test/device" && idf.py -B "build-$REV" -D T5_REV="$REV" -p "$PORT" build flash)
+        need_idf
+        (cd "$ROOT/test/device" && idf.py -B build -p "$PORT" build flash)
         "$IDF_PYTHON" "$ROOT/tools/t5/t5devtest.py" --port "$PORT" ;;
     console)
         "$IDF_PYTHON" "$ROOT/tools/t5/t5console.py" ${PORT:+--port "$PORT"} "$@" ;;
     analyze)
         # docs/coding-standard.md: -fanalyzer on the STRICT components only.
-        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
-        (cd "$FW" && idf.py -B "build-analyze-$REV" -D T5_REV="$REV" -D T5_ANALYZE=ON build "$@") ;;
+        need_idf
+        (cd "$FW" && idf.py -B build-analyze -D T5_ANALYZE=ON build "$@")
+        idf_project "$ROOT/recovery" esp32p4 build-analyze -D T5_ANALYZE=ON build ;;
     recovery-build)
-        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
-        (cd "$ROOT/recovery" && { [ -f sdkconfig ] || idf.py -B build set-target esp32p4; } && idf.py -B build build "$@") ;;
+        idf_project "$ROOT/recovery" esp32p4 build build "$@"
+        fits "$ROOT/recovery/build/tab5recovery.bin" "$(recovery_room)" "room in the recovery partition" ;;
     recovery-flash)
         detect_port
         img="$ROOT/recovery/build/tab5recovery.bin"
         [ -f "$img" ] || { echo "no $img; run 't5 recovery-build'" >&2; exit 1; }
-        size=$(stat -f %z "$img" 2>/dev/null || stat -c %s "$img")
-        # The last 4 KB of the partition is the boot-control record.
-        [ "$size" -le $((0x180000 - 0x1000)) ] || { echo "recovery image ($size bytes) too big" >&2; exit 1; }
+        fits "$img" "$(recovery_room)" "room in the recovery partition"
         # Only the app: the recovery project's own bootloader and partition table never go on the device.
-        esptool --port "$PORT" write-flash 0x50000 "$img" ;;
+        esptool --port "$PORT" write-flash "$(const partition recovery offset)" "$img" ;;
     c6-build)
-        command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
-        (cd "$ROOT/c6" && { [ -f sdkconfig ] || idf.py -B build set-target esp32c6; } && idf.py -B build build "$@") ;;
+        idf_project "$ROOT/c6" esp32c6 build build "$@"
+        fits "$ROOT/c6/build/tab5os_c6.bin" "$(const partition c6fw size)" "the c6fw partition" ;;
     c6-stage)
         detect_port
         img="$ROOT/c6/build/tab5os_c6.bin"
         [ -f "$img" ] || { echo "no $img; run 't5 c6-build'" >&2; exit 1; }
-        size=$(stat -f %z "$img" 2>/dev/null || stat -c %s "$img")
-        [ "$size" -le $((0x180000)) ] || { echo "C6 image ($size bytes) exceeds the 1.5 MB c6fw partition" >&2; exit 1; }
-        esptool --port "$PORT" write-flash 0x9D0000 "$img" ;;
+        fits "$img" "$(const partition c6fw size)" "the c6fw partition"
+        esptool --port "$PORT" write-flash "$(const partition c6fw offset)" "$img" ;;
+    sim-build) sim_build ;;
     sim)
-        cmake -S "$ROOT/sim" -B "$ROOT/sim/build" -G Ninja >/dev/null
-        cmake --build "$ROOT/sim/build"
+        sim_build
         "$ROOT/sim/build/t5sim" "$@" ;;
     sim-shots)
-        cmake -S "$ROOT/sim" -B "$ROOT/sim/build" -G Ninja >/dev/null
-        cmake --build "$ROOT/sim/build"
-        mkdir -p "$ROOT/sim/build/shots"
-        "$ROOT/sim/build/t5sim" --shots "$ROOT/sim/build/shots" --check "$ROOT/sim/golden" "$@" ;;
+        sim_build
+        out="${1:-$ROOT/sim/build/shots}"
+        mkdir -p "$out"
+        "$ROOT/sim/build/t5sim" --shots "$out" --check "$ROOT/sim/golden" ;;
     lint)
         python3 "$ROOT/tools/lint_px.py"
         python3 "$ROOT/tools/lint_std.py"
-        python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" ;;
+        python3 "$ROOT/tools/lint_lvconf.py"
+        python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym"
+        ref="$(mktemp -d)/api-reference.md"
+        python3 "$ROOT/tools/abi/apidoc.py" "$ref" >/dev/null
+        diff -u "$ROOT/docs/api-reference.md" "$ref" ||
+            { echo "docs/api-reference.md is stale: python3 tools/abi/apidoc.py docs/api-reference.md" >&2; exit 1; } ;;
     apps)
         command -v riscv32-esp-elf-gcc >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
-        cmake -S "$ROOT/test/apps" -B "$ROOT/test/apps/build" -G Ninja -DT5_FIRMWARE_BUILD="$FW/$BUILD" >/dev/null
+        cmake -S "$ROOT/test/apps" -B "$ROOT/test/apps/build" -G Ninja >/dev/null
         cmake --build "$ROOT/test/apps/build"
         ls "$ROOT"/test/apps/build/*.t5app ;;
     examples)
         command -v riscv32-esp-elf-gcc >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
-        cmake -S "$ROOT/apps/examples" -B "$ROOT/apps/examples/build" -G Ninja -DT5_FIRMWARE_BUILD="$FW/$BUILD" >/dev/null
+        cmake -S "$ROOT/apps/examples" -B "$ROOT/apps/examples/build" -G Ninja >/dev/null
         cmake --build "$ROOT/apps/examples/build"
         ls "$ROOT"/apps/examples/build/*.t5app ;;
     shot)
         "$IDF_PYTHON" "$ROOT/tools/t5/t5shot.py" ${PORT:+--port "$PORT"} "${@:-shot.png}" ;;
     abi-check)
-        python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" ${1:+--base "$1"}
-        "$IDF_PYTHON" "$ROOT/tools/abi/layout.py" check "$FW/$BUILD" ;;
-    new|run|pack|keygen|pair|devices|push|launch|stop|rm|ls|logs|py|screenshot|ota|ota-pack)
+        # The symbol file alone is checked by lint; against REF only here.
+        [ $# -eq 0 ] || python3 "$ROOT/tools/abi/abi.py" check "$ROOT/sdk/abi/api_v1.sym" --base "$1"
+        "$IDF_PYTHON" "$ROOT/tools/abi/layout.py" check "$FW/build" ;;
+    hil)
+        [ $# -ge 1 ] || { ls "$ROOT/test/hil" | sed -n 's/^\([a-z][a-z0-9_]*\)\.py$/  \1/p'; exit 1; }
+        name="$1"; shift
+        [ -f "$ROOT/test/hil/$name.py" ] || { echo "no test/hil/$name.py" >&2; exit 1; }
+        T5_PORT="$PORT" "$IDF_PYTHON" "$ROOT/test/hil/$name.py" "$@" ;;
+    new|run|pack|keygen|pair|devices|push|launch|stop|rm|ls|logs|py|screenshot|ota|ota-pack|app-build)
         "$IDF_PYTHON" "$ROOT/tools/t5/t5dev.py" ${PORT:+--port "$PORT"} "$cmd" "$@" ;;
-    app-build)
-        "$IDF_PYTHON" "$ROOT/tools/t5/t5dev.py" build "$@" ;;
     host-test)
         cmake -S "$ROOT/test/host" -B "$ROOT/test/host/build" -G Ninja >/dev/null
         cmake --build "$ROOT/test/host/build"
-        ctest --test-dir "$ROOT/test/host/build" --output-on-failure ;;
+        ctest --test-dir "$ROOT/test/host/build" --output-on-failure
+        python3 -m unittest discover -s "$ROOT/tools/t5" -p "test_*.py" ;;
     *) usage; exit 1 ;;
 esac

@@ -78,20 +78,28 @@ bool t5_orient_update(t5_orient_t *o, int32_t ux, int32_t uy, int32_t uz, uint32
     }
 done:
     /* The allowed set can change under us (an app with a fixed orientation). */
-    if (!(allowed & T5_ROT_MASK(o->current)) && allowed) {
-        for (int i = 1; i < 4; i++) {
-            /* Prefer the 180-degree partner (same aspect), then the others. */
-            t5_rotation_t r = (t5_rotation_t)((o->current + (i == 1 ? 2 : i == 2 ? 1 : 3)) % 4);
-            if (allowed & T5_ROT_MASK(r)) {
-                o->current = r;
-                o->pending = false;
-                changed = true;
-                break;
-            }
+    if (allowed) {
+        t5_rotation_t r = t5_orient_fallback(o->current, allowed);
+        if (r != o->current) {
+            o->current = r;
+            o->pending = false;
+            changed = true;
         }
     }
     if (out) *out = o->current;
     return changed;
+}
+
+t5_rotation_t t5_orient_fallback(t5_rotation_t current, uint32_t allowed)
+{
+    allowed &= T5_ROT_ALL;
+    if (!allowed || (allowed & T5_ROT_MASK(current))) return current;
+    t5_rotation_t partner = (t5_rotation_t)((current + 2) % 4);
+    if (allowed & T5_ROT_MASK(partner)) return partner;
+    for (int i = 0; i < 4; i++) {
+        if (allowed & T5_ROT_MASK(i)) return (t5_rotation_t)i;
+    }
+    return current;
 }
 
 void t5_axis_map_apply(const t5_axis_map_t *m, const int16_t chip[3], int32_t panel[3])

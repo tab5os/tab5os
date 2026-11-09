@@ -31,12 +31,12 @@
 #include "freertos/task.h"
 #include "t5_power/power.h"
 #include "md/md.h"
+#include "md/md_diag.h"
 #include "t5_display/t5_display.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_ui/ui_diag.h"
 #include "t5_shell/shell.h"
 #include "diag_priv.h"
-
-void t5_ui_orient_debug(int16_t *angle, bool *flat, t5_rotation_t *pending);
 
 static void print_status(void)
 {

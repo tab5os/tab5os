@@ -28,15 +28,11 @@
 #include <stddef.h>
 #include <time.h>
 #include "t5_core/err.h"
+#include "t5_pkg/manifest.h"     /* T5_API_LEVEL, T5_PERM_* */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* API level this header describes. An app built against level N runs on any
- * OS whose level is >= N (sdk/abi/api_v<N>.sym never loses or changes a
- * symbol). */
-#define T5_API_LEVEL 1
 
 typedef struct t5_app t5_app_t;
 struct _lv_obj_t;

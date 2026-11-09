@@ -19,60 +19,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mbedtls/base64.h"
 #include "t5_audio/audio.h"
 #include "t5_camera/camera.h"
 #include "t5_core/os.h"
-#include "t5_display/t5_display.h"
+#include "t5_display/shot.h"
+#include "t5_dev/control.h"
 #include "t5_power/power.h"
 #include "t5_shell/shell.h"
 #include "t5_app/apps.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_usb/usb.h"
+#include "t5_usb/usb_diag.h"
 #include "diag_priv.h"
-
-/* ---- shot ---------------------------------------------------------------------- */
-static void dump_rgb565(const uint16_t *px, int w, int h)
-{
-    printf("SHOT %d %d\n", w, h);
-    /* 48 source bytes per line -> 64 base64 chars. */
-    const uint8_t *b = (const uint8_t *)px;
-    size_t total = (size_t)w * h * 2;
-    unsigned char line[80];
-    for (size_t off = 0; off < total; off += 48) {
-        size_t n = total - off < 48 ? total - off : 48, olen = 0;
-        mbedtls_base64_encode(line, sizeof line, &olen, b + off, n);
-        line[olen] = 0;
-        printf("%s\n", line);
-    }
-    printf("END\n");
-}
 
 static int cmd_shot(int argc, char **argv)
 {
     uint32_t div = 4;
     if (argc >= 2 && !diag_parse_u32(argv[1], 1, 16, &div)) return 1;
-    int i = t5_display_scanout();
-    const uint16_t *fb = i >= 0 ? t5_display_fb_n(i) : NULL;
-    if (!fb) {
-        printf("no framebuffer\n");
+    t5_dev_shot_t shot;
+    t5_err_t e = t5_dev_shot((int)div, &shot);
+    if (e != T5_OK) {
+        printf("%s\n", e == T5_ERR_STATE ? "no framebuffer" : t5_err_str(e));
         return 1;
     }
-    int w = T5_DISPLAY_W / (int)div, h = T5_DISPLAY_H / (int)div;
-    uint16_t *out = heap_caps_malloc((size_t)w * h * 2, MALLOC_CAP_SPIRAM);
-    if (!out) return 1;
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) out[y * w + x] = fb[(size_t)(y * (int)div) * T5_DISPLAY_W + x * (int)div];
-    /* Native portrait; the receiver rotates by the logical rotation printed here. */
-    printf("rotation %d\n", (int)t5_ui_rotation() * 90);
-    dump_rgb565(out, w, h);
-    heap_caps_free(out);
+    t5_display_print_shot(shot.px, shot.w, shot.h, shot.w, 1, shot.rotation);
+    t5_dev_shot_free(&shot);
     return 0;
 }
 
@@ -380,7 +358,7 @@ static int cmd_cam(int argc, char **argv)
         uint16_t *px = heap_caps_malloc(w * h * 2, MALLOC_CAP_SPIRAM);
         if (!px) return 1;
         t5_err_t e = t5_camera_snapshot(px, (int)w, (int)h);
-        if (e == T5_OK) dump_rgb565(px, (int)w, (int)h);
+        if (e == T5_OK) t5_display_print_shot(px, (int)w, (int)h, (int)w, 1, -1);
         else printf("snap: %s (needs an open camera with a preview)\n", t5_err_str(e));
         heap_caps_free(px);
         return e != T5_OK;
@@ -472,7 +450,6 @@ static int cmd_usbc(int argc, char **argv)
         return e != T5_OK;
     }
     if (argc >= 2 && !strcmp(argv[1], "trace")) {
-        extern uint32_t t5_usbc_trace(void);
         printf("hand-back trace 0x%08x\n", (unsigned)t5_usbc_trace());
         return 0;
     }

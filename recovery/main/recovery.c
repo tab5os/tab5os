@@ -29,13 +29,13 @@
 #include "esp_app_desc.h"
 #include "esp_console.h"
 #include "esp_core_dump.h"
-#include "esp_littlefs.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "nvs_flash.h"
@@ -43,11 +43,12 @@
 #include "t5_bsp/board.h"
 #include "t5_bsp/xpin.h"
 #include "t5_core/event.h"
+#include "t5_display/shot.h"
 #include "t5_display/t5_display.h"
 #include "t5_i2c/t5_i2c.h"
 #include "t5_input/t5_touch.h"
-#include "t5_ota/bootctl.h"
 #include "t5_ota/ota.h"
+#include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 
 static const char *TAG = "recovery";
@@ -58,15 +59,14 @@ static const char *TAG = "recovery";
 #define C_CARD 0x1e252b
 #define C_ACCENT 0x4dd0e1
 #define C_WARN 0xff8a65
+#define RESTART_SHOW_MS 300          /* the "Restarting" line on screen before the reset */
 
-/* ---- worker ------------------------------------------------------------------------ */
-typedef enum { JOB_NONE, JOB_INSTALL, JOB_CLEAR, JOB_ERASE, JOB_LOGS } job_t;
+typedef enum { JOB_NONE, JOB_INSTALL, JOB_CLEAR, JOB_ERASE, JOB_LOGS, JOB_RESTART, JOB_SAFE } job_t;
 
-static volatile job_t s_job;
+static TaskHandle_t s_worker;
 static volatile bool s_busy;
 static char s_status[200] = "Choose an action.";
 static char s_job_path[128];
-static bool s_job_unsigned;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_status_dirty = true;
 
@@ -151,7 +151,7 @@ static void job_logs(void)
     }
     char dir[64];
     for (int i = 1; i < 1000; i++) {
-        snprintf(dir, sizeof dir, "/sd/tab5-recovery-%d", i);
+        snprintf(dir, sizeof dir, T5_SD_PATH "/tab5-recovery-%d", i);
         struct stat st;
         if (stat(dir, &st) != 0) break;
     }
@@ -177,15 +177,16 @@ static void job_logs(void)
         if (f) fclose(f);
     }
     /* Crash records and the app dumps the OS kept. */
-    snprintf(path, sizeof path, "%s/crashes.bin", dir);
-    saved += copy_file("/data/sys/crashes.bin", path);
-    DIR *d = opendir("/data/sys/dumps");
+    char from[160];
+    snprintf(path, sizeof path, "%s/" T5_CRASH_DB_NAME, dir);
+    if (t5_sys_path(from, sizeof from, T5_CRASH_DB_NAME) == T5_OK) saved += copy_file(from, path);
+    char dumps[96];
+    DIR *d = t5_sys_path(dumps, sizeof dumps, T5_DUMP_DIR_NAME) == T5_OK ? opendir(dumps) : NULL;
     if (d) {
         struct dirent *e;
         while ((e = readdir(d))) {
             if (e->d_name[0] == '.') continue;
-            char from[160];
-            snprintf(from, sizeof from, "/data/sys/dumps/%.60s", e->d_name);
+            snprintf(from, sizeof from, "%s/%.60s", dumps, e->d_name);
             snprintf(path, sizeof path, "%s/%.60s", dir, e->d_name);
             saved += copy_file(from, path);
         }
@@ -210,9 +211,9 @@ static void job_logs(void)
 static void job_clear(void)
 {
     status("Clearing settings...");
-    nvs_flash_erase_partition("nvs");
-    int n = rm_tree("/data/sys", 0);
-    mkdir("/data/sys", 0755);
+    nvs_flash_erase_partition(NVS_DEFAULT_PART_NAME);
+    int n = rm_tree(T5_SYS_DIR, 0);
+    mkdir(T5_SYS_DIR, 0755);
     char msg[120];
     snprintf(msg, sizeof msg, "Settings cleared (Wi-Fi, Bluetooth and %d system files). Apps and your files stay.", n);
     status("%s", msg);
@@ -221,43 +222,57 @@ static void job_clear(void)
 static void job_erase(void)
 {
     status("Erasing /data...");
-    esp_err_t e = esp_littlefs_format("data");
-    status(e == ESP_OK ? "/data is empty: apps, settings and files are gone." : "Erasing /data failed.");
+    t5_err_t e = t5_storage_data_format();
+    status(e == T5_OK ? "/data is empty: apps, settings and files are gone." : "Erasing /data failed.");
 }
 
 static void job_install(void)
 {
     status("Installing %s...", s_job_path);
     char err[128] = "";
-    t5_err_t e = t5_ota_install_file(s_job_path, s_job_unsigned, err, sizeof err);
+    t5_err_t e = t5_ota_install_file(s_job_path, T5_OTA_FROM_RECOVERY, true, err, sizeof err);
     if (e == T5_OK) status("Installed. Restart Tab5 OS to run it.");
     else status("Not installed: %s", err);
+}
+
+static void job_restart(bool safe)
+{
+    status(safe ? "Restarting in safe mode..." : "Restarting...");
+    vTaskDelay(pdMS_TO_TICKS(RESTART_SHOW_MS));
+    if (!safe) esp_restart();
+    T5_LOG_ON_ERR(TAG, t5_ota_reboot_safe_mode());
+    status("Couldn't restart in safe mode.");
 }
 
 static void worker(void *arg)
 {
     (void)arg;
     for (;;) {
-        job_t j = s_job;
-        if (j != JOB_NONE) {
-            s_busy = true;
-            switch (j) {
-            case JOB_INSTALL: job_install(); break;
-            case JOB_CLEAR: job_clear(); break;
-            case JOB_ERASE: job_erase(); break;
-            case JOB_LOGS: job_logs(); break;
-            default: break;
-            }
-            s_job = JOB_NONE;
-            s_busy = false;
+        uint32_t j = JOB_NONE;
+        xTaskNotifyWait(0, UINT32_MAX, &j, portMAX_DELAY);
+        switch ((job_t)j) {
+        case JOB_INSTALL: job_install(); break;
+        case JOB_CLEAR: job_clear(); break;
+        case JOB_ERASE: job_erase(); break;
+        case JOB_LOGS: job_logs(); break;
+        case JOB_RESTART: job_restart(false); break;
+        case JOB_SAFE: job_restart(true); break;
+        default: break;
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        s_busy = false;
     }
 }
 
-/* ---- UI ------------------------------------------------------------------------------ */
+/* On the UI task: hand a job to the worker (one at a time). */
+static void start(job_t j)
+{
+    if (s_busy || !s_worker) return;
+    s_busy = true;
+    xTaskNotify(s_worker, (uint32_t)j, eSetValueWithOverwrite);
+}
+
 static lv_obj_t *s_status_label, *s_overlay;
-static uint32_t s_ms(void);
+
 static uint32_t s_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000);
@@ -271,20 +286,29 @@ static void flush(lv_display_t *d, const lv_area_t *a, uint8_t *px)
     lv_display_flush_ready(d);
 }
 
-static uint32_t s_ms(void);
+#define TAP_PRESS_MS 100
+#define TAP_WAIT_MS 1000
+
+/* A console tap: pressed until s_tap_until, then released, then s_tap_done. */
 static volatile int32_t s_tap_x, s_tap_y;
 static volatile uint32_t s_tap_until;
+static SemaphoreHandle_t s_tap_done;
 
 static void touch_read(lv_indev_t *i, lv_indev_data_t *data)
 {
     (void)i;
-    if (s_tap_until && s_ms() < s_tap_until) {      /* a console tap */
+    if (s_tap_until) {
         data->point.x = s_tap_x;
         data->point.y = s_tap_y;
-        data->state = LV_INDEV_STATE_PRESSED;
+        if (s_ms() < s_tap_until) {
+            data->state = LV_INDEV_STATE_PRESSED;
+            return;
+        }
+        s_tap_until = 0;
+        data->state = LV_INDEV_STATE_RELEASED;
+        xSemaphoreGive(s_tap_done);
         return;
     }
-    s_tap_until = 0;
     t5_touch_state_t st;
     if (t5_touch_read(&st) == T5_OK && st.count) {
         data->point.x = st.p[0].x;
@@ -330,8 +354,8 @@ static lv_obj_t *button(lv_obj_t *parent, const char *title, const char *sub, ac
     return b;
 }
 
-/* A confirmation over everything: title, text, the action, Cancel. */
-static action_fn_t s_confirm_fn;
+/* A confirmation over everything: title, text, the job, Cancel. */
+static job_t s_confirm_job;
 
 static void overlay_close(void)
 {
@@ -342,9 +366,8 @@ static void overlay_close(void)
 static void confirm_yes(lv_event_t *e)
 {
     (void)e;
-    action_fn_t fn = s_confirm_fn;
     overlay_close();
-    if (fn) fn();
+    start(s_confirm_job);
 }
 
 static void confirm_no(lv_event_t *e)
@@ -353,9 +376,9 @@ static void confirm_no(lv_event_t *e)
     overlay_close();
 }
 
-static void confirm(const char *title, const char *body, const char *yes, action_fn_t fn)
+static void confirm(const char *title, const char *body, const char *yes, job_t job)
 {
-    s_confirm_fn = fn;
+    s_confirm_job = job;
     s_overlay = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_overlay, W, H);
     lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x000000), 0);
@@ -392,16 +415,6 @@ static void confirm(const char *title, const char *body, const char *yes, action
     lv_obj_set_style_text_color(yl, lv_color_hex(0x000000), 0);
 }
 
-static void start(job_t j)
-{
-    s_job = j;
-}
-
-static void do_install(void)
-{
-    start(JOB_INSTALL);
-}
-
 static void act_install(void)
 {
     static char paths[8][128];
@@ -411,44 +424,31 @@ static void act_install(void)
                                                        : "No SD card: put one in with a .t5os update on it.");
         return;
     }
-    snprintf(s_job_path, sizeof s_job_path, "%s", paths[0]);
-    /* Is it signed by a key this recovery image trusts? Read its header. */
+    snprintf(s_job_path, sizeof s_job_path, "%s", paths[0]);       /* the newest */
     t5_ota_hdr_t h;
-    FILE *f = fopen(s_job_path, "rb");
-    bool ok = f && fread(&h, 1, sizeof h, f) == sizeof h && !memcmp(h.magic, T5_OTA_MAGIC, 4);
-    if (f) fclose(f);
-    if (!ok) {
-        status("%s isn't a Tab5 OS update.", s_job_path);
+    bool trusted;
+    char err[96];
+    if (t5_ota_peek(s_job_path, T5_OTA_FROM_RECOVERY, true, &h, &trusted, err, sizeof err) != T5_OK) {
+        status("%s: %s", s_job_path, err);
         return;
     }
     char body[300];
-    s_job_unsigned = h.sig_len == 0;
     snprintf(body, sizeof body, "%s\nTab5 OS %.15s%s", s_job_path, h.os_version,
-             h.sig_len ? "" : "\n\nThis update isn't signed. Install it only if you made it or trust where it "
-                              "came from.");
-    confirm("Reinstall Tab5 OS?", body, "Install", do_install);
-}
-
-static void do_clear(void)
-{
-    start(JOB_CLEAR);
+             trusted ? "" : "\n\nThis update isn't signed. Install it only if you made it or trust where it "
+                            "came from.");
+    confirm("Reinstall Tab5 OS?", body, "Install", JOB_INSTALL);
 }
 
 static void act_clear(void)
 {
     confirm("Clear settings?", "Wi-Fi networks, Bluetooth, paired computers and system settings are removed. "
-            "Installed apps and your files stay.", "Clear", do_clear);
-}
-
-static void do_erase(void)
-{
-    start(JOB_ERASE);
+            "Installed apps and your files stay.", "Clear", JOB_CLEAR);
 }
 
 static void act_erase(void)
 {
     confirm("Erase all data?", "Everything in /data goes: installed apps on the device, their data, settings and "
-            "your files there. The SD card isn't touched.", "Erase", do_erase);
+            "your files there. The SD card isn't touched.", "Erase", JOB_ERASE);
 }
 
 static void act_logs(void)
@@ -458,17 +458,12 @@ static void act_logs(void)
 
 static void act_restart(void)
 {
-    status("Restarting...");
-    vTaskDelay(pdMS_TO_TICKS(300));
-    esp_restart();
+    start(JOB_RESTART);
 }
 
 static void act_safe(void)
 {
-    status("Restarting in safe mode...");
-    vTaskDelay(pdMS_TO_TICKS(300));
-    T5_LOG_ON_ERR(TAG, t5_ota_reboot_safe_mode());
-    status("Couldn't restart in safe mode.");
+    start(JOB_SAFE);
 }
 
 static void build_ui(int failed, bool asked)
@@ -494,63 +489,25 @@ static void build_ui(int failed, bool asked)
     lv_label_set_text_fmt(ver, "Recovery %s", esp_app_get_description()->version);
 }
 
-/* ---- console: shot, tap, reboot (same format as the OS, so t5 shot works) ------------------- */
-static void b64_line(const uint8_t *in, size_t n)
-{
-    static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    char out[80];
-    size_t o = 0;
-    for (size_t i = 0; i < n; i += 3) {
-        uint32_t v = (uint32_t)in[i] << 16 | (i + 1 < n ? (uint32_t)in[i + 1] << 8 : 0) | (i + 2 < n ? in[i + 2] : 0);
-        out[o++] = t[v >> 18 & 63];
-        out[o++] = t[v >> 12 & 63];
-        out[o++] = i + 1 < n ? t[v >> 6 & 63] : '=';
-        out[o++] = i + 2 < n ? t[v & 63] : '=';
-    }
-    out[o] = 0;
-    printf("%s\n", out);
-}
-
+/* Console: shot, tap and reboot as the OS has them, so `t5 shot` works here too. */
 static int cmd_shot(int argc, char **argv)
 {
     int div = argc >= 2 ? atoi(argv[1]) : 4;
     if (div < 1 || div > 16) div = 4;
     const uint16_t *fb = t5_display_fb_n(0);
-    int w = W / div, h = H / div;
-    uint16_t *row = malloc((size_t)w * 2 * 24);
-    if (!fb || !row) {
-        free(row);
-        return 1;
-    }
-    printf("rotation 0\nSHOT %d %d\n", w, h);
-    /* 48 bytes per line, as the OS prints it. */
-    uint8_t buf[48];
-    size_t nb = 0;
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            uint16_t p = fb[(size_t)(y * div) * W + x * div];
-            buf[nb++] = (uint8_t)(p & 0xff);
-            buf[nb++] = (uint8_t)(p >> 8);
-            if (nb == sizeof buf) {
-                b64_line(buf, nb);
-                nb = 0;
-            }
-        }
-    }
-    if (nb) b64_line(buf, nb);
-    printf("END\n");
-    free(row);
+    if (!fb) return 1;
+    t5_display_print_shot(fb, W / div, H / div, W, div, 0);
     return 0;
 }
 
 static int cmd_tap(int argc, char **argv)
 {
     if (argc < 3) return 1;
+    xSemaphoreTake(s_tap_done, 0);
     s_tap_x = atoi(argv[1]);
     s_tap_y = atoi(argv[2]);
-    s_tap_until = s_ms() + 100;
-    vTaskDelay(pdMS_TO_TICKS(200));
-    return 0;
+    s_tap_until = s_ms() + TAP_PRESS_MS;
+    return xSemaphoreTake(s_tap_done, pdMS_TO_TICKS(TAP_WAIT_MS)) == pdTRUE ? 0 : 1;
 }
 
 static int cmd_reboot(int argc, char **argv)
@@ -582,23 +539,17 @@ static void console_start(void)
 void app_main(void)
 {
     /* Whatever brought us here, the next normal restart gets fresh tries. */
-    const esp_partition_t *self = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_TEST, NULL);
-    uint8_t rec[72];
-    int failed = 0;
-    bool asked = false;
-    if (self && esp_partition_read(self, self->size - T5_BOOTCTL_SECTOR_FROM_END, rec, sizeof rec) == ESP_OK) {
-        failed = t5_bootctl_count(rec);
-        asked = !memcmp(rec + T5_BOOTCTL_REQ_OFFSET, T5_BOOTCTL_REQ_RECOVERY, T5_BOOTCTL_REQ_LEN);
-    }
+    t5_ota_boot_check();
+    int failed = t5_ota_failed_boots();
+    bool asked = t5_ota_boot_request() == T5_BOOT_REQ_RECOVERY;
     t5_ota_bootctl_clear();
     ESP_LOGW(TAG, "recovery: %s", asked ? "requested" : "after failed boots");
 
     t5_event_init();
-    t5_bsp_board_init();
-    T5_LOG_ON_ERR(TAG, t5_i2c_init());
-    t5_xpin_init();
-    t5_xpin_apply_boot_defaults();
+    T5_IGNORE(t5_bsp_bringup());   /* logs each failure */
     t5_storage_init();
+    s_tap_done = xSemaphoreCreateBinary();
+    console_start();
     if (t5_display_init() != T5_OK) {
         ESP_LOGE(TAG, "no display: only the console is left; restarting in 30 s");
         vTaskDelay(pdMS_TO_TICKS(30000));
@@ -620,8 +571,7 @@ void app_main(void)
     t5_display_release_hold();
     t5_display_set_brightness(70);
 
-    xTaskCreatePinnedToCore(worker, "recovery_job", 8192, NULL, 4, NULL, 0);
-    console_start();
+    xTaskCreatePinnedToCore(worker, "recovery_job", 8192, NULL, 4, &s_worker, 0);
     for (;;) {
         if (s_status_dirty) {
             char tmp[200];

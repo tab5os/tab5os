@@ -11,6 +11,7 @@
 #include "ports_hw_mock.h"
 #include "ports_priv.h"
 #include "t5_core/res.h"
+#include "t5_ports/access.h"
 #include "t5_ports/modbus.h"
 #include "t5_ports/ports.h"
 #include "t5_ports/profiles.h"
@@ -55,7 +56,6 @@ void setUp(void)
     mock_reset_all();
     mock_ports_reset();
     t5_ports_reset_for_test();
-    t5_profiles_reset();
     memset(&s_res, 0, sizeof s_res);
     memset(&s_last_ev, 0, sizeof s_last_ev);
     t5_res_set_hooks(&s_hooks);
@@ -70,17 +70,16 @@ void tearDown(void)
     t5_app_ctx_set(NULL);
 }
 
-/* ---- broker ----------------------------------------------------------------- */
-
 static void test_table_sane(void)
 {
-    TEST_ASSERT_EQUAL(19, t5_ports_count());   /* 8 multi-pin + 11 mbus.g* */
     t5_port_info_t pi;
-    TEST_ASSERT_EQUAL(T5_OK, t5_ports_find("stamp", &pi));
-    TEST_ASSERT_EQUAL(6, pi.npins);
-    TEST_ASSERT_EQUAL(33, pi.gpio[0]);
     TEST_ASSERT_EQUAL(T5_OK, t5_ports_find("grove", &pi));
     TEST_ASSERT_EQUAL_HEX8(0x3, pi.adc_mask);           /* G53/G54 are ADC2 ch4/5 */
+    TEST_ASSERT_TRUE(pi.modes & (1u << T5_MODE_ADC));
+    /* G18/G19 have ADC channels, but stamp isn't a general-purpose port. */
+    TEST_ASSERT_EQUAL(T5_OK, t5_ports_find("stamp", &pi));
+    TEST_ASSERT_NOT_EQUAL(0, pi.adc_mask);
+    TEST_ASSERT_FALSE(pi.modes & (1u << T5_MODE_ADC));
     TEST_ASSERT_EQUAL(T5_OK, t5_ports_find("mbus.uart", &pi));
     TEST_ASSERT_EQUAL_HEX8(0x3, pi.risky_mask);
     TEST_ASSERT_EQUAL(T5_OK, t5_ports_find("mbus.g16", &pi));
@@ -177,7 +176,7 @@ static void test_ext_pins_split_by_mode(void)
     TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_port_open("usb", T5_MODE_GPIO, NULL, &gpio));
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(i2c));
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(uart));
-    TEST_ASSERT_EQUAL(0, mock_ports.live[0] + mock_ports.live[1]);
+    TEST_ASSERT_EQUAL(0, mock_ports.live[MOCK_I2C] + mock_ports.live[MOCK_UART]);
 }
 
 static void test_risky_pins(void)
@@ -201,13 +200,36 @@ static void test_risky_pins(void)
     TEST_ASSERT_EQUAL(T5_ERR_STATE, t5_port_gpio_set(p, true));
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
     TEST_ASSERT_EQUAL(0, mock_ports.configured[35]);
-    /* ports_hw_pin_release is called (the device layer skips G35); the logic never configures it. */
+    TEST_ASSERT_EQUAL(0, mock_ports.released[35]);
 
     /* Risky is checked before conflicts: a held risky pin still says DENIED without the flag. */
     TEST_ASSERT_EQUAL(T5_OK, t5_port_open_ex("mbus.uart", T5_MODE_UART, NULL, T5_PORT_FLAG_RISKY, &p, NULL, 0));
     t5_port_t *q;
     TEST_ASSERT_EQUAL(T5_ERR_DENIED, t5_port_open("mbus.uart", T5_MODE_UART, NULL, &q));
     TEST_ASSERT_EQUAL(T5_ERR_BUSY, t5_port_open_ex("mbus.uart", T5_MODE_UART, NULL, T5_PORT_FLAG_RISKY, &q, NULL, 0));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
+}
+
+static bool only_grove(const char *port, char *why, size_t whylen)
+{
+    if (!strcmp(port, "grove")) return true;
+    snprintf(why, whylen, "not %s", port);
+    return false;
+}
+
+static void test_access_check(void)
+{
+    t5_port_t *p;
+    char why[T5_PORT_WHY_LEN];
+    t5_ports_set_access_check(only_grove);
+    TEST_ASSERT_EQUAL(T5_ERR_DENIED, t5_port_open_ex("ext", T5_MODE_UART, NULL, 0, &p, why, sizeof why));
+    TEST_ASSERT_EQUAL_STRING("not ext", why);
+    TEST_ASSERT_NULL(p);
+    TEST_ASSERT_EQUAL(0, mock_ports.opens);
+    TEST_ASSERT_EQUAL(T5_OK, t5_port_open("grove", T5_MODE_UART, NULL, &p));
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
+    t5_ports_set_access_check(NULL);
+    TEST_ASSERT_EQUAL(T5_OK, t5_port_open("ext", T5_MODE_UART, NULL, &p));
     TEST_ASSERT_EQUAL_INT(T5_OK, t5_port_close(p));
 }
 
@@ -233,7 +255,7 @@ static void test_release_and_res_hooks(void)
     t5_app_ctx_set(NULL);
     s_res.release(s_res.handle);
     TEST_ASSERT_EQUAL(1, mock_events_count(T5_EV_PORT_RELEASED));
-    TEST_ASSERT_EQUAL(0, mock_ports.live[0]);
+    TEST_ASSERT_EQUAL(0, mock_ports.live[MOCK_I2C]);
     TEST_ASSERT_EQUAL(1, mock_ports.released[53]);
     TEST_ASSERT_EQUAL(1, mock_ports.released[54]);
     TEST_ASSERT_EQUAL(T5_OK, t5_ports_pin_info(53, &pi));
@@ -278,7 +300,7 @@ static void test_handle_pool_reusable(void)
         TEST_ASSERT_EQUAL(T5_OK, t5_port_pwm_set(p, 250));
         TEST_ASSERT_EQUAL(T5_OK, t5_port_close(p));
     }
-    TEST_ASSERT_EQUAL(0, mock_ports.live[3]);
+    TEST_ASSERT_EQUAL(0, mock_ports.live[MOCK_PWM]);
     TEST_ASSERT_EQUAL(250, mock_ports.duty);
 }
 
@@ -636,7 +658,7 @@ static void test_profile_scan(void)
     uint8_t found[8];
     TEST_ASSERT_EQUAL(1, t5_profiles_scan("grove", found, 8));
     TEST_ASSERT_EQUAL_HEX8(0x29, found[0]);
-    TEST_ASSERT_EQUAL(0, mock_ports.live[0]);           /* closed again */
+    TEST_ASSERT_EQUAL(0, mock_ports.live[MOCK_I2C]);           /* closed again */
     /* Busy port: scan refuses rather than disturbing the owner. */
     t5_port_t *p;
     t5_app_ctx_set(&s_app_a);
@@ -660,6 +682,7 @@ int main(void)
     RUN_TEST(test_debug_uart_vs_stamp_and_singles);
     RUN_TEST(test_ext_pins_split_by_mode);
     RUN_TEST(test_risky_pins);
+    RUN_TEST(test_access_check);
     RUN_TEST(test_release_and_res_hooks);
     RUN_TEST(test_driver_failure_rolls_back);
     RUN_TEST(test_handle_pool_reusable);

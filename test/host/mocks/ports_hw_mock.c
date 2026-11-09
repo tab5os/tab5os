@@ -52,7 +52,7 @@ static void rm(ports_hw_t h)
     }
 }
 
-t5_err_t ports_hw_i2c_open(int sda, int scl, uint32_t hz, ports_hw_t *out) { return mk(0, out); }
+t5_err_t ports_hw_i2c_open(int sda, int scl, uint32_t hz, ports_hw_t *out) { return mk(MOCK_I2C, out); }
 void ports_hw_i2c_close(ports_hw_t h) { rm(h); }
 
 t5_err_t ports_hw_i2c_xfer(ports_hw_t h, uint8_t addr, const uint8_t *tx, size_t txlen, uint8_t *rx,
@@ -73,7 +73,7 @@ t5_err_t ports_hw_uart_open(const ports_hw_uart_cfg_t *cfg, ports_hw_t *out)
 {
     mock_ports.rts = cfg->rts;
     mock_ports.baud = cfg->baud;
-    return mk(1, out);
+    return mk(MOCK_UART, out);
 }
 void ports_hw_uart_close(ports_hw_t h) { rm(h); }
 
@@ -115,7 +115,7 @@ t5_err_t ports_hw_uart_wait_tx(ports_hw_t h, uint32_t timeout_ms) { return T5_OK
 
 t5_err_t ports_hw_spi_open(int sck, int mosi, int miso, int cs, uint32_t hz, uint8_t mode, ports_hw_t *out)
 {
-    return mk(2, out);
+    return mk(MOCK_SPI, out);
 }
 void ports_hw_spi_close(ports_hw_t h) { rm(h); }
 
@@ -146,7 +146,7 @@ int ports_hw_gpio_get(int pin)
     return (pin >= 0 && pin < 64) ? mock_ports.level[pin] : -1;
 }
 
-t5_err_t ports_hw_pwm_open(int pin, uint32_t hz, uint8_t bits, ports_hw_t *out) { return mk(3, out); }
+t5_err_t ports_hw_pwm_open(int pin, uint32_t hz, uint8_t bits, ports_hw_t *out) { return mk(MOCK_PWM, out); }
 void ports_hw_pwm_close(ports_hw_t h) { rm(h); }
 t5_err_t ports_hw_pwm_set(ports_hw_t h, uint32_t duty_permille)
 {
@@ -154,7 +154,7 @@ t5_err_t ports_hw_pwm_set(ports_hw_t h, uint32_t duty_permille)
     return T5_OK;
 }
 
-t5_err_t ports_hw_adc_open(int pin, int unit, int channel, ports_hw_t *out) { return mk(4, out); }
+t5_err_t ports_hw_adc_open(int pin, int unit, int channel, ports_hw_t *out) { return mk(MOCK_ADC, out); }
 void ports_hw_adc_close(ports_hw_t h) { rm(h); }
 t5_err_t ports_hw_adc_read_mv(ports_hw_t h, int *mv)
 {

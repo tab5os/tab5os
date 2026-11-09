@@ -16,6 +16,8 @@
 #include "t5_core/log.h"
 #include "t5_pkg/pkg.h"
 #include "t5_pkg/zip.h"
+#include "t5_storage/paths.h"
+#include "pkg_test.h"
 
 static const char *TAG = "t5.pkg";
 
@@ -26,9 +28,9 @@ static const char *TAG = "t5.pkg";
 #define INSTALL_NAME ".install"
 #define GRANTS_NAME ".grants"
 
-static char s_sd[ROOT_MAX] = "/sd/apps";
-static char s_data[ROOT_MAX] = "/data/apps";
-static char s_appdata[ROOT_MAX] = "/data/appdata";
+static char s_sd[ROOT_MAX] = T5_APPS_SD_DIR;
+static char s_data[ROOT_MAX] = T5_APPS_DATA_DIR;
+static char s_appdata[ROOT_MAX] = T5_APPDATA_DIR;
 
 static const char *const s_suffix[] = {"~new", "~old", "~del"};
 enum { SUF_NEW, SUF_OLD, SUF_DEL };
@@ -599,8 +601,7 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
         goto done;
     }
     char record[256];
-    int rn = snprintf(record, sizeof record, "t5pkg 1\ndest=%s\nsize=%" PRIu64 "\ntime=%lld\nversion=%s\n",
-                      root_str(dest), total, (long long)time(NULL), m.version);
+    int rn = snprintf(record, sizeof record, "t5pkg 1\nsize=%" PRIu64 "\ntime=%lld\n", total, (long long)time(NULL));
     /* Written last: its presence marks the staged copy as complete. */
     e = write_file_sync(rec, record, (size_t)rn);
     if (e != T5_OK) {
@@ -695,4 +696,10 @@ t5_err_t t5_pkg_grants_save(const char *id, uint32_t granted, uint32_t denied)
     char text[64];
     int n = snprintf(text, sizeof text, "t5grants 1\ngranted=%x\ndenied=%x\n", (unsigned)granted, (unsigned)denied);
     return write_atomic(p, text, (size_t)n);
+}
+
+t5_err_t t5_pkg_data_dir(const char *id, char *out, size_t n)
+{
+    if (!t5_manifest_id_ok(id) || !out) return T5_ERR_INVALID_ARG;
+    return fmt_path(out, n, "%s/%s", s_appdata, id) ? T5_OK : T5_ERR_INVALID_ARG;
 }

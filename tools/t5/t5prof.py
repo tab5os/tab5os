@@ -6,7 +6,7 @@ On the device:  prof start 3000 1000   (sample core 1 for 3 s after 1 s)
                 prof dump 800
 Save the console output to a file, then:
 
-    tools/t5/t5prof.py firmware/build-rev1/tab5os.elf dump.log [--lines]
+    tools/t5/t5prof.py firmware/build/tab5os.elf dump.log [--lines]
 
 --lines also breaks the top functions down by source line.
 """

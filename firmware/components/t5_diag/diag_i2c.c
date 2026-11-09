@@ -9,7 +9,7 @@
 #include "freertos/task.h"
 #include "t5_core/os.h"
 #include "t5_i2c/t5_i2c.h"
-#include "t5_pins/names.h"
+#include "t5_pins/table.h"
 #include "t5_pins/pins.h"
 #include "diag_priv.h"
 
@@ -38,7 +38,7 @@ static int i2c_scan(void)
     }
     printf("\n%d device(s) on G%d/G%d:\n", n, T5_PIN_SYS_I2C_SDA, T5_PIN_SYS_I2C_SCL);
     for (int i = 0; i < n; i++) {
-        const char *name = t5_bsp_i2c_name(found[i]);
+        const char *name = t5_pins_i2c_name(found[i]);
         printf("  0x%02x  %s\n", found[i], name ? name : "UNKNOWN");
     }
     return 0;
@@ -46,7 +46,7 @@ static int i2c_scan(void)
 
 static int with_dev(uint32_t addr, t5_i2c_dev_t **d)
 {
-    t5_err_t err = t5_i2c_open((uint8_t)addr, 400000, "console", d);
+    t5_err_t err = t5_i2c_open((uint8_t)addr, T5_SYS_I2C_HZ, "console", d);
     if (err != T5_OK) {
         printf("open 0x%02x: %s\n", (unsigned)addr, t5_err_str(err));
         return 1;
@@ -120,7 +120,7 @@ static void stress_task(void *arg)
 {
     stress_t *s = arg;
     t5_i2c_dev_t *d;
-    if (t5_i2c_open(s->addr, 400000, s->name, &d) != T5_OK) {
+    if (t5_i2c_open(s->addr, T5_SYS_I2C_HZ, s->name, &d) != T5_OK) {
         s->run = false;
     }
     uint8_t buf[8];

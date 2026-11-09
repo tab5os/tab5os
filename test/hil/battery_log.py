@@ -6,16 +6,14 @@ own logger, which keeps running on battery with no cable:
     t5 console "bat log start"        # /sd/battery-<epoch>.csv
 This script is for watching charging on USB, or a short run at the bench.
 
-    ~/.espressif/python_env/idf6.1_py3.15_env/bin/python test/hil/battery_log.py out.csv --seconds 3600
+    tools/t5/t5 hil battery_log out.csv --seconds 3600
 """
 import argparse
-import os
 import re
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools", "t5"))
-from t5link import Tab5  # noqa: E402
+from t5link import connect
 
 LINE1 = re.compile(r"(\d+) mV\s+(-?[\d.]+) mA\s+(-?\d+) mW\s+(-?\d+)%\s+(-?\d+)/(\d+) mAh")
 LINE2 = re.compile(r"usb (\w+), ([^,]+), CHG_EN (\d), fast (\d)")
@@ -27,7 +25,7 @@ def main():
     ap.add_argument("csv")
     ap.add_argument("--seconds", type=int, default=3600)
     a = ap.parse_args()
-    with Tab5(timeout=10) as t, open(a.csv, "w") as f:
+    with connect(cmd_timeout=10) as t, open(a.csv, "w") as f:
         f.write("t,mv,ma,mw,pct,charge_mah,capacity_mah,usb,state,chg_en,fast,imu_c,chip_c\n")
         t0 = time.time()
         while time.time() - t0 < a.seconds:

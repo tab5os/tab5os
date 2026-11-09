@@ -686,22 +686,13 @@ void md_snackbar_dismiss(void)
 #define DRAWER_SCRIM_OPA 82
 typedef struct {
     lv_obj_t *scrim, *panel, *backdrop;
-    lv_timer_t *settle;
-    uint32_t settle_ticks;
+    md_settle_t settle;
     bool closing, baked, waiting_frame, prepare_queued, deleting;
 } drawer_t;
 
 static void drawer_close_done(lv_anim_t *a)
 {
     lv_obj_delete(lv_obj_get_parent(a->var));   /* the panel's scrim */
-}
-
-static void drawer_stop_settle(drawer_t *d)
-{
-    if (d->settle) {
-        lv_timer_delete(d->settle);
-        d->settle = NULL;
-    }
 }
 
 static void drawer_first_frame(lv_event_t *e);
@@ -712,7 +703,7 @@ void md_drawer_close(lv_obj_t *scrim)
     drawer_t *d = scrim ? lv_obj_get_user_data(scrim) : NULL;
     if (!d || d->closing) return;
     d->closing = true;
-    drawer_stop_settle(d);
+    md_settle_stop(&d->settle);
     if (d->waiting_frame) {
         lv_display_remove_event_cb_with_user_data(lv_obj_get_display(scrim), drawer_first_frame, d);
         d->waiting_frame = false;
@@ -750,11 +741,9 @@ static void drawer_thawed(lv_obj_t *scr, void *arg)
     if (!d->deleting) lv_obj_set_style_bg_opa(d->scrim, DRAWER_SCRIM_OPA, 0);
 }
 
-static void drawer_slide_when_settled(lv_timer_t *t)
+static void drawer_slide_when_settled(void *arg)
 {
-    drawer_t *d = lv_timer_get_user_data(t);
-    if (!md_freeze_settled() && ++d->settle_ticks < 30) return;
-    drawer_stop_settle(d);
+    drawer_t *d = arg;
     anim(d->panel, set_x_anim, -T5_DP(MD_DRAWER_W_DP), 0, MD_DUR_DRAWER_IN_MS, MD_CURVE_DECELERATION, NULL);
 }
 
@@ -776,7 +765,7 @@ static void drawer_prepare(void *arg)
         }
         lv_display_enable_invalidation(disp, inv);
     }
-    d->settle = lv_timer_create(drawer_slide_when_settled, 4, d);
+    md_settle_start(&d->settle, drawer_slide_when_settled, d);
 }
 
 static void drawer_first_frame(lv_event_t *e)
@@ -790,7 +779,7 @@ static void drawer_first_frame(lv_event_t *e)
 static void drawer_deleted(lv_event_t *e)
 {
     drawer_t *d = lv_event_get_user_data(e);
-    drawer_stop_settle(d);
+    md_settle_stop(&d->settle);
     if (d->waiting_frame) lv_display_remove_event_cb_with_user_data(lv_obj_get_display(d->scrim), drawer_first_frame, d);
     if (d->prepare_queued) lv_async_call_cancel(drawer_prepare, d);
     if (d->backdrop) {

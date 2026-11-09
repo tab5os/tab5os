@@ -26,10 +26,9 @@ void t5_tracker_set_allocator(const t5_tracker_alloc_t *a)
     s_alloc = a ? *a : (t5_tracker_alloc_t){ sys_malloc, sys_free, NULL };
 }
 
-void t5_tracker_init(t5_tracker_t *t, uint32_t heap_limit_kb)
+void t5_tracker_init(t5_tracker_t *t)
 {
     memset(t, 0, sizeof *t);
-    t->heap_limit_kb = heap_limit_kb;
 }
 
 static int find(const t5_tracker_t *t, void *h)
@@ -81,9 +80,28 @@ bool t5_tracker_has(const t5_tracker_t *t, void *handle)
     return find(t, handle) >= 0;
 }
 
+bool t5_tracker_holds(const t5_tracker_t *t, t5_res_kind_t kind, const void *handle)
+{
+    for (int i = 0; i < t->n && i < T5_TRACK_MAX; i++) {
+        if (t->ent[i].handle == handle && t->ent[i].kind == kind) return true;
+    }
+    return false;
+}
+
 int t5_tracker_count(const t5_tracker_t *t, t5_res_kind_t kind)
 {
     return kind < T5_RES_KIND_COUNT ? (int)t->counts[kind] : 0;
+}
+
+int t5_tracker_list(const t5_tracker_t *t, t5_res_kind_t kind, void **out, int max)
+{
+    int n = 0;
+    for (int i = 0; i < t->n; i++) {
+        if (t->ent[i].kind != kind) continue;
+        if (n < max) out[n] = t->ent[i].handle;
+        n++;
+    }
+    return n;
 }
 
 void t5_tracker_prune(t5_tracker_t *t, t5_res_kind_t kind, bool (*alive)(void *))
@@ -114,7 +132,6 @@ int t5_tracker_release_all(t5_tracker_t *t)
     return released;
 }
 
-/* ---- heap ------------------------------------------------------------------ */
 static uint32_t check_of(const t5_heap_blk_t *b)
 {
     return BLK_MAGIC ^ (uint32_t)(uintptr_t)b;
@@ -163,17 +180,9 @@ static void unlink_blk(t5_tracker_t *t, t5_heap_blk_t *b)
     b->owner = NULL;
 }
 
-static bool over_limit(t5_tracker_t *t, size_t n)
-{
-    return t->heap_limit_kb && (t->heap_bytes + n) > (size_t)t->heap_limit_kb * 1024u;
-}
-
 void *t5_tracker_malloc(t5_tracker_t *t, size_t n)
 {
-    if (n > UINT32_MAX - sizeof(t5_heap_blk_t) || over_limit(t, n)) {
-        t->heap_refused++;
-        return NULL;
-    }
+    if (n > UINT32_MAX - sizeof(t5_heap_blk_t)) return NULL;
     t5_heap_blk_t *b = s_alloc.malloc(t, sizeof *b + (n ? n : 1));
     if (!b) return NULL;
     link_blk(t, b, n);

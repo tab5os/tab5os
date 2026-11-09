@@ -28,10 +28,10 @@ t5_reset_t t5_power_hw_reset_reason(void);
 void t5_power_hw_notify(bool from_isr);
 /* Block the state task until notified or ms passes. */
 void t5_power_hw_wait(uint32_t ms);
-/* Start the state task running fn every period (device only). */
+/* Start the state task, which calls fn in a loop (fn does its own waiting). */
 t5_err_t t5_power_hw_start_task(void (*fn)(void));
-/* Last resort after PWROFF_PLUSE didn't cut power (e.g. USB holds the
- * rails up): deep sleep with only a timer wake. Does not return on the device. */
+/* Deep sleep the P4 (charge mode), waking after wake_after_ms (0: no timer).
+ * Does not return on the device. */
 void t5_power_hw_halt(uint32_t wake_after_ms);
 /* Is the P4 being woken from a deep sleep by its timer? */
 bool t5_power_hw_woke_from_deep_sleep_timer(void);

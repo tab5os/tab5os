@@ -146,7 +146,7 @@ Over the USB-C console:
 | `sys` | Heaps: read **`heap dma`**, not `heap int`, for internal RAM |
 | `app usage` | Your heap, handles, tasks |
 | `prof start 3000 1000`, then `prof dump 800` | Sampling profile of core 1 |
-| `tools/t5/t5prof.py firmware/build-rev1/tab5os.elf dump.log` | Map samples to OS functions |
+| `tools/t5/t5prof.py firmware/build/tab5os.elf dump.log` | Map samples to OS functions |
 
 A typical investigation:
 

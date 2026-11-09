@@ -4,25 +4,10 @@
 #include "t5_i2c/t5_i2c.h"
 #include "t5_pins/pins.h"
 #include "t5_time/rtc.h"
+#include "t5_time/t5_time_test.h"
+#include "rtc_priv.h"
 
 static const char *TAG = "t5.rtc";
-
-enum {
-    REG_SEC = 0x10,
-    REG_ALARM_MIN = 0x17,   /* 0x17..0x19, bit7 = "don't care" */
-    REG_TIMER0 = 0x1A,
-    REG_EXT = 0x1C,         /* TSEL[2:0], WADA bit3, TE bit4 */
-    REG_FLAG = 0x1D,        /* write-0-to-clear */
-    REG_CTRL0 = 0x1E,       /* AIE bit3, TIE bit4, UIE bit5, STOP bit6 */
-    REG_CTRL1 = 0x1F,       /* INIEN bit4, CHGEN bit5 */
-    REG_RAM = 0x20,         /* 0x20..0x23 user RAM */
-};
-
-#define EXT_WADA  0x08
-#define EXT_TE    0x10
-#define CTRL0_AIE 0x08
-#define CTRL0_TIE 0x10
-#define CTRL0_STOP 0x40
 
 static t5_i2c_dev_t *s_dev;
 static uint8_t s_boot_flags;
@@ -87,18 +72,24 @@ time_t t5_rtc_tm_to_utc(const struct tm *tm)
     return (time_t)(days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec);
 }
 
+/* Write-0-to-clear: zeros only where asked, ones elsewhere. */
+static t5_err_t clear_flags(uint8_t flags)
+{
+    return t5_i2c_write_u8(s_dev, RX8130_FLAG, (uint8_t)~flags);
+}
+
 t5_err_t t5_rtc_init(void)
 {
     if (!s_dev) {
-        T5_RETURN_ON_ERR(t5_i2c_open(T5_I2C_ADDR_RX8130, 400000, "rtc", &s_dev));
+        T5_RETURN_ON_ERR(t5_i2c_open(T5_I2C_ADDR_RX8130, T5_SYS_I2C_HZ, "rtc", &s_dev));
     }
-    T5_RETURN_ON_ERR(t5_i2c_read_u8(s_dev, REG_FLAG, &s_boot_flags));
+    T5_RETURN_ON_ERR(t5_i2c_read_u8(s_dev, RX8130_FLAG, &s_boot_flags));
     /* INIEN on; CHGEN off (the backup cell is not rechargeable as far as we know). */
-    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, REG_CTRL1, 0x30, 0x10));
-    /* Interrupts off, timer stopped, then clear AF/TF (W0C: 1s leave others alone). */
-    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_AIE | CTRL0_TIE | CTRL0_STOP, 0));
-    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, REG_EXT, EXT_TE, 0));
-    T5_RETURN_ON_ERR(t5_rtc_clear_flags(T5_RTC_FLAG_AF | T5_RTC_FLAG_TF));
+    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, RX8130_CTRL1, 0x30, 0x10));
+    /* Interrupts off and the timer stopped before AF/TF are cleared. */
+    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_AIE | RX8130_CTRL0_TIE | RX8130_CTRL0_STOP, 0));
+    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, RX8130_EXT, RX8130_EXT_TE, 0));
+    T5_RETURN_ON_ERR(clear_flags(T5_RTC_FLAG_AF | T5_RTC_FLAG_TF));
     T5_LOGI(TAG, "boot flags 0x%02x%s%s%s", s_boot_flags,
             (s_boot_flags & T5_RTC_FLAG_VLF) ? " VLF(time lost)" : "",
             (s_boot_flags & T5_RTC_FLAG_AF) ? " AF" : "", (s_boot_flags & T5_RTC_FLAG_TF) ? " TF" : "");
@@ -112,13 +103,7 @@ uint8_t t5_rtc_boot_flags(void)
 
 t5_err_t t5_rtc_flags(uint8_t *flags)
 {
-    return t5_i2c_read_u8(s_dev, REG_FLAG, flags);
-}
-
-t5_err_t t5_rtc_clear_flags(uint8_t flags)
-{
-    /* Write-0-to-clear: zeros only where asked, ones elsewhere. */
-    return t5_i2c_write_u8(s_dev, REG_FLAG, (uint8_t)~flags);
+    return t5_i2c_read_u8(s_dev, RX8130_FLAG, flags);
 }
 
 t5_err_t t5_rtc_read(struct tm *out, bool *valid)
@@ -127,8 +112,8 @@ t5_err_t t5_rtc_read(struct tm *out, bool *valid)
         return T5_ERR_STATE;
     }
     uint8_t r[7], flags;
-    T5_RETURN_ON_ERR(t5_i2c_read(s_dev, REG_SEC, r, sizeof r));
-    T5_RETURN_ON_ERR(t5_i2c_read_u8(s_dev, REG_FLAG, &flags));
+    T5_RETURN_ON_ERR(t5_i2c_read(s_dev, RX8130_SEC, r, sizeof r));
+    T5_RETURN_ON_ERR(t5_i2c_read_u8(s_dev, RX8130_FLAG, &flags));
     bool ok = t5_rtc_decode(r, out);
     if (!ok) {
         memset(out, 0, sizeof *out);
@@ -146,13 +131,13 @@ t5_err_t t5_rtc_write(const struct tm *tm)
     }
     uint8_t r[7];
     t5_rtc_encode(tm, r);
-    T5_RETURN_ON_ERR(t5_i2c_lock(1000));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     /* STOP holds the divider so the new second starts cleanly. */
-    t5_err_t err = t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_STOP, CTRL0_STOP);
-    if (err == T5_OK) err = t5_i2c_write(s_dev, REG_SEC, r, sizeof r);
-    t5_err_t err2 = t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_STOP, 0);
+    t5_err_t err = t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_STOP, RX8130_CTRL0_STOP);
+    if (err == T5_OK) err = t5_i2c_write(s_dev, RX8130_SEC, r, sizeof r);
+    t5_err_t err2 = t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_STOP, 0);
     if (err == T5_OK) err = err2;
-    if (err == T5_OK) err = t5_rtc_clear_flags(T5_RTC_FLAG_VLF);
+    if (err == T5_OK) err = clear_flags(T5_RTC_FLAG_VLF);
     t5_i2c_unlock();
     return err;
 }
@@ -167,13 +152,13 @@ t5_err_t t5_rtc_alarm_set(const struct tm *at)
         (uint8_t)(t5_rtc_bin2bcd((uint8_t)at->tm_hour) & 0x3F),
         (uint8_t)(t5_rtc_bin2bcd((uint8_t)at->tm_mday) & 0x3F),
     };
-    T5_RETURN_ON_ERR(t5_i2c_lock(1000));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     /* AIE off while the alarm registers change, so a half-written alarm can't fire. */
-    t5_err_t err = t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_AIE, 0);
-    if (err == T5_OK) err = t5_i2c_update_u8(s_dev, REG_EXT, EXT_WADA, EXT_WADA);   /* day of month */
-    if (err == T5_OK) err = t5_i2c_write(s_dev, REG_ALARM_MIN, a, sizeof a);
-    if (err == T5_OK) err = t5_rtc_clear_flags(T5_RTC_FLAG_AF);
-    if (err == T5_OK) err = t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_AIE, CTRL0_AIE);
+    t5_err_t err = t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_AIE, 0);
+    if (err == T5_OK) err = t5_i2c_update_u8(s_dev, RX8130_EXT, RX8130_EXT_WADA, RX8130_EXT_WADA);   /* day of month */
+    if (err == T5_OK) err = t5_i2c_write(s_dev, RX8130_ALARM_MIN, a, sizeof a);
+    if (err == T5_OK) err = clear_flags(T5_RTC_FLAG_AF);
+    if (err == T5_OK) err = t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_AIE, RX8130_CTRL0_AIE);
     t5_i2c_unlock();
     return err;
 }
@@ -184,9 +169,9 @@ t5_err_t t5_rtc_alarm_clear(void)
         return T5_ERR_STATE;
     }
     const uint8_t off[3] = { 0x80, 0x80, 0x80 };
-    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_AIE, 0));
-    T5_RETURN_ON_ERR(t5_i2c_write(s_dev, REG_ALARM_MIN, off, sizeof off));
-    return t5_rtc_clear_flags(T5_RTC_FLAG_AF);
+    T5_RETURN_ON_ERR(t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_AIE, 0));
+    T5_RETURN_ON_ERR(t5_i2c_write(s_dev, RX8130_ALARM_MIN, off, sizeof off));
+    return clear_flags(T5_RTC_FLAG_AF);
 }
 
 t5_err_t t5_rtc_timer_set(uint32_t seconds, uint32_t *actual)
@@ -194,11 +179,10 @@ t5_err_t t5_rtc_timer_set(uint32_t seconds, uint32_t *actual)
     if (!s_dev) {
         return T5_ERR_STATE;
     }
-    T5_RETURN_ON_ERR(t5_i2c_lock(1000));
-    /* Stop: TE=0, TIE=0, clear TF. */
-    t5_err_t err = t5_i2c_update_u8(s_dev, REG_EXT, EXT_TE, 0);
-    if (err == T5_OK) err = t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_TIE, 0);
-    if (err == T5_OK) err = t5_rtc_clear_flags(T5_RTC_FLAG_TF);
+    T5_RETURN_ON_ERR(t5_i2c_lock());
+    t5_err_t err = t5_i2c_update_u8(s_dev, RX8130_EXT, RX8130_EXT_TE, 0);
+    if (err == T5_OK) err = t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_TIE, 0);
+    if (err == T5_OK) err = clear_flags(T5_RTC_FLAG_TF);
     uint32_t got = 0;
     if (err == T5_OK && seconds) {
         uint8_t tsel;
@@ -215,10 +199,10 @@ t5_err_t t5_rtc_timer_set(uint32_t seconds, uint32_t *actual)
         }
         const uint8_t c[2] = { (uint8_t)count, (uint8_t)(count >> 8) };
         /* Datasheet order: TE=0 + TSEL, clear TF, TIE, preset, TE=1 last. */
-        err = t5_i2c_update_u8(s_dev, REG_EXT, 0x07, tsel);
-        if (err == T5_OK) err = t5_i2c_update_u8(s_dev, REG_CTRL0, CTRL0_TIE, CTRL0_TIE);
-        if (err == T5_OK) err = t5_i2c_write(s_dev, REG_TIMER0, c, 2);
-        if (err == T5_OK) err = t5_i2c_update_u8(s_dev, REG_EXT, EXT_TE, EXT_TE);
+        err = t5_i2c_update_u8(s_dev, RX8130_EXT, 0x07, tsel);
+        if (err == T5_OK) err = t5_i2c_update_u8(s_dev, RX8130_CTRL0, RX8130_CTRL0_TIE, RX8130_CTRL0_TIE);
+        if (err == T5_OK) err = t5_i2c_write(s_dev, RX8130_TIMER0, c, 2);
+        if (err == T5_OK) err = t5_i2c_update_u8(s_dev, RX8130_EXT, RX8130_EXT_TE, RX8130_EXT_TE);
     }
     t5_i2c_unlock();
     if (actual) {
@@ -232,7 +216,7 @@ t5_err_t t5_rtc_ram_read(uint8_t out[T5_RTC_RAM_LEN])
     if (!s_dev || !out) {
         return T5_ERR_STATE;
     }
-    return t5_i2c_read(s_dev, REG_RAM, out, T5_RTC_RAM_LEN);
+    return t5_i2c_read(s_dev, RX8130_RAM, out, T5_RTC_RAM_LEN);
 }
 
 t5_err_t t5_rtc_ram_write(const uint8_t in[T5_RTC_RAM_LEN])
@@ -240,7 +224,17 @@ t5_err_t t5_rtc_ram_write(const uint8_t in[T5_RTC_RAM_LEN])
     if (!s_dev || !in) {
         return T5_ERR_STATE;
     }
-    return t5_i2c_write(s_dev, REG_RAM, in, T5_RTC_RAM_LEN);
+    return t5_i2c_write(s_dev, RX8130_RAM, in, T5_RTC_RAM_LEN);
+}
+
+t5_err_t t5_rtc_irqs_enabled_for_test(bool *on)
+{
+    if (!s_dev) return T5_ERR_STATE;
+    uint8_t ctrl0, ext;
+    T5_RETURN_ON_ERR(t5_i2c_read_u8(s_dev, RX8130_CTRL0, &ctrl0));
+    T5_RETURN_ON_ERR(t5_i2c_read_u8(s_dev, RX8130_EXT, &ext));
+    *on = (ctrl0 & (RX8130_CTRL0_AIE | RX8130_CTRL0_TIE)) || (ext & RX8130_EXT_TE);
+    return T5_OK;
 }
 
 void t5_rtc_reset_for_test(void)

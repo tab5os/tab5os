@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "t5_pkg/inflate.h"
+#include "pkg_test.h"
 
 #define MAXBITS 15
 #define MAXLCODES 286

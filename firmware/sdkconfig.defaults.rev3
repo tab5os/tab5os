@@ -1,3 +1,0 @@
-# ESP32-P4 revision v3.x. Minimum v3.0 rather than IDF's v3.1 default.
-CONFIG_ESP32P4_REV_MIN_300=y
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y

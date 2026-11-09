@@ -7,6 +7,7 @@
 #include "t5_core/crc.h"
 #include "t5_core/log.h"
 #include "t5_pkg/zip.h"
+#include "pkg_test.h"
 
 static const char *TAG = "t5.zip";
 

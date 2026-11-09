@@ -5,17 +5,18 @@
 #include <unistd.h>
 #include "t5_battery/battery.h"
 #include "t5_battery/gauge.h"
+#include "t5_battery/battery_test.h"
 #include "t5_battery/ina226.h"
 #include "t5_bsp/xpin.h"
 #include "t5_core/event.h"
 #include "t5_core/log.h"
+#include "t5_battery/history.h"
 #include "t5_core/os.h"
-#include "t5_display/t5_display.h"
 #include "t5_imu/t5_imu.h"
 #include "t5_pins/pins.h"
 #include "t5_power/autosave.h"
-#include "t5_battery/history.h"
 #include "t5_power/power.h"
+#include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_time/t5_time.h"
 #include "battery_hw.h"
@@ -28,7 +29,7 @@ static const char *TAG = "t5.battery";
 #define TEMP_EVERY 10                   /* samples between temperature reads */
 #define TRACE_MAX_DATA (1u << 20)
 #define CHARGE_SLEEP_MS 60000
-#define CHARGE_SCREEN_MS 5000
+#define HIST_FILE "bathist.bin"
 
 typedef struct {
     uint8_t limit;
@@ -52,16 +53,15 @@ static char s_trace_path[96];
 static uint32_t s_trace_lines;
 static bool s_inited;
 static t5_bat_hist_t *s_hist;           /* 2.9 KB */
-void battery_history_init(void);
 static int64_t s_hist_acc_ma10;
 static uint32_t s_hist_acc_n, s_hist_last_ms;
 static bool s_hist_dirty;
-
-/* ---- persistence --------------------------------------------------------- */
+static t5_battery_charge_screen_fn_t s_screen_fn;
+static void *s_screen_arg;
 
 static void path(char *out, size_t cap, const char *name)
 {
-    snprintf(out, cap, "%s/%s", t5_autosave_dir(), name);
+    T5_IGNORE(t5_sys_path(out, cap, name));
 }
 
 static t5_err_t save_state(void *arg)
@@ -105,8 +105,6 @@ static bool load_state(t5_gauge_saved_t *rec)
     return t5_storage_blob_read(p, STATE_VERSION, rec, sizeof *rec, &len) == T5_OK && len == sizeof *rec &&
            rec->magic == T5_GAUGE_SAVED_MAGIC;
 }
-
-/* ---- trace --------------------------------------------------------------- */
 
 t5_err_t t5_battery_trace_start(const char *p)
 {
@@ -165,8 +163,6 @@ static void trace_line(void)
         }
     }
 }
-
-/* ---- sampling ------------------------------------------------------------ */
 
 static void read_temps(void)
 {
@@ -230,8 +226,8 @@ void t5_battery_step(void)
     s_st.cycles = s_g.cycles;
     if (have_stat) {
         s_st.chg_stat = lvl;
-        bool charging = smp.ma10 < -500;
-        bool discharging = smp.ma10 > 500;
+        bool charging = smp.ma10 < -T5_PACK_IDLE_MA10;
+        bool discharging = smp.ma10 > T5_PACK_IDLE_MA10;
         if (lvl) { s_st.chg_stat_hi_charging += charging; s_st.chg_stat_hi_discharging += discharging; }
         else { s_st.chg_stat_lo_charging += charging; s_st.chg_stat_lo_discharging += discharging; }
     }
@@ -301,84 +297,37 @@ int t5_battery_percent(void)
     return s_st.percent;
 }
 
-t5_err_t t5_battery_set_charge_limit(bool on)
+void t5_battery_set_charge_limit(bool on)
 {
     s_set.limit = on;
-    return T5_OK;
 }
 
-t5_err_t t5_battery_set_fast_charge(bool on)
+void t5_battery_set_fast_charge(bool on)
 {
     s_set.fast = on;
-    return T5_OK;
 }
 
 bool t5_battery_charge_limit(void) { return s_set.limit; }
 bool t5_battery_fast_charge(void) { return s_set.fast; }
 
-/* ---- charge mode (plan 2.7) ---------------------------------------------- */
-
-static void seg_digit(int x, int y, int s, int d, uint16_t c)
+void t5_battery_set_charge_screen(t5_battery_charge_screen_fn_t fn, void *arg)
 {
-    /* 7-segment: a b c d e f g */
-    static const uint8_t k[10] = { 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F };
-    int w = s, h = s / 5, L = s;
-    uint8_t m = k[d % 10];
-    if (m & 0x01) t5_display_fill_rect(x + h, y, w, h, c);                 /* a */
-    if (m & 0x02) t5_display_fill_rect(x + w + h, y + h, h, L, c);         /* b */
-    if (m & 0x04) t5_display_fill_rect(x + w + h, y + 2 * h + L, h, L, c); /* c */
-    if (m & 0x08) t5_display_fill_rect(x + h, y + 2 * L + 2 * h, w, h, c); /* d */
-    if (m & 0x10) t5_display_fill_rect(x, y + 2 * h + L, h, L, c);         /* e */
-    if (m & 0x20) t5_display_fill_rect(x, y + h, h, L, c);                 /* f */
-    if (m & 0x40) t5_display_fill_rect(x + h, y + L + h, w, h, c);         /* g */
-}
-
-static void draw_charge_screen(int pct)
-{
-    if (!t5_display_ready()) return;
-    const int W = T5_DISPLAY_W, H = T5_DISPLAY_H;
-    t5_display_fill_rect(0, 0, W, H, 0);
-    /* Battery outline, portrait-centred. */
-    int bw = 240, bh = 440, bx = (W - bw) / 2, by = (H - bh) / 2 + 80, t = 12;
-    uint16_t white = t5_rgb565(0xE0, 0xE0, 0xE0);
-    t5_display_fill_rect(bx + bw / 2 - 50, by - 30, 100, 30, white);
-    t5_display_fill_rect(bx, by, bw, t, white);
-    t5_display_fill_rect(bx, by + bh - t, bw, t, white);
-    t5_display_fill_rect(bx, by, t, bh, white);
-    t5_display_fill_rect(bx + bw - t, by, t, bh, white);
-    int p = pct < 0 ? 0 : pct > 100 ? 100 : pct;
-    uint16_t fill = p <= 15 ? t5_rgb565(0xE5, 0x39, 0x35) : p <= 40 ? t5_rgb565(0xFB, 0x8C, 0x00) : t5_rgb565(0x43, 0xA0, 0x47);
-    int inner = bh - 4 * t, fh = inner * p / 100;
-    t5_display_fill_rect(bx + 2 * t, by + 2 * t + inner - fh, bw - 4 * t, fh, fill);
-    /* Percentage above the battery. */
-    if (pct >= 0) {
-        int s = 40, dw = s + 2 * (s / 5) + 16, n = p >= 100 ? 3 : p >= 10 ? 2 : 1;
-        int x = (W - n * dw) / 2, y = by - 260;
-        if (n == 3) { seg_digit(x, y, s, 1, white); x += dw; }
-        if (n >= 2) { seg_digit(x, y, s, (p / 10) % 10, white); x += dw; }
-        seg_digit(x, y, s, p % 10, white);
-    }
+    s_screen_arg = arg;
+    s_screen_fn = fn;
 }
 
 static bool shutdown_handler(t5_off_reason_t reason, void *arg)
 {
     (void)arg;
-    if (reason == T5_OFF_CHARGE_UNPLUG || reason == T5_OFF_TEST || !s_st.usb) {
+    if (reason == T5_OFF_CHARGE_UNPLUG || !s_st.usb) {
         return false;
     }
     T5_LOGI(TAG, "shutdown on USB: charge mode (%d%%)", s_st.percent);
     t5_charge_out_t co = { .state = T5_CHG_CHARGING, .chg_en = true, .fast = s_set.fast };
     apply_charge(&co);
     t5_battery_trace_stop();
-    save_state(NULL);
-    if (t5_display_ready()) {
-        t5_display_blank(false);
-        t5_display_dim(-1);
-        t5_display_set_brightness(30);
-        draw_charge_screen(s_st.percent);
-        t5_delay_ms(CHARGE_SCREEN_MS);
-        t5_display_sleep();
-    }
+    T5_LOG_ON_ERR(TAG, save_state(NULL));
+    if (s_screen_fn) s_screen_fn(s_st.percent, s_screen_arg);
     t5_power_charge_sleep(CHARGE_SLEEP_MS);
     return true;   /* host only: the device is asleep */
 }
@@ -396,14 +345,23 @@ static t5_err_t read_boot_sample(t5_ina226_sample_t *smp)
     return e;
 }
 
+/* Charge mode leaves the chip running when it boots on, so the boot that
+ * follows doesn't configure it and wait for a first conversion again. */
+static t5_err_t start_sensor(void)
+{
+    if (t5_ina226_ready()) return T5_OK;
+    T5_RETURN_ON_ERR(t5_ina226_init());
+    t5_delay_ms(T5_INA226_FIRST_SAMPLE_MS);
+    return T5_OK;
+}
+
 void t5_battery_charge_mode_resume(void)
 {
-    if (t5_ina226_init() != T5_OK) {
+    if (start_sensor() != T5_OK) {
         T5_LOGE(TAG, "charge mode: INA226 missing, booting");
         t5_power_charge_mode_end();
         return;
     }
-    t5_delay_ms(80);   /* one averaged conversion (16 x 2 x 1.1 ms) */
     t5_ina226_sample_t smp = {0};
     t5_err_t re = read_boot_sample(&smp);
     if (re != T5_OK) {
@@ -431,23 +389,57 @@ void t5_battery_charge_mode_resume(void)
                           .limit_enabled = false, .fast_enabled = s_set.fast };
     t5_charge_out_t co;
     t5_charge_step(&ci, T5_CHG_CHARGING, &co);
-    t5_xpin_output(T5_XP_CHG_EN, co.chg_en);
-    t5_xpin_output(T5_XP_NCHG_QC_EN, !co.fast);
+    apply_charge(&co);
     t5_power_charge_sleep(CHARGE_SLEEP_MS);
 }
 
-/* ---- init ---------------------------------------------------------------- */
+/* Charge history (plan 6.8). */
+static t5_err_t hist_save(void *arg)
+{
+    (void)arg;
+    if (!s_hist || !s_hist_dirty) return T5_OK;
+    char p[96];
+    path(p, sizeof p, HIST_FILE);
+    t5_mutex_lock(s_lock);
+    s_hist_dirty = false;
+    t5_err_t e = t5_storage_blob_write(p, T5_BAT_HIST_VERSION, s_hist, sizeof *s_hist);
+    if (e != T5_OK) s_hist_dirty = true;
+    t5_mutex_unlock(s_lock);
+    return e;
+}
+
+static void history_init(void)
+{
+    s_hist = calloc(1, sizeof *s_hist);
+    if (!s_hist) return;
+    char p[96];
+    path(p, sizeof p, HIST_FILE);
+    size_t len = 0;
+    if (t5_storage_blob_read(p, T5_BAT_HIST_VERSION, s_hist, sizeof *s_hist, &len) != T5_OK || len != sizeof *s_hist ||
+        !t5_bat_hist_valid(s_hist)) {
+        t5_bat_hist_init(s_hist);
+    }
+    T5_LOG_ON_ERR(TAG, t5_autosave_register("bathist", hist_save, NULL));
+}
+
+int t5_battery_history(t5_bat_hist_pt_t *out, int max)
+{
+    if (!s_hist || !s_lock) return 0;
+    t5_mutex_lock(s_lock);
+    int n = t5_bat_hist_read(s_hist, out, max);
+    t5_mutex_unlock(s_lock);
+    return n;
+}
 
 t5_err_t t5_battery_init(void)
 {
     if (s_inited) return T5_OK;
     if (!s_lock) s_lock = t5_mutex_create();
-    t5_err_t err = t5_ina226_init();
+    t5_err_t err = start_sensor();
     if (err != T5_OK) {
         T5_LOGE(TAG, "INA226: %s", t5_err_str(err));
         return err;
     }
-    t5_delay_ms(80);
     t5_gauge_saved_t rec;
     bool have = load_state(&rec);
     t5_ina226_sample_t smp = {0};
@@ -475,14 +467,12 @@ t5_err_t t5_battery_init(void)
             (long)s_g.capacity_mah, have ? "" : " (no saved state)", s_g.swapped ? ", pack swapped" : "");
     if (s_g.swapped) post(T5_EV_BATTERY_SWAPPED);
     T5_LOG_ON_ERR(TAG, t5_autosave_register("battery", save_state, NULL));
-    battery_history_init();
+    history_init();
     t5_power_set_shutdown_handler(shutdown_handler, NULL);
     s_inited = true;
     t5_battery_step();
     return t5_battery_hw_start_task(t5_battery_step, T5_BATTERY_PERIOD_MS);
 }
-
-void t5_ina226_reset_for_test(void);
 
 void t5_battery_reset_for_test(void)
 {
@@ -500,44 +490,11 @@ void t5_battery_reset_for_test(void)
     s_temp_tick = 0;
     s_applied = false;
     s_inited = false;
-}
-
-/* ---- charge history (plan 6.8) ------------------------------------------------- */
-#define HIST_FILE "bathist.bin"
-
-static t5_err_t hist_save(void *arg)
-{
-    (void)arg;
-    if (!s_hist || !s_hist_dirty) return T5_OK;
-    char p[96];
-    path(p, sizeof p, HIST_FILE);
-    t5_mutex_lock(s_lock);
+    free(s_hist);
+    s_hist = NULL;
+    s_hist_acc_ma10 = 0;
+    s_hist_acc_n = s_hist_last_ms = 0;
     s_hist_dirty = false;
-    t5_err_t e = t5_storage_blob_write(p, T5_BAT_HIST_VERSION, s_hist, sizeof *s_hist);
-    if (e != T5_OK) s_hist_dirty = true;
-    t5_mutex_unlock(s_lock);
-    return e;
+    s_screen_fn = NULL;
 }
 
-void battery_history_init(void)
-{
-    s_hist = calloc(1, sizeof *s_hist);
-    if (!s_hist) return;
-    char p[96];
-    path(p, sizeof p, HIST_FILE);
-    size_t len = 0;
-    if (t5_storage_blob_read(p, T5_BAT_HIST_VERSION, s_hist, sizeof *s_hist, &len) != T5_OK || len != sizeof *s_hist ||
-        !t5_bat_hist_valid(s_hist)) {
-        t5_bat_hist_init(s_hist);
-    }
-    T5_LOG_ON_ERR(TAG, t5_autosave_register("bathist", hist_save, NULL));
-}
-
-int t5_battery_history(t5_bat_hist_pt_t *out, int max)
-{
-    if (!s_hist || !s_lock) return 0;
-    t5_mutex_lock(s_lock);
-    int n = t5_bat_hist_read(s_hist, out, max);
-    t5_mutex_unlock(s_lock);
-    return n;
-}

@@ -3,6 +3,8 @@
 #include "t5_core/log.h"
 #include "t5_time/rtc.h"
 #include "t5_time/t5_time.h"
+#include "t5_time/t5_time_test.h"
+#include "rtc_priv.h"
 #include "t5_time_hw.h"
 
 static const char *TAG = "t5.time";
@@ -68,10 +70,8 @@ t5_err_t t5_time_set(time_t utc, t5_time_source_t src)
     s_valid = true;
     s_src = src;
     t5_event_post(T5_EV_TIME_SET, NULL, 0);
-    return err;
+    return T5_OK;
 }
-
-void t5_rtc_reset_for_test(void);
 
 void t5_time_reset_for_test(void)
 {

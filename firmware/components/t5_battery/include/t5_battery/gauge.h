@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Software fuel gauge for the 2S NP-F550-style pack (plan 2.8). Pure logic:
+ * Software fuel gauge for the pack (t5_battery/pack.h, plan 2.8). Pure logic:
  * no I/O, every input is passed in, so it runs on recorded traces in host
  * tests.
  *
@@ -15,21 +15,17 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "t5_battery/pack.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define T5_GAUGE_NOMINAL_MAH 2000      /* vendor: 2000 mAh, 7.4 V, 14.8 Wh */
 #define T5_GAUGE_MIN_MAH 1000
 #define T5_GAUGE_MAX_MAH 3500
 #define T5_GAUGE_REST_MA10 300         /* |I| below 30 mA counts as rest */
 #define T5_GAUGE_REST_MS (5u * 60 * 1000)
 #define T5_GAUGE_SWAP_PCT 25           /* boot voltage vs prediction */
-#define T5_GAUGE_RINT_MOHM 150         /* pack + wiring resistance for load compensation */
-#define T5_GAUGE_STANDBY_MA10_DEFAULT 20  /* 2 mA soft-off draw until measured */
-#define T5_GAUGE_FULL_MV 8300
-#define T5_GAUGE_EMPTY_MV 6500
 
 /* What survives a power cycle (stored by the battery service). */
 typedef struct {
@@ -68,8 +64,7 @@ typedef struct {
 int32_t t5_gauge_ocv_to_permille(uint16_t pack_mv);
 /* Estimate open-circuit voltage from a loaded reading. */
 uint16_t t5_gauge_compensate(uint16_t mv, int32_t ma10);
-/* A reading that can't come from a 2S pack (the INA226 bus node jumps to
- * ~4.4 V on USB with a full pack, bench 0.4). */
+/* Within T5_PACK_MIN_MV..T5_PACK_MAX_MV: a reading that can come from the pack. */
 bool t5_gauge_sample_plausible(uint16_t mv);
 
 /* Start from the saved record (or NULL) and the first sample at boot.

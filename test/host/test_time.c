@@ -1,22 +1,19 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "unity.h"
 #include "t5_mocks.h"
+#include "t5_pins/pins.h"
+#include "t5_storage/paths.h"
 #include "t5_time/rtc.h"
 #include "t5_time/t5_time.h"
+#include "t5_time/t5_time_test.h"
 
 static mock_i2c_dev_t *rtc;
-
-/* 0x1D is write-0-to-clear. */
-static bool rtc_write(mock_i2c_dev_t *d, uint32_t reg, const uint8_t *data, size_t len)
-{
-    for (size_t i = 0; i < len; i++) {
-        uint32_t r = reg + i;
-        if (r == 0x1D) d->regs[r] &= data[i];
-        else d->regs[r] = data[i];
-    }
-    return true;
-}
+static char s_dir[64];
 
 static void set_rtc_time(int y, int mo, int d, int h, int mi, int s, int wday)
 {
@@ -30,10 +27,19 @@ void setUp(void)
     mock_reset_all();
     t5_time_reset_for_test();
     mock_system_time = 0;
-    rtc = mock_i2c_add(0x32, false);
-    rtc->on_write = rtc_write;
+    rtc = mock_rtc_add();
 }
-void tearDown(void) {}
+
+void tearDown(void)
+{
+    if (s_dir[0]) {
+        char path[96];
+        snprintf(path, sizeof path, "%s/tz", s_dir);
+        unlink(path);
+        rmdir(s_dir);
+        s_dir[0] = 0;
+    }
+}
 
 static void test_bcd(void)
 {
@@ -119,6 +125,57 @@ static void test_time_from_rtc_and_set(void)
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_time_set(1000, T5_TIME_SRC_USER));
 }
 
+static void test_rtc_write_failure_still_sets_the_clock(void)
+{
+    set_rtc_time(2026, 11, 5, 10, 26, 44, 4);
+    TEST_ASSERT_EQUAL(T5_OK, t5_time_init());
+    mock_events_reset();
+    mock_i2c_fail_next(T5_I2C_ADDR_RX8130, 100, T5_ERR_NACK);
+    TEST_ASSERT_EQUAL(T5_OK, t5_time_set(1800000000, T5_TIME_SRC_NTP));
+    TEST_ASSERT_EQUAL_INT64(1800000000, (int64_t)mock_system_time);
+    TEST_ASSERT_EQUAL(T5_TIME_SRC_NTP, t5_time_source());
+    TEST_ASSERT_EQUAL(1, mock_events_count(T5_EV_TIME_SET));
+}
+
+static void use_temp_sys_dir(void)
+{
+    snprintf(s_dir, sizeof s_dir, "/tmp/t5_time_test_%d", (int)getpid());
+    TEST_ASSERT_EQUAL(0, mkdir(s_dir, 0755));
+    t5_sys_dir_set(s_dir);
+}
+
+static void test_time_zone_saved_and_loaded(void)
+{
+    use_temp_sys_dir();
+    TEST_ASSERT_EQUAL(T5_OK, t5_time_set_tz("JST-9"));
+    TEST_ASSERT_EQUAL_STRING("Tokyo, Seoul", t5_time_tz_name());
+    TEST_ASSERT_EQUAL(T5_OK, t5_time_set_tz("UTC0"));
+    char path[96];
+    snprintf(path, sizeof path, "%s/tz", s_dir);
+    FILE *f = fopen(path, "w");
+    TEST_ASSERT_NOT_NULL(f);
+    fputs("<+05>-5", f);   /* not in the list: shown as the POSIX string */
+    fclose(f);
+    t5_time_tz_load();
+    TEST_ASSERT_EQUAL_STRING("<+05>-5", t5_time_tz());
+    TEST_ASSERT_EQUAL_STRING("<+05>-5", t5_time_tz_name());
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_time_set_tz(""));
+    T5_IGNORE(t5_time_set_tz("UTC0"));
+}
+
+static void test_local_time_follows_the_wall_clock(void)
+{
+    use_temp_sys_dir();
+    set_rtc_time(2026, 11, 5, 10, 26, 44, 4);
+    TEST_ASSERT_EQUAL(T5_OK, t5_time_init());
+    TEST_ASSERT_EQUAL(T5_OK, t5_time_set_tz("JST-9"));
+    struct tm lt;
+    TEST_ASSERT_TRUE(t5_time_local(&lt));
+    TEST_ASSERT_EQUAL(19, lt.tm_hour);
+    TEST_ASSERT_EQUAL(26, lt.tm_min);
+    T5_IGNORE(t5_time_set_tz("UTC0"));   /* leave the process in UTC */
+}
+
 static void test_alarm_and_timer_registers(void)
 {
     t5_rtc_init();
@@ -154,6 +211,9 @@ int main(void)
     RUN_TEST(test_init_records_flags_and_clears_alarm_timer_only);
     RUN_TEST(test_time_invalid_when_vlf);
     RUN_TEST(test_time_from_rtc_and_set);
+    RUN_TEST(test_rtc_write_failure_still_sets_the_clock);
+    RUN_TEST(test_time_zone_saved_and_loaded);
+    RUN_TEST(test_local_time_follows_the_wall_clock);
     RUN_TEST(test_alarm_and_timer_registers);
     return UNITY_END();
 }

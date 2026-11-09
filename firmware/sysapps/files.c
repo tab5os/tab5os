@@ -9,10 +9,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include "t5/shell.h"
 #include "t5/storage.h"
 #include "t5/system.h"
-#include "sysapp_system.h"
 #include "t5/usb.h"
 #include "sysapps_priv.h"
 
@@ -111,7 +109,7 @@ static void install_answer(int b, void *ud)
     install_t *in = ud;
     if (b == 0) {
         char err[128] = "";
-        t5_err_t e = t5_apps_install(in->path, 0, err, sizeof err);
+        t5_err_t e = t5_apps_install(in->path, T5_PKG_DEST_AUTO, NULL, err, sizeof err);
         char msg[192];
         if (e == T5_OK) snprintf(msg, sizeof msg, "Installed. It's in the launcher.");
         else snprintf(msg, sizeof msg, "Couldn't install: %s", err[0] ? err : t5_err_str(e));
@@ -487,7 +485,7 @@ static void on_destroy(t5_app_t *app)
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };
 
 const t5_builtin_app_t sysapp_files = {
-    .id = "com.t5.files",
+    .id = T5_APP_ID_FILES,
     .name = "Files",
     .desc = &s_desc,
     .perms = T5_PERM_STORAGE | T5_PERM_USB | T5_PERM_SYSTEM,

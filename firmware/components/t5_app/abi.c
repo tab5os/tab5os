@@ -6,6 +6,20 @@
 
 static const char *TAG = "t5.abi";
 
+static const t5_abi_sym_t *s_table;
+static size_t s_count;
+
+void t5_abi_set_table(const t5_abi_sym_t *table, size_t count)
+{
+    s_table = table;
+    s_count = table ? count : 0;
+}
+
+size_t t5_abi_size(void)
+{
+    return s_count;
+}
+
 static int stub_err(void) { T5_LOGW(TAG, "denied call"); return T5_ERR_DENIED; }
 static void *stub_ptr(void) { T5_LOGW(TAG, "denied call"); return NULL; }
 static bool stub_bool(void) { T5_LOGW(TAG, "denied call"); return false; }
@@ -26,24 +40,15 @@ const void *t5_abi_stub(t5_abi_ret_t r)
 const t5_abi_sym_t *t5_abi_find(const char *name)
 {
     if (!name) return NULL;
-    size_t lo = 0, hi = t5_abi_count;
+    size_t lo = 0, hi = s_count;
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
-        int c = strcmp(name, t5_abi_table[mid].name);
-        if (c == 0) return &t5_abi_table[mid];
+        int c = strcmp(name, s_table[mid].name);
+        if (c == 0) return &s_table[mid];
         if (c < 0) hi = mid;
         else lo = mid + 1;
     }
     return NULL;
-}
-
-bool t5_abi_is_runtime_helper(const char *name)
-{
-    /* The libgcc helpers apps need are published in api_v1.sym like any
-     * other symbol, so install and load agree: an app that imports a helper
-     * the OS doesn't export is refused at install, not at launch. */
-    (void)name;
-    return false;
 }
 
 uintptr_t t5_abi_resolve(const char *name, uint32_t perms, bool *denied)

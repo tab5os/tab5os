@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include "t5_battery/battery_test.h"
 #include "t5_battery/ina226.h"
 #include "t5_core/log.h"
 #include "t5_i2c/t5_i2c.h"
@@ -45,12 +46,12 @@ static t5_err_t wr16(uint8_t reg, uint16_t v)
 t5_err_t t5_ina226_init(void)
 {
     if (!s_dev) {
-        T5_RETURN_ON_ERR(t5_i2c_open(T5_I2C_ADDR_INA226, 400000, "ina226", &s_dev));
+        T5_RETURN_ON_ERR(t5_i2c_open(T5_I2C_ADDR_INA226, T5_SYS_I2C_HZ, "ina226", &s_dev));
     }
     uint16_t manuf = 0, die = 0;
     T5_RETURN_ON_ERR(rd16(REG_MANUF, &manuf));
     T5_RETURN_ON_ERR(rd16(REG_DIE, &die));
-    if (manuf != 0x5449 || (die & 0xFFF0) != 0x2260) {
+    if (manuf != T5_INA226_MANUF_ID || (die & 0xFFF0) != T5_INA226_DIE_ID) {
         T5_LOGE(TAG, "unexpected IDs manuf 0x%04x die 0x%04x", manuf, die);
         return T5_ERR_NOT_FOUND;
     }

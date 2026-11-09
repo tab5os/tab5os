@@ -10,7 +10,7 @@
 #include "t5_core/os.h"
 #include "t5_core/res.h"
 #include "t5_i2c/t5_i2c.h"
-#include "t5_pins/pins.h"
+#include "t5_ports/access.h"
 #include "ports_hw.h"
 #include "ports_priv.h"
 
@@ -43,6 +43,7 @@ struct t5_port {
 
 static struct t5_port s_handles[MAX_HANDLES];
 static t5_mutex_t s_lock;
+static t5_ports_access_fn_t s_access;
 
 static const char *const s_mode_names[T5_MODE_COUNT] = {
     [T5_MODE_I2C] = "i2c", [T5_MODE_UART] = "uart", [T5_MODE_SPI] = "spi", [T5_MODE_GPIO] = "gpio",
@@ -64,6 +65,11 @@ t5_port_mode_t t5_port_mode_parse(const char *s)
     return T5_MODE_COUNT;
 }
 
+void t5_ports_set_access_check(t5_ports_access_fn_t fn)
+{
+    s_access = fn;
+}
+
 t5_err_t t5_ports_init(void)
 {
     if (!s_lock) {
@@ -76,7 +82,9 @@ void t5_ports_reset_for_test(void)
 {
     T5_IGNORE(t5_ports_init());   /* idempotent; tests only */
     memset(s_handles, 0, sizeof s_handles);
+    s_access = NULL;
     broker_reset();
+    profiles_reset();
 }
 
 __attribute__((format(printf, 3, 4)))
@@ -176,9 +184,9 @@ static t5_err_t mode_pins(const port_def_t *d, t5_port_mode_t mode, const void *
             say(why, whylen, "%s: %s has no ADC channel", d->name, d->label[idx]);
             return T5_ERR_NOT_SUPPORTED;
         }
-        if (g == T5_PIN_PWR_KEY &&
+        if (ports_pin_hands_off(g) &&
             (mode != T5_MODE_GPIO || (cfg && ((const t5_port_gpio_cfg_t *)cfg)->output))) {
-            say(why, whylen, "%s: G35 is the power key line, input only", d->name);
+            say(why, whylen, "%s: G%u is %s, input only", d->name, g, ports_pin_risk(g));
             return T5_ERR_DENIED;
         }
         pins[(*n)++] = g;
@@ -235,10 +243,7 @@ static t5_err_t hw_open(t5_port_t *p, const void *cfg)
             c = &def;
         }
         p->output = c->output;
-        if (p->pin == T5_PIN_PWR_KEY) {
-            /* Input only; leave its pulls and sleep config exactly as the board set them. */
-            return T5_OK;
-        }
+        if (ports_pin_hands_off(p->pin)) return T5_OK;
         return ports_hw_gpio_config(p->pin, c->output, c->pull_up, c->pull_down, c->open_drain);
     }
     case T5_MODE_PWM: {
@@ -293,7 +298,7 @@ static void hw_close(t5_port_t *p)
     }
     p->hw = NULL;
     for (int i = 0; i < p->npins; i++) {
-        ports_hw_pin_release(p->pins[i]);
+        if (!ports_pin_hands_off(p->pins[i])) ports_hw_pin_release(p->pins[i]);
     }
 }
 
@@ -307,13 +312,14 @@ t5_err_t t5_port_open_ex(const char *name, t5_port_mode_t mode, const void *cfg,
         return T5_ERR_INVALID_ARG;
     }
     *out = NULL;
+    if (s_access && !s_access(name, why, whylen)) return T5_ERR_DENIED;
     T5_RETURN_ON_ERR(t5_ports_init());
     const port_def_t *d = ports_table_find(name);
     if (!d) {
         say(why, whylen, "no port named %s", name);
         return T5_ERR_NOT_FOUND;
     }
-    if (!(d->modes & PM(mode))) {
+    if (!(ports_modes(d) & PM(mode))) {
         say(why, whylen, "%s has no %s mode", d->name, t5_port_mode_name(mode));
         return T5_ERR_NOT_SUPPORTED;
     }
@@ -621,7 +627,7 @@ static void fill_info(const port_def_t *d, t5_port_info_t *out)
     out->name = d->name;
     out->desc = d->desc;
     out->npins = d->npins;
-    out->modes = d->modes;
+    out->modes = ports_modes(d);
     out->shared = d->shared;
     for (int i = 0; i < d->npins; i++) {
         out->gpio[i] = d->gpio[i];

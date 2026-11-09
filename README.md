@@ -9,8 +9,9 @@ See [docs/tab5os-design.md](docs/tab5os-design.md) and [docs/tab5os-implementati
 
 ```sh
 . tools/env.sh                 # ESP-IDF at the version in firmware/idf_version.txt
-t5 chip                        # which ESP32-P4 revision? v1.x -> rev1, v3.x -> rev3
-t5 build                       # default rev1; or: t5 --rev rev3 build
+t5 chip                        # chip revision (the build targets ESP32-P4 v1.x)
+t5 build                       # firmware/build/
+t5 size-check                  # the OS image within its budget (90% of an OTA slot)
 t5 flash                       # bootloader, partition table, OS to ota_0
 t5 monitor                     # console (Ctrl-] to quit)
 t5 host-test                   # host unit tests (service logic against mocks)
@@ -22,13 +23,17 @@ t5 apps                        # build the SDK test apps (test/apps/build/*.t5ap
 t5 examples                    # build the example apps (apps/examples/build/*.t5app)
 t5 shot out.png                # screenshot over the console (--cam: the camera preview)
 t5 sim --shell                 # the launcher, status bar and quick settings in the simulator
-t5 lint                        # UI density lint and the ABI symbol file check
+t5 lint                        # UI density, coding standard, ABI symbol file, docs/api-reference.md
+t5 analyze                     # GCC's static analyzer on the strict components (firmware and recovery)
+t5 hil NAME [ARGS]             # a bench script from test/hil/ (needs the board)
 t5 recovery-build / recovery-flash   # the recovery image (recovery/), written to its own partition
 t5 new NAME [--python] && t5 run     # an app: build, push (Wi-Fi, else USB-C), launch, stream the log
 t5 pair <tab5-ip>              # developer mode (Settings > Developer mode): pair this computer
 t5 ota-pack [--sign key.pem] && t5 ota   # an OS update, pushed to the paired Tab5
 tools/release.sh [--sign key.pem]   # firmware, recovery, update package, SDK and examples into dist/
 ```
+
+CI (`.github/workflows/ci.yml`) runs these same `t5` commands.
 
 MicroPython is a git submodule: `git submodule update --init third_party/micropython` after cloning (not `--recursive`).
 
@@ -69,7 +74,7 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `ui gate [all\|scroll\|transition\|dialog] [s]` | The rendering gate (plan 4.8), PASS/FAIL against the frame-rate targets |
 | `ui frames` / `ui dialog open\|close` | The last 32 frames (render, PPA and copy time, area redrawn); a test dialog to step through |
 | `app` / `app run\|exit\|install\|rm\|usage\|crashes\|dump <id>\|abi\|alarm` | App runtime; `dump` prints an app's saved core dump as base64 |
-| `app fetch <url> [sd\|data]` | Download a `.t5app` over HTTP (outgoing only) and install it |
+| `app fetch <url> [sd\|data]` | Download a `.t5app` over HTTP or HTTPS (outgoing only) and install it |
 | `app stress <id> <n>` | Open and close an app n times, checking heap, claims, locks and rails return to baseline |
 | `port` / `port open\|close\|i2c\|gpio\|pwm\|adc\|uart\|scan\|profiles\|modbus ...` | External ports: owners and pin levels, claims, raw I/O, module scan, Modbus RTU |
 | `shot [div]` | The screen as base64 RGB565 (`t5 shot` turns it into a PNG) |
@@ -85,7 +90,7 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `ui tap X Y [ms]` / `ui type TEXT` / `ui key enter\|up\|...` | Scripted touch and keys (tests) |
 | `app put PATH SIZE` | Receive a file as base64 lines (the CLI's USB fallback) |
 
-Bench scripts in `test/hil/` use `tools/t5/t5link.py` to drive the console; run them with the IDF Python env. Steps that need a person are in [docs/bench-procedures.md](docs/bench-procedures.md).
+Bench scripts in `test/hil/` drive the console through `tools/t5/t5link.py`. Run them with `t5 hil NAME [ARGS]` (`t5 hil` lists them), which uses the IDF Python and finds `tools/t5`; `t5 --port PORT hil ...` picks the board. `t5 hil app_checks` runs the self-checking test apps from `t5 apps`. Steps that need a person are in [docs/bench-procedures.md](docs/bench-procedures.md).
 
 ## Layout
 

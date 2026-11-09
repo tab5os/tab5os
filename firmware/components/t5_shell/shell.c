@@ -14,63 +14,63 @@
 #include "t5_ui/t5_ui.h"
 
 static bool s_ready;
-static char s_cur[SHELL_ID_LEN];          /* "" = home */
+static char s_cur[T5_APP_ID_LEN];          /* "" = home */
 static bool s_fullscreen;
 static lv_obj_t *s_app_screen;
-static char s_recent[SHELL_RECENTS][SHELL_ID_LEN];
+static shell_recents_t s_recents;
 static lv_timer_t *s_tick;
-
-bool t5_shell_ready(void)
-{
-    return s_ready;
-}
 
 bool shell_in_app(void)
 {
     return s_cur[0] != 0;
 }
 
-const char *shell_current_id(void)
+void shell_set_text(lv_obj_t *label, const char *text)
 {
-    return s_cur;
+    if (strcmp(lv_label_get_text(label), text)) lv_label_set_text(label, text);
 }
 
-/* ---- recents ------------------------------------------------------------------ */
+void shell_anim_y(void *obj, int32_t y)
+{
+    lv_obj_set_y(obj, y);
+}
+
+void shell_show_time(lv_obj_t *clock, lv_obj_t *date)
+{
+    struct tm tm;
+    char buf[48];
+    bool set = shell_sys_time(&tm);
+    if (clock) {
+        if (set) shell_fmt_clock(&tm, buf, sizeof buf);
+        shell_set_text(clock, set ? buf : SHELL_CLOCK_NOT_SET);
+    }
+    if (date) {
+        if (set) shell_fmt_date(&tm, buf, sizeof buf);
+        shell_set_text(date, set ? buf : SHELL_DATE_NOT_SET);
+    }
+}
+
 void shell_note_launch(const char *id)
 {
-    int at = SHELL_RECENTS - 1;
-    for (int i = 0; i < SHELL_RECENTS; i++) {
-        if (!strcmp(s_recent[i], id)) {
-            at = i;
-            break;
-        }
-    }
-    memmove(&s_recent[1], &s_recent[0], (size_t)at * SHELL_ID_LEN);
-    strncpy(s_recent[0], id, SHELL_ID_LEN - 1);
-    s_recent[0][SHELL_ID_LEN - 1] = 0;
+    shell_recents_note(&s_recents, id);
 }
 
-int shell_recents(char ids[][SHELL_ID_LEN], int max)
+int shell_recents(char ids[][T5_APP_ID_LEN], int max)
 {
-    int n = 0;
-    for (int i = 0; i < SHELL_RECENTS && n < max; i++) {
-        if (s_recent[i][0]) memcpy(ids[n++], s_recent[i], SHELL_ID_LEN);
-    }
-    return n;
+    return shell_recents_list(&s_recents, ids, max);
 }
 
-static bool app_name(const char *id, char *name, size_t n)
+/* The registry's entry for id. */
+static bool app_find(const char *id, shell_app_t *out)
 {
-    shell_app_t *apps = calloc(48, sizeof *apps);
+    shell_app_t *apps = calloc(T5_APPS_MAX, sizeof *apps);
     if (!apps) return false;
-    int k = shell_sys_apps(apps, 48);
+    int k = shell_sys_apps(apps, T5_APPS_MAX);
     bool found = false;
-    for (int i = 0; i < k; i++) {
+    for (int i = 0; i < k && !found; i++) {
         if (!strcmp(apps[i].id, id)) {
-            strncpy(name, apps[i].name[0] ? apps[i].name : apps[i].id, n - 1);
-            name[n - 1] = 0;
+            *out = apps[i];
             found = true;
-            break;
         }
     }
     free(apps);
@@ -78,8 +78,8 @@ static bool app_name(const char *id, char *name, size_t n)
 }
 
 typedef struct {
-    char ids[SHELL_RECENTS][SHELL_ID_LEN];
-    char names[SHELL_RECENTS][SHELL_NAME_LEN];
+    char ids[SHELL_RECENTS][T5_APP_ID_LEN];
+    char names[SHELL_RECENTS][T5_APP_NAME_LEN];
     const char *items[SHELL_RECENTS + 1];
     int n;
 } recents_menu_t;
@@ -99,12 +99,14 @@ void shell_show_recents(lv_obj_t *anchor)
 {
     recents_menu_t *m = calloc(1, sizeof *m);
     if (!m) return;
-    char ids[SHELL_RECENTS][SHELL_ID_LEN];
+    char ids[SHELL_RECENTS][T5_APP_ID_LEN];
     int n = shell_recents(ids, SHELL_RECENTS);
     for (int i = 0; i < n; i++) {
+        shell_app_t a;
         if (!strcmp(ids[i], s_cur)) continue;          /* the one in front */
-        memcpy(m->ids[m->n], ids[i], SHELL_ID_LEN);
-        if (!app_name(ids[i], m->names[m->n], SHELL_NAME_LEN)) continue;   /* removed since */
+        if (!app_find(ids[i], &a)) continue;           /* removed since */
+        memcpy(m->ids[m->n], ids[i], T5_APP_ID_LEN);
+        snprintf(m->names[m->n], sizeof m->names[m->n], "%s", shell_app_name(&a));
         m->items[m->n] = m->names[m->n];
         m->n++;
     }
@@ -116,8 +118,8 @@ void shell_show_recents(lv_obj_t *anchor)
 
 /* ---- per-app menu (long press in the launcher) ----------------------------------- */
 typedef struct {
-    char id[SHELL_ID_LEN];
-    char name[SHELL_NAME_LEN];
+    char id[T5_APP_ID_LEN];
+    char name[T5_APP_NAME_LEN];
     bool removable;
 } app_menu_t;
 
@@ -139,12 +141,13 @@ static void app_menu_picked(int item, void *ud)
     if (item == 0) {
         shell_sys_launch(m->id, NULL);
     } else if (item == 1) {
-        shell_sys_launch(SHELL_APP_MANAGER, m->id);
+        shell_sys_launch(T5_APP_ID_MANAGER, m->id);
     } else if (item == 2 && m->removable) {
-        char title[96];
+        char title[96], dir[T5_APP_PATH_MAX], text[T5_APP_PATH_MAX + 48];
         snprintf(title, sizeof title, "Remove %s?", m->name);
-        md_dialog_show(title, "The app is removed. Its data in /data/appdata is kept.", "Remove", "Cancel",
-                       remove_answer, m);
+        shell_sys_data_dir(m->id, dir, sizeof dir);
+        snprintf(text, sizeof text, "The app is removed. Its data in %s is kept.", dir);
+        md_dialog_show(title, text, "Remove", "Cancel", remove_answer, m);
         return;
     }
     free(m);
@@ -156,12 +159,13 @@ void shell_app_menu(lv_obj_t *anchor, const char *id, const char *name)
     if (!m) return;
     snprintf(m->id, sizeof m->id, "%s", id);
     snprintf(m->name, sizeof m->name, "%s", name);
-    m->removable = shell_sys_can_remove(id);
+    shell_app_t a;
+    m->removable = app_find(id, &a) && shell_app_removable(&a);
     static const char *items[] = { "Open", "App info", "Remove" };
     md_menu_show(anchor, items, m->removable ? 3 : 2, app_menu_picked, m);
 }
 
-/* ---- chrome --------------------------------------------------------------------- */
+/* ---- chrome ------------------------------------------------------------------------ */
 static void tick(lv_timer_t *t)
 {
     (void)t;
@@ -186,8 +190,7 @@ void shell_chrome_init(void)
     shell_sys_apply_prefs();
     void *saved = shell_sys_enter();
     statusbar_create();
-    keyboard_init();
-    gesture_init();
+    gesture_attach_all();
     s_tick = lv_timer_create(tick, 1000, NULL);
     shell_sys_leave(saved);
     s_ready = true;
@@ -283,10 +286,27 @@ t5_err_t t5_shell_quick_settings(bool open)
     return t5_ui_async(qs_async, open ? (void *)1 : NULL);
 }
 
+static void home_async(void *p)
+{
+    (void)p;
+    shell_sys_home();
+}
+
 t5_err_t t5_shell_home(void)
 {
-    shell_sys_home();
-    return T5_OK;
+    if (t5_ui_on_ui_task()) {
+        shell_sys_home();
+        return T5_OK;
+    }
+    return t5_ui_async(home_async, NULL);
+}
+
+void shell_input_added(void)
+{
+    if (!s_ready) return;            /* the chrome attaches every device when it is built */
+    gesture_attach_all();
+    if (t5_ui_hw_keyboard()) keyboard_hide();
+    statusbar_update();
 }
 
 void t5_shell_keyboard_show(void *ta)
@@ -307,15 +327,10 @@ void shell_reset(void)
     s_cur[0] = 0;
     s_fullscreen = false;
     s_app_screen = NULL;
-    memset(s_recent, 0, sizeof s_recent);
+    memset(&s_recents, 0, sizeof s_recents);
     launcher_reset();
     statusbar_reset();
     qs_reset();
     keyboard_reset();
     gesture_reset();
-}
-
-void shell_sim_reset(void)
-{
-    shell_reset();
 }

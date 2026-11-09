@@ -30,22 +30,20 @@
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "mbedtls/ssl.h"
+#include "net_priv.h"
 #include "netio_priv.h"
 #include "netproto.h"
 #include "sdkconfig.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
+#include "t5_core/task_tls.h"
 #include "t5_power/power.h"
 
 static const char *TAG = "net.sock";
 
-/* Thread-local slot for the cancel flag: t5_core keeps the app context in
- * the last slot, ESP-IDF's pthread layer uses slot 0. */
-#define NET_TLS_SLOT (CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS - 2)
-_Static_assert(CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS >= 3, "need a TLS slot for the net cancel flag");
-
 #define POLL_MAX 16
+#define CLOSE_WAIT_MS 5000
 #define RESOLVE_WORKERS 4
 #define IO_AGAIN (-1)
 #define IO_ERR (-2)
@@ -90,7 +88,9 @@ static bool quota_ok(void)
 /* Open handles keep Wi-Fi up: while any socket, request, WebSocket, MQTT
  * client or server is open, the stack holds a NET wake lock, so Sleep keeps
  * the C6 connected (in light power save) instead of powering it down, and a
- * download or a long-lived connection survives the screen going off. */
+ * download or a long-lived connection survives the screen going off. The
+ * lock counts every app's handles, so it is the system's: an app's handles
+ * go when it exits, and the lock with the last of them. */
 static t5_mutex_t s_wake_mtx;
 static t5_wakelock_t *s_wake;
 static int s_live;
@@ -112,7 +112,7 @@ static void wake_update(void)
     taskENTER_CRITICAL(&s_mux);
     bool want = s_live > 0;
     taskEXIT_CRITICAL(&s_mux);
-    if (want && !s_wake) s_wake = t5_wakelock_acquire(T5_LOCK_NET, "net.io");
+    if (want && !s_wake) s_wake = t5_wakelock_acquire_system(T5_LOCK_NET, "net.io");
     else if (!want && s_wake) {
         t5_wakelock_release(s_wake);
         s_wake = NULL;
@@ -128,13 +128,26 @@ int t5_net_handles_open(void)
     return n;
 }
 
-t5_err_t nh_register(t5_nethdr_t *h, uint32_t magic, void (*release)(void *))
+static void exit_release(void *h)
+{
+    t5_nethdr_t *n = h;
+    n->owner_gone = true;
+    n->release(h);
+}
+
+t5_err_t nh_register(t5_nethdr_t *h, uint32_t magic, void (*release)(void *), void (*destroy)(void *))
 {
     void *app = t5_app_ctx_get();
     h->magic = magic;
     h->app = app;
     h->closing = false;
-    h->refs = 0;
+    h->refs = 1;
+    h->app_refs = 0;
+    h->owner_gone = false;
+    h->release = release;
+    h->destroy = destroy;
+    h->waiter = NULL;
+    h->orphaned = false;
     bool full;
     taskENTER_CRITICAL(&s_mux);
     full = app && app_count_locked(app) >= T5_NET_APP_MAX;
@@ -150,7 +163,7 @@ t5_err_t nh_register(t5_nethdr_t *h, uint32_t magic, void (*release)(void *))
         T5_LOGW(TAG, "%s: more than %d network handles open", t5_app_ctx_id(app), T5_NET_APP_MAX);
         return T5_ERR_BUSY;
     }
-    t5_res_add(T5_RES_OTHER, h, release);
+    t5_res_add(T5_RES_OTHER, h, exit_release);
     wake_update();
     return T5_OK;
 }
@@ -159,10 +172,12 @@ static bool acquire(void *h, uint32_t magic, uint32_t *got)
 {
     bool ok = false;
     if (!h) return false;
+    void *ctx = t5_app_ctx_get();
     taskENTER_CRITICAL(&s_mux);
     for (t5_nethdr_t *p = s_list; p; p = p->next) {
         if (p == h && !p->closing && (!magic || p->magic == magic)) {
             p->refs++;
+            if (p->app && p->app == ctx) p->app_refs++;
             if (got) *got = p->magic;
             ok = true;
             break;
@@ -185,9 +200,18 @@ bool nh_acquire_any(void *h, uint32_t *magic)
 void nh_release(void *h)
 {
     t5_nethdr_t *n = h;
+    SemaphoreHandle_t wake = NULL;
+    bool destroy = false;
+    void *ctx = t5_app_ctx_get();
     taskENTER_CRITICAL(&s_mux);
-    n->refs--;
+    if (n->app && n->app == ctx && n->app_refs > 0) n->app_refs--;
+    if (--n->refs == 0) {
+        wake = n->waiter;
+        destroy = !wake && n->orphaned;
+    }
     taskEXIT_CRITICAL(&s_mux);
+    if (wake) xSemaphoreGive(wake);
+    if (destroy) n->destroy(n);
 }
 
 t5_err_t nh_unregister(void *h, uint32_t magic)
@@ -209,15 +233,36 @@ t5_err_t nh_unregister(void *h, uint32_t magic)
     if (!found) return T5_ERR_INVALID_ARG;
     t5_res_remove_app(n->app, n);
     wake_update();
-    /* Waits end within a slice once closing is set; give them 5 s at most. */
-    for (int i = 0; i < 1000; i++) {
-        taskENTER_CRITICAL(&s_mux);
-        int refs = n->refs;
-        taskEXIT_CRITICAL(&s_mux);
-        if (refs <= 0) return T5_OK;
-        t5_delay_ms(5);
+    /* Waits end within a slice once closing is set: a user still there
+     * after CLOSE_WAIT_MS was deleted inside the call, or is stuck. */
+    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
+    taskENTER_CRITICAL(&s_mux);
+    bool last = --n->refs == 0;
+    if (!last) {
+        n->waiter = sem;
+        n->orphaned = !sem;
     }
-    T5_LOGE(TAG, "%s still in use after close", n->what);
+    taskEXIT_CRITICAL(&s_mux);
+    if (!last && sem && xSemaphoreTake(sem, pdMS_TO_TICKS(CLOSE_WAIT_MS)) != pdTRUE) {
+        taskENTER_CRITICAL(&s_mux);
+        last = n->refs == 0;               /* let go just now: its give is on the way */
+        bool dead = !last && n->owner_gone && n->refs == n->app_refs;
+        n->waiter = NULL;
+        n->orphaned = !last && !dead;
+        taskEXIT_CRITICAL(&s_mux);
+        if (last) {
+            xSemaphoreTake(sem, portMAX_DELAY);
+        } else if (dead) {
+            T5_LOGW(TAG, "%s: its app's tasks exited inside a call: freed now", n->what);
+            last = true;
+        } else {
+            T5_LOGW(TAG, "%s still in use %d ms after close: freed when its user lets go", n->what, CLOSE_WAIT_MS);
+        }
+    } else if (!last && sem) {
+        last = true;
+    }
+    if (sem) vSemaphoreDelete(sem);
+    if (last) n->destroy(n);
     return T5_OK;
 }
 
@@ -273,12 +318,12 @@ uint32_t net_left(uint32_t deadline, uint32_t timeout_ms)
 
 void t5_net_cancel_flag(volatile bool *flag)
 {
-    vTaskSetThreadLocalStoragePointer(NULL, NET_TLS_SLOT, (void *)flag);
+    vTaskSetThreadLocalStoragePointer(NULL, T5_TASK_TLS_NET_CANCEL, (void *)flag);
 }
 
 bool net_cancelled(void)
 {
-    volatile bool *f = pvTaskGetThreadLocalStoragePointer(NULL, NET_TLS_SLOT);
+    volatile bool *f = pvTaskGetThreadLocalStoragePointer(NULL, T5_TASK_TLS_NET_CANCEL);
     return f && *f;
 }
 
@@ -375,6 +420,7 @@ int t5_net_addr_str(const t5_net_addr_t *a, char *buf, size_t n)
 typedef struct {
     int refs;                   /* the waiter and the worker */
     volatile bool done;
+    SemaphoreHandle_t finished; /* given with done */
     t5_err_t err;
     t5_net_addr_t addr;
     char host[T5NP_HOST_MAX + 1];
@@ -387,7 +433,9 @@ static void rjob_put(rjob_t *j)
     taskENTER_CRITICAL(&s_mux);
     bool last = --j->refs == 0;
     taskEXIT_CRITICAL(&s_mux);
-    if (last) free(j);
+    if (!last) return;
+    vSemaphoreDelete(j->finished);
+    free(j);
 }
 
 static void resolve_task(void *arg)
@@ -411,6 +459,7 @@ static void resolve_task(void *arg)
     taskENTER_CRITICAL(&s_mux);
     j->done = true;
     taskEXIT_CRITICAL(&s_mux);
+    xSemaphoreGive(j->finished);
     xSemaphoreGive(s_rsem);
     rjob_put(j);
     vTaskDelete(NULL);
@@ -436,7 +485,9 @@ static t5_err_t resolve(const char *host, t5_net_addr_t *out, uint32_t timeout_m
         if (!net_left(dl, timeout_ms)) return T5_ERR_TIMEOUT;
     }
     rjob_t *j = calloc(1, sizeof *j);
-    if (!j) {
+    if (j) j->finished = xSemaphoreCreateBinary();
+    if (!j || !j->finished) {
+        free(j);
         xSemaphoreGive(s_rsem);
         return T5_ERR_NO_MEM;
     }
@@ -445,6 +496,7 @@ static t5_err_t resolve(const char *host, t5_net_addr_t *out, uint32_t timeout_m
     /* A plain FreeRTOS task: no app context, so the app tracker doesn't own it. */
     if (xTaskCreatePinnedToCore(resolve_task, "t5_dns", 4096, j, 5, NULL, tskNO_AFFINITY) != pdPASS) {
         xSemaphoreGive(s_rsem);
+        vSemaphoreDelete(j->finished);
         free(j);
         return T5_ERR_NO_MEM;
     }
@@ -459,8 +511,9 @@ static t5_err_t resolve(const char *host, t5_net_addr_t *out, uint32_t timeout_m
             e = T5_ERR_STATE;
             break;
         }
-        if (!net_left(dl, timeout_ms)) break;
-        t5_delay_ms(10);
+        uint32_t left = net_left(dl, timeout_ms);
+        if (!left) break;
+        xSemaphoreTake(j->finished, pdMS_TO_TICKS(left < NET_SLICE_MS ? left : NET_SLICE_MS));
     }
     rjob_put(j);
     return e;
@@ -756,9 +809,14 @@ static void release_sock(void *h)
     T5_IGNORE(t5_sock_close(h));      /* app exit: nothing to report to */
 }
 
+static void destroy_sock(void *h)
+{
+    ns_destroy(h);
+}
+
 static t5_err_t publish(t5_sock_t *s, t5_sock_t **out)
 {
-    t5_err_t e = nh_register(&s->hdr, NH_SOCK, release_sock);
+    t5_err_t e = nh_register(&s->hdr, NH_SOCK, release_sock, destroy_sock);
     if (e != T5_OK) {
         ns_destroy(s);
         return e;
@@ -838,9 +896,7 @@ t5_err_t t5_sock_peer_addr(t5_sock_t *s, t5_net_addr_t *out)
 
 t5_err_t t5_sock_close(t5_sock_t *s)
 {
-    T5_RETURN_ON_ERR(nh_unregister(s, NH_SOCK));
-    ns_destroy(s);
-    return T5_OK;
+    return nh_unregister(s, NH_SOCK);
 }
 
 t5_err_t ns_start_tls(t5_sock_t *s, const t5_tls_cfg_t *cfg)

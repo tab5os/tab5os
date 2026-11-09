@@ -36,20 +36,24 @@ typedef struct t5_tracker {
     t5_heap_blk_t *blocks;          /* doubly linked */
     size_t heap_bytes, heap_peak;
     uint32_t heap_blocks;
-    uint32_t heap_limit_kb;         /* 0 = none */
-    uint32_t heap_refused;
     uint32_t counts[T5_RES_KIND_COUNT];
     void *arena;                    /* the allocator's own state for this app */
 } t5_tracker_t;
 
-void t5_tracker_init(t5_tracker_t *t, uint32_t heap_limit_kb);
+void t5_tracker_init(t5_tracker_t *t);
 /* Returns false if the table is full (the handle then leaks on exit). A
  * handle already present is updated, not added twice. */
 bool t5_tracker_add(t5_tracker_t *t, t5_res_kind_t kind, void *handle, t5_res_release_fn_t release);
 bool t5_tracker_remove(t5_tracker_t *t, void *handle);
 bool t5_tracker_has(const t5_tracker_t *t, void *handle);
+/* Is handle tracked as kind? */
+bool t5_tracker_holds(const t5_tracker_t *t, t5_res_kind_t kind, const void *handle);
 int t5_tracker_count(const t5_tracker_t *t, t5_res_kind_t kind);
-/* Drop entries for which still_alive() says false (e.g. finished animations). */
+/* The handles of one kind, oldest first: copies up to max, returns how many
+ * there are. */
+int t5_tracker_list(const t5_tracker_t *t, t5_res_kind_t kind, void **out, int max);
+/* Drop entries for which still_alive() says false (e.g. finished
+ * animations), without releasing them. */
 void t5_tracker_prune(t5_tracker_t *t, t5_res_kind_t kind, bool (*still_alive)(void *handle));
 /* Release everything, kind by kind in enum order, newest first within a
  * kind; then free the heap. Returns how many handles were released. */

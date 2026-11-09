@@ -19,6 +19,7 @@
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_app/anr_test.h"
 #include "t5_app/isolate.h"
 #include "t5_app/wrappers.h"
 #include "apps_hw.h"

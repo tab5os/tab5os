@@ -17,12 +17,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "t5_pkg/manifest.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define T5_FS_PATH_MAX 192
+#define T5_FS_PATH_MAX T5_APP_PATH_MAX
 #define T5_FS_MAX_PICKS 8
 
 typedef struct {
@@ -36,6 +37,15 @@ typedef struct {
     const t5_fs_pick_t *picks;
     int npicks;
 } t5_fs_scope_t;
+
+/* The places with files of the person's own: all_files reaches them, and
+ * the picker starts there. */
+typedef struct {
+    const char *path;
+    const char *label;
+} t5_fs_root_t;
+extern const t5_fs_root_t t5_fs_roots[];
+extern const size_t t5_fs_nroots;
 
 typedef enum {
     T5_FS_ALLOW,

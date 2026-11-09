@@ -5,8 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "esp_cache.h"
-#include "esp_private/esp_cache_private.h"   /* esp_cache_get_alignment, as esp_h264 uses */
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -30,15 +28,17 @@
 #include "t5_ui/fbtrack.h"
 #include "t5_ui/orient.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_ui/ui_diag.h"
 #include "ui_hw.h"
+#include "ui_priv.h"
 
 static const char *TAG = "t5.ui";
+
+_Static_assert(T5_FBT_BUFS == T5_DISPLAY_FBS, "damage tracking keeps one list per framebuffer");
 
 #define UI_TASK_STACK (16 * 1024)
 #define UI_TASK_PRIO 5
 #define UI_CORE 1
-#define REFR_MS 16
-#define REFR_LOW_POWER_MS 33
 #define IMU_HZ 10
 #define CFG_VERSION 1
 
@@ -72,7 +72,7 @@ static bool s_cfg_dirty;
 
 static void cfg_path(char *buf, size_t n)
 {
-    snprintf(buf, n, "%s/ui.cfg", t5_autosave_dir());
+    T5_IGNORE(t5_sys_path(buf, n, "ui.cfg"));
 }
 
 static void cfg_load(void)
@@ -111,6 +111,25 @@ static struct {
 } s_st;
 static lv_obj_t *s_stats_label;
 
+/* Callers include the battery task: they only store the flag, and the UI
+ * task applies it, so a hung UI can't stall them. */
+void t5_ui_set_low_power(bool on)
+{
+    __atomic_store_n(&s_low_power, on, __ATOMIC_RELAXED);
+}
+
+/* UI task, under the lock. */
+static void apply_low_power(void)
+{
+    static int applied = -1;
+    bool on = __atomic_load_n(&s_low_power, __ATOMIC_RELAXED);
+    if (applied == (int)on) return;
+    lv_timer_t *t = lv_display_get_refr_timer(s_disp);
+    if (!t) return;
+    lv_timer_set_period(t, on ? T5_UI_REFRESH_LOW_POWER_MS : T5_UI_REFRESH_MS);
+    applied = on;
+}
+
 static void stats_second(lv_timer_t *t)
 {
     (void)t;
@@ -123,7 +142,7 @@ static void stats_second(lv_timer_t *t)
     s_st.out.render_kpx_avg = n ? (uint32_t)(s_st.render_px_sum / n / 1000) : 0;
     s_st.out.copy_us_avg = n ? (uint32_t)(s_st.copy_us_sum / n) : 0;
     s_st.out.copy_kb_s = s_st.copy_bytes / 1024;
-    s_st.out.refresh_period_ms = s_low_power ? REFR_LOW_POWER_MS : REFR_MS;
+    s_st.out.refresh_period_ms = s_low_power ? T5_UI_REFRESH_LOW_POWER_MS : T5_UI_REFRESH_MS;
     s_st.out.ui_loop_max_ms = s_st.loop_max_ms;
     s_st.out.touch_to_flush_us = s_st.touch_to_flush_us;
     s_st.frames_sec = 0;
@@ -132,11 +151,6 @@ static void stats_second(lv_timer_t *t)
     s_st.render_us_max = 0;
     s_st.copy_bytes = 0;
     s_st.loop_max_ms = 0;
-
-    /* Low-power mode follows the power service (battery 10% or the user). */
-    if (t5_power_low_power() != s_low_power) {
-        t5_ui_set_low_power(t5_power_low_power());
-    }
     if (s_stats_label) {
         lv_label_set_text_fmt(s_stats_label, "%u fps  render %u/%u us  copy %u us  %u KB/s  loop %u ms  touch %u us",
                               (unsigned)s_st.out.fps, (unsigned)s_st.out.render_us_avg,
@@ -205,6 +219,7 @@ void t5_ui_show_stats(bool on)
 #define BAND_LINES_INT 20
 #define BAND_LINES_PSRAM 40
 #define BAND_INT_BYTES ((size_t)T5_PANEL_H * BAND_LINES_INT * 2)
+#define BAND_INT_BLOCK (2 * BAND_INT_BYTES)
 static uint16_t *s_band_psram[2];
 static uint16_t *s_band_int;        /* both internal bands; NULL while lent */
 static bool s_band_lent;            /* lent out: don't take it back on our own */
@@ -419,82 +434,32 @@ static void pick_bands(void)
                                LV_DISPLAY_RENDER_MODE_PARTIAL);
 }
 
-/* Lending: the UI stops drawing in the block and parks it (s_band_spare);
- * the encoder's allocator (wrapped below) hands it out as the reference
- * buffer, and its heap_caps_free (wrapped too) parks it again. The block
- * never goes back to the heap: freed, small allocations split it within a
- * recording, and TLSF's size classes can't hand back a block of exactly the
- * size just freed anyway. */
-static portMUX_TYPE s_band_mux = portMUX_INITIALIZER_UNLOCKED;
-static uint16_t *s_band_spare;      /* parked for the encoder */
-static void *s_band_given;          /* the encoder's while it runs */
-static uint16_t *s_band_pending;    /* reclaimed, not yet drawn in */
+static void *s_band_out;     /* lent, not yet collected by the borrower */
 
-/* Between frames on the UI task (or before the UI starts): the PPA has
- * finished with the bands once it is idle. */
+/* The PPA has finished with the bands once it is idle. */
 static void lend_internal(void *arg)
 {
     (void)arg;
     s_band_lent = true;
     if (!s_band_int) return;
     if (!t5_ui_hw_wait_idle(200)) T5_LOGW(TAG, "PPA busy while lending the bands");
-    uint16_t *b = s_band_int;
+    __atomic_store_n(&s_band_out, (void *)s_band_int, __ATOMIC_SEQ_CST);
     s_band_int = NULL;
     pick_bands();
-    taskENTER_CRITICAL(&s_band_mux);
-    uint16_t *old = s_band_spare;
-    s_band_spare = b;
-    taskEXIT_CRITICAL(&s_band_mux);
-    heap_caps_free(old);
     T5_LOGI(TAG, "bands lent: drawing in PSRAM");
 }
 
-void *__real_esp_h264_aligned_calloc(uint32_t alignment, uint32_t n, uint32_t size, uint32_t *actual_size,
-                                     uint32_t caps);
-void *__wrap_esp_h264_aligned_calloc(uint32_t alignment, uint32_t n, uint32_t size, uint32_t *actual_size,
-                                     uint32_t caps)
+static void *band_alloc(void)
 {
-    size_t al = 0;
-    esp_cache_get_alignment(caps, &al);
-    size_t want = al ? (n * size + al - 1) / al * al : n * size;
-    if ((caps & MALLOC_CAP_INTERNAL) && want >= 64 * 1024 && want <= 2 * BAND_INT_BYTES && alignment <= 64) {
-        taskENTER_CRITICAL(&s_band_mux);
-        uint16_t *b = s_band_spare;
-        s_band_spare = NULL;
-        taskEXIT_CRITICAL(&s_band_mux);
-        if (b) {
-            __atomic_store_n(&s_band_given, (void *)b, __ATOMIC_SEQ_CST);
-            memset(b, 0, want);
-            esp_cache_msync(b, want, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
-            *actual_size = (uint32_t)want;
-            return b;
-        }
-    }
-    return __real_esp_h264_aligned_calloc(alignment, n, size, actual_size, caps);
+    void *p = t5_ui_hw_alloc_internal(BAND_INT_BLOCK);
+    if (!p && !s_band_warned) T5_LOGW(TAG, "no 100 KB internal block: bands in PSRAM for now");
+    if (!p) s_band_warned = true;
+    return p;
 }
 
-void __real_heap_caps_free(void *p);
-void __wrap_heap_caps_free(void *p)
+static void band_use(void *arg)
 {
-    if (p && p == __atomic_load_n(&s_band_given, __ATOMIC_SEQ_CST)) {
-        taskENTER_CRITICAL(&s_band_mux);
-        s_band_given = NULL;
-        uint16_t *old = s_band_spare;
-        s_band_spare = p;
-        taskEXIT_CRITICAL(&s_band_mux);
-        if (old) __real_heap_caps_free(old);
-        return;
-    }
-    __real_heap_caps_free(p);
-}
-
-static void apply_pending(void *arg)
-{
-    (void)arg;
-    taskENTER_CRITICAL(&s_band_mux);
-    uint16_t *p = s_band_pending;
-    s_band_pending = NULL;
-    taskEXIT_CRITICAL(&s_band_mux);
+    uint16_t *p = arg;
     s_band_lent = false;
     if (!p) return;
     if (s_band_int) {
@@ -508,51 +473,33 @@ static void apply_pending(void *arg)
     T5_LOGI(TAG, "bands in internal RAM");
 }
 
-/* Any task: the parked block if the encoder didn't take it, else a fresh one. */
-static void band_take(void)
-{
-    taskENTER_CRITICAL(&s_band_mux);
-    uint16_t *p = s_band_spare;
-    s_band_spare = NULL;
-    taskEXIT_CRITICAL(&s_band_mux);
-    if (!p && !s_band_int && !__atomic_load_n(&s_band_given, __ATOMIC_SEQ_CST))
-        p = t5_ui_hw_alloc_internal(2 * BAND_INT_BYTES);
-    if (!p) {
-        if (!s_band_int && !s_band_warned) T5_LOGW(TAG, "no 100 KB internal block: bands in PSRAM for now");
-        s_band_warned = true;
-        return;
-    }
-    taskENTER_CRITICAL(&s_band_mux);
-    uint16_t *old = s_band_pending;
-    s_band_pending = p;
-    taskEXIT_CRITICAL(&s_band_mux);
-    heap_caps_free(old);
-}
-
-static void reclaim_internal(void *arg)
-{
-    band_take();
-    apply_pending(arg);
-}
-
-/* Retry now and then (UI task), in case there was no block at reclaim. */
+/* Retry now and then, in case there was no block at reclaim. */
 static void band_retry_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_band_int && !s_band_lent) reclaim_internal(NULL);
+    if (!s_band_int && !s_band_lent) band_use(band_alloc());
 }
 
-void t5_ui_lend_internal(void)
+void *t5_ui_lend_internal(size_t *len)
 {
-    if (s_ready) t5_ui_sync(lend_internal, NULL, 1000);
+    if (s_ready) T5_IGNORE(t5_ui_sync(lend_internal, NULL, 1000));
     else lend_internal(NULL);
+    void *b = __atomic_exchange_n(&s_band_out, NULL, __ATOMIC_SEQ_CST);
+    if (len) *len = b ? BAND_INT_BLOCK : 0;
+    return b;
 }
 
-void t5_ui_reclaim_internal(void)
+void t5_ui_reclaim_internal(void *block)
 {
-    band_take();                    /* now, in this task: see above */
-    if (s_ready) t5_ui_sync(apply_pending, NULL, 1000);
-    else apply_pending(NULL);
+    if (!block) block = __atomic_exchange_n(&s_band_out, NULL, __ATOMIC_SEQ_CST);
+    if (!block && !s_band_int) block = band_alloc();
+    if (s_ready) T5_IGNORE(t5_ui_sync(band_use, block, 1000));
+    else band_use(block);
+}
+
+void t5_ui_reserve_internal(void)
+{
+    if (!s_band_int) band_use(band_alloc());
 }
 
 static void apply_buffers(void)
@@ -566,16 +513,11 @@ static void apply_buffers(void)
 }
 
 /* ---- touch ---------------------------------------------------------------- */
-void t5_ui_touch_to_logical(int32_t px, int32_t py, int32_t *lx, int32_t *ly)
-{
-    t5_rot_from_panel(s_rot, px, py, lx, ly);
-}
-
 bool t5_ui_touch_peek(int32_t *x, int32_t *y)
 {
     t5_touch_state_t st;
     if (t5_touch_read(&st) != T5_OK || st.count == 0) return false;
-    t5_ui_touch_to_logical(st.p[0].x, st.p[0].y, x, y);
+    t5_rot_from_panel(s_rot, st.p[0].x, st.p[0].y, x, y);
     return true;
 }
 
@@ -586,7 +528,7 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     t5_touch_state_t st;
     if (t5_touch_read(&st) == T5_OK && st.count) {
         int32_t x, y;
-        t5_ui_touch_to_logical(st.p[0].x, st.p[0].y, &x, &y);
+        t5_rot_from_panel(s_rot, st.p[0].x, st.p[0].y, &x, &y);
         data->point.x = x;
         data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
@@ -744,6 +686,8 @@ enum { PC_IDLE, PC_CLAIMED, PC_POSTED, PC_RUNNING, PC_DONE, PC_ABANDONED };
 static t5_ui_fn_t s_pc_fn;
 static void *s_pc_arg;
 static volatile int s_pc_state;
+static SemaphoreHandle_t s_pc_done;   /* given on RUNNING -> DONE */
+static SemaphoreHandle_t s_wake;      /* wakes the UI task while it is paused */
 
 static bool pc_move(int from, int to)
 {
@@ -753,7 +697,8 @@ static bool pc_move(int from, int to)
 /* The call returned, or the app code in it faulted and was unwound. */
 static void pc_finish(void)
 {
-    if (!pc_move(PC_RUNNING, PC_DONE)) pc_move(PC_ABANDONED, PC_IDLE);
+    if (pc_move(PC_RUNNING, PC_DONE)) xSemaphoreGive(s_pc_done);
+    else pc_move(PC_ABANDONED, PC_IDLE);
 }
 
 static void pc_run(void)
@@ -771,14 +716,12 @@ t5_err_t t5_ui_call_paused(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms)
         return T5_OK;
     }
     if (!pc_move(PC_IDLE, PC_CLAIMED)) return T5_ERR_BUSY;
+    xSemaphoreTake(s_pc_done, 0);    /* a give from a call that timed out as it finished */
     s_pc_fn = fn;
     s_pc_arg = arg;
     pc_move(PC_CLAIMED, PC_POSTED);
-    uint32_t t0 = t5_time_ms();
-    while (t5_time_ms() - t0 <= timeout_ms) {
-        if (pc_move(PC_DONE, PC_IDLE)) return T5_OK;
-        t5_delay_ms(1);
-    }
+    xSemaphoreGive(s_wake);
+    xSemaphoreTake(s_pc_done, pdMS_TO_TICKS(timeout_ms));
     if (pc_move(PC_DONE, PC_IDLE)) return T5_OK;
     if (pc_move(PC_POSTED, PC_IDLE)) return T5_ERR_TIMEOUT;     /* never started */
     /* Still running: the UI task frees the slot when it finishes. arg must
@@ -793,7 +736,7 @@ static void ui_task(void *arg)
     for (;;) {
         if (s_paused && __atomic_load_n(&s_pc_state, __ATOMIC_ACQUIRE) != PC_POSTED) {
             s_busy_since_us = 0;
-            t5_delay_ms(50);
+            xSemaphoreTake(s_wake, pdMS_TO_TICKS(50));
             continue;
         }
         uint32_t next;
@@ -805,6 +748,7 @@ static void ui_task(void *arg)
             s_busy_since_us = t5_time_us();
             t5_ui_lock();
             pc_run();
+            apply_low_power();
             next = s_paused ? LV_NO_TIMER_READY : lv_timer_handler();
             t5_ui_unlock();
             uint32_t took = (uint32_t)((t5_time_us() - s_busy_since_us) / 1000);
@@ -828,10 +772,17 @@ static void ui_task(void *arg)
     }
 }
 
+/* A t5_ui_sync caller's wait, on its stack. */
+typedef struct {
+    volatile bool done;
+    StaticSemaphore_t sem_buf;
+    SemaphoreHandle_t sem;
+} sync_wait_t;
+
 typedef struct {
     t5_ui_fn_t fn;
     void *arg;
-    volatile bool *done;
+    sync_wait_t *wait;
 } async_t;
 
 /* Calls waiting for the UI task. The common case comes from a fixed pool, so
@@ -874,10 +825,13 @@ static void async_tramp(void *p)
     async_t a = *(async_t *)p;
     async_put(p);
     a.fn(a.arg);
-    if (a.done) *a.done = true;
+    if (a.wait) {
+        a.wait->done = true;
+        xSemaphoreGive(a.wait->sem);
+    }
 }
 
-static t5_err_t post(t5_ui_fn_t fn, void *arg, volatile bool *done, async_t **out)
+static t5_err_t post(t5_ui_fn_t fn, void *arg, sync_wait_t *wait, async_t **out)
 {
     if (!s_ready || !fn) return T5_ERR_STATE;
     t5_ui_lock();
@@ -886,7 +840,7 @@ static t5_err_t post(t5_ui_fn_t fn, void *arg, volatile bool *done, async_t **ou
         t5_ui_unlock();
         return T5_ERR_BUSY;
     }
-    *a = (async_t){ fn, arg, done };
+    *a = (async_t){ fn, arg, wait };
     lv_result_t r = lv_async_call(async_tramp, a);
     if (r != LV_RESULT_OK) async_put(a);
     t5_ui_unlock();
@@ -906,37 +860,28 @@ t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms)
         fn(arg);
         return T5_OK;
     }
-    volatile bool *done = calloc(1, sizeof *done);
-    if (!done) return T5_ERR_NO_MEM;
+    sync_wait_t w = { .done = false };
+    w.sem = xSemaphoreCreateBinaryStatic(&w.sem_buf);
     async_t *a = NULL;
-    t5_err_t e = post(fn, arg, done, &a);
-    if (e != T5_OK) {
-        free((void *)done);
-        return e;
-    }
-    uint32_t t0 = t5_time_ms();
-    while (!*done && t5_time_ms() - t0 <= timeout_ms) t5_delay_ms(1);
-    if (!*done) {
-        /* The caller's arg (often on its stack) must not be used after we
-         * return. The UI task runs queued calls under the UI lock, so with
-         * the lock held the call has either finished or not started: cancel
-         * it in the second case. */
+    t5_err_t e = post(fn, arg, &w, &a);
+    if (e == T5_OK && xSemaphoreTake(w.sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        /* Neither the caller's arg (often on its stack) nor w may be used
+         * after we return. The UI task runs queued calls under the UI lock,
+         * so with the lock held the call has either finished or not
+         * started: cancel it in the second case. */
         t5_ui_lock();
-        bool cancelled = !*done && lv_async_call_cancel(async_tramp, a) == LV_RESULT_OK;
+        bool cancelled = !w.done && lv_async_call_cancel(async_tramp, a) == LV_RESULT_OK;
         if (cancelled) async_put(a);
         t5_ui_unlock();
-        if (cancelled) {
-            free((void *)done);
-            return T5_ERR_TIMEOUT;
-        }
+        if (cancelled) e = T5_ERR_TIMEOUT;
     }
-    free((void *)done);
-    return T5_OK;
+    vSemaphoreDelete(w.sem);
+    return e;
 }
 
 /* ---- rotation ------------------------------------------------------------- */
 static t5_orient_t s_orient;
-static t5_axis_map_t s_axes = { .src = { 0, 1, 2 }, .sign = { 1, 1, 1 } };   /* [unverified] */
+static const t5_axis_map_t s_axes = { .src = { 0, 1, 2 }, .sign = { 1, 1, 1 } };   /* [unverified] */
 static t5_mutex_t s_orient_lock;
 
 t5_rotation_t t5_ui_rotation(void)
@@ -991,7 +936,7 @@ static void rotate_async(void *p)
 static void imu_cb(const t5_imu_accel_t *a, void *arg)
 {
     (void)arg;
-    if (!s_cfg.auto_rotate || s_cfg.locked || s_paused) return;
+    if (!t5_ui_follows_board() || s_paused) return;
     int16_t chip[3] = { a->x, a->y, a->z };
     int32_t up[3];
     t5_axis_map_apply(&s_axes, chip, up);
@@ -1004,7 +949,7 @@ static void imu_cb(const t5_imu_accel_t *a, void *arg)
 
 static void imu_stream_update(void)
 {
-    bool want = s_ready && !s_paused && s_cfg.auto_rotate && !s_cfg.locked && t5_imu_status() == T5_IMU_READY;
+    bool want = s_ready && !s_paused && t5_ui_follows_board() && t5_imu_status() == T5_IMU_READY;
     static bool on;
     if (want == on) return;
     if (t5_imu_stream(want ? IMU_HZ : 0, want ? imu_cb : NULL, NULL) == T5_OK) on = want;
@@ -1036,6 +981,17 @@ bool t5_ui_rotation_locked(void)
     return s_cfg.locked;
 }
 
+bool t5_ui_follows_board(void)
+{
+    return s_cfg.auto_rotate && !s_cfg.locked;
+}
+
+t5_err_t t5_ui_set_follows_board(bool on)
+{
+    if (on) s_cfg.auto_rotate = true;
+    return t5_ui_set_rotation_lock(!on);
+}
+
 /* The rotation an app with a fixed orientation moved us away from, -1 if
  * none: when the allowed set takes it back, so does the screen (with the
  * rotation lock on, the IMU never would). */
@@ -1049,12 +1005,7 @@ void t5_ui_set_allowed_rotations(uint32_t mask)
     t5_rotation_t to = s_rot;
     if (!(mask & T5_ROT_MASK(s_rot))) {
         if (s_rot_before_forced < 0) s_rot_before_forced = (int8_t)s_rot;
-        /* Same-aspect partner first. */
-        t5_rotation_t alt = (t5_rotation_t)((s_rot + 2) % 4);
-        if (!(mask & T5_ROT_MASK(alt))) {
-            for (int i = 0; i < 4; i++) if (mask & T5_ROT_MASK(i)) { alt = (t5_rotation_t)i; break; }
-        }
-        to = alt;
+        to = t5_orient_fallback(s_rot, mask);
     } else if (s_rot_before_forced >= 0 && (mask & T5_ROT_MASK(s_rot_before_forced))) {
         to = (t5_rotation_t)s_rot_before_forced;
         s_rot_before_forced = -1;
@@ -1076,7 +1027,7 @@ uint32_t t5_ui_allowed_rotations(void)
  * Scroll render max 17 -> 14 ms, transition 100 -> 83 ms (2026-11-06).
  * Image blits (the camera preview) stay on the PPA. */
 static int32_t (*s_ppa_eval)(lv_draw_unit_t *u, lv_draw_task_t *t);
-static volatile bool s_ppa_fills = T5_UI_PPA_FILLS;
+static volatile bool s_ppa_fills = false;
 static volatile bool s_ppa_images = true;
 static volatile bool s_ppa_alpha = true;
 static volatile bool s_ppa_alpha_fills = true;
@@ -1145,19 +1096,9 @@ bool t5_ui_ppa_fills(void)
 }
 
 /* ---- low power and power states ------------------------------------------ */
-void t5_ui_set_low_power(bool on)
-{
-    s_low_power = on;
-    if (!s_disp) return;
-    t5_ui_lock();
-    lv_timer_t *t = lv_display_get_refr_timer(s_disp);
-    if (t) lv_timer_set_period(t, on ? REFR_LOW_POWER_MS : REFR_MS);
-    t5_ui_unlock();
-}
-
 bool t5_ui_low_power(void)
 {
-    return s_low_power;
+    return __atomic_load_n(&s_low_power, __ATOMIC_RELAXED);
 }
 
 static void on_power(t5_event_id_t id, const void *data, size_t len, void *arg)
@@ -1169,6 +1110,7 @@ static void on_power(t5_event_id_t id, const void *data, size_t len, void *arg)
     bool pause = p->to == T5_PWR_SCREEN_OFF || p->to == T5_PWR_SLEEP;
     if (pause == s_paused) return;
     s_paused = pause;
+    xSemaphoreGive(s_wake);
     if (!pause && s_disp) {
         t5_ui_lock();
         lv_obj_invalidate(lv_display_get_screen_active(s_disp));
@@ -1232,8 +1174,10 @@ static t5_err_t ui_suspend(void *arg)
 {
     (void)arg;
     s_paused = true;
-    /* Wait for the current iteration to finish (bounded by the hook budget). */
-    for (int i = 0; i < 100 && s_busy_since_us; i++) t5_delay_ms(1);
+    /* The UI task renders only while holding the lock, and checks s_paused
+     * under it: once we have had the lock, no frame is in progress. Bounded
+     * by the hook budget (a UI task stuck in an app keeps the lock). */
+    if (t5_ui_lock_timeout(100)) t5_ui_unlock();
     return T5_OK;
 }
 
@@ -1242,6 +1186,7 @@ static t5_err_t ui_resume(void *arg)
     (void)arg;
     t5_power_state_t st = t5_power_state();
     s_paused = st == T5_PWR_SCREEN_OFF || st == T5_PWR_SLEEP;
+    xSemaphoreGive(s_wake);
     return T5_OK;
 }
 
@@ -1264,11 +1209,13 @@ t5_err_t t5_ui_init(void)
         s_band_psram[i] = t5_ui_hw_alloc((size_t)T5_PANEL_H * BAND_LINES_PSRAM * 2);
         if (!s_band_psram[i]) return T5_ERR_NO_MEM;
     }
-    reclaim_internal(NULL);
+    t5_ui_reserve_internal();
 
     t5_ui_hw_set_done_cb(ppa_done);
     s_flush_sem = xSemaphoreCreateBinary();
-    if (!s_flush_sem) return T5_ERR_NO_MEM;
+    s_pc_done = xSemaphoreCreateBinary();
+    s_wake = xSemaphoreCreateBinary();
+    if (!s_flush_sem || !s_pc_done || !s_wake) return T5_ERR_NO_MEM;
 
     lv_init();
     hook_ppa_unit();
@@ -1280,6 +1227,9 @@ t5_err_t t5_ui_init(void)
     lv_display_set_color_format(s_disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(s_disp, flush_cb);
     lv_display_set_flush_wait_cb(s_disp, flush_wait);
+    lv_group_t *group = lv_group_create();
+    if (!group) return T5_ERR_NO_MEM;
+    lv_group_set_default(group);
     apply_buffers();
     lv_timer_create(band_retry_cb, 5000, NULL);
     lv_display_add_event_cb(s_disp, render_event, LV_EVENT_RENDER_START, NULL);
@@ -1293,31 +1243,24 @@ t5_err_t t5_ui_init(void)
     lv_indev_set_display(s_indev, s_disp);
 
     T5_LOG_ON_ERR(TAG, t5_autosave_register("ui", cfg_save, NULL));
-    t5_event_subscribe(T5_EV_POWER_STATE, on_power, NULL);
-    t5_event_subscribe(T5_EV_IMU_FAILED, on_imu, NULL);
+    T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_POWER_STATE, on_power, NULL));
+    T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_IMU_FAILED, on_imu, NULL));
     const t5_suspend_hook_t hook = {
         .name = "ui", .prio = T5_SUSPEND_PRIO_STORAGE + 50, .budget_ms = 100,
         .suspend = ui_suspend, .resume = ui_resume,
     };
     T5_LOG_ON_ERR(TAG, t5_power_register_hook(&hook));
+    ui_md_probes_init();
 
     s_ready = true;
     T5_RETURN_ON_ERR(t5_task_create("t5_ui", ui_task, NULL, UI_TASK_STACK, UI_TASK_PRIO, UI_CORE, &s_task));
     t5_task_guard_margin(s_task);    /* an app's recursion ends up here */
+    T5_LOG_ON_ERR(TAG, ui_hid_input_init());
     /* The IMU starts in the background; try now and again once it's ready. */
     imu_stream_update();
     T5_LOGI(TAG, "LVGL %d.%d.%d, %dx%d, rotation %s%s", LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR,
             LVGL_VERSION_PATCH, (int)w, (int)h, t5_rot_name(s_rot), s_cfg.locked ? " (locked)" : "");
     return T5_OK;
-}
-
-/* Diagnostics: change how the IMU's axes map onto the panel. */
-void t5_ui_set_axis_map(const uint8_t src[3], const int8_t sign[3])
-{
-    t5_mutex_lock(s_orient_lock);
-    memcpy(s_axes.src, src, 3);
-    memcpy(s_axes.sign, sign, 3);
-    t5_mutex_unlock(s_orient_lock);
 }
 
 void t5_ui_orient_debug(int16_t *angle, bool *flat, t5_rotation_t *pending)

@@ -23,12 +23,11 @@
 #include "t5_power/autosave.h"
 #include "t5_power/power.h"
 #include "t5_power/rail.h"
+#include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_usb/usb.h"
 #include "usb/cdc_acm_host.h"
 #include "usb/hid_host.h"
-#include "usb/hid_usage_keyboard.h"
-#include "usb/hid_usage_mouse.h"
 #include "usb/msc_host.h"
 #include "usb/msc_host_vfs.h"
 #include "usb/usb_host.h"
@@ -37,7 +36,7 @@
 
 static const char *TAG = "t5.usb";
 
-#define SETTINGS_FILE T5_SYS_DIR "/usb.bin"
+#define SETTINGS_FILE "usb.bin"
 
 typedef enum { W_MSC_CONNECTED, W_MSC_GONE, W_HID_CONNECTED, W_CDC_NEW } work_kind_t;
 typedef struct {
@@ -55,7 +54,6 @@ static t5_usb_dev_t s_devs[T5_USB_MAX_DEVICES];
 static int s_ndevs;
 static t5_usb_stats_t s_st;
 
-/* ---- device list ----------------------------------------------------------------- */
 const char *t5_usb_class_name(t5_usb_class_t c)
 {
     static const char *n[T5_USB_CLASS_COUNT] = { "other", "hub", "keyboard", "mouse", "storage",
@@ -116,7 +114,7 @@ static t5_usb_class_t guess_class(const usb_config_desc_t *cfg, const usb_device
         case USB_CLASS_MASS_STORAGE: return T5_USB_STORAGE;
         case USB_CLASS_VIDEO: return T5_USB_CAMERA;
         case USB_CLASS_AUDIO:
-            if (i->bInterfaceSubClass == 3) return T5_USB_MIDI;
+            if (i->bInterfaceSubClass == USB_SUBCLASS_MIDISTREAMING) return T5_USB_MIDI;
             if (best == T5_USB_OTHER) best = T5_USB_AUDIO;
             break;
         case USB_CLASS_COMM:
@@ -219,7 +217,6 @@ static void lib_task(void *arg)
     }
 }
 
-/* ---- HID -------------------------------------------------------------------------------- */
 static void hid_iface_event(hid_host_device_handle_t h, const hid_host_interface_event_t ev, void *arg)
 {
     (void)arg;
@@ -230,15 +227,15 @@ static void hid_iface_event(hid_host_device_handle_t h, const hid_host_interface
         size_t len = 0;
         if (hid_host_device_get_raw_input_report_data(h, data, sizeof data, &len) != ESP_OK) return;
         if (p.proto == HID_PROTOCOL_KEYBOARD) {
-            usb_input_keyboard_report(data, len);
+            usb_hid_keyboard_report(data, len);
             s_st.keys++;
         } else if (p.proto == HID_PROTOCOL_MOUSE) {
-            usb_input_mouse_report(data, len);
+            usb_hid_mouse_report(data, len);
             s_st.mouse_reports++;
         }
     } else if (ev == HID_HOST_INTERFACE_EVENT_DISCONNECTED) {
-        if (p.proto == HID_PROTOCOL_KEYBOARD) usb_input_keyboard_attached(false);
-        if (p.proto == HID_PROTOCOL_MOUSE) usb_input_mouse_attached(false);
+        if (p.proto == HID_PROTOCOL_KEYBOARD) usb_hid_attached(T5_HID_KEYBOARD, false);
+        if (p.proto == HID_PROTOCOL_MOUSE) usb_hid_attached(T5_HID_MOUSE, false);
         hid_host_device_close(h);
     } else if (ev == HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR) {
         s_st.errors++;
@@ -266,14 +263,13 @@ static void hid_open(hid_host_device_handle_t h)
     if (hid_host_device_start(h) != ESP_OK) return;
     if (p.proto == HID_PROTOCOL_KEYBOARD) {
         usb_dev_set_class(p.addr, T5_USB_KEYBOARD, true);
-        usb_input_keyboard_attached(true);
+        usb_hid_attached(T5_HID_KEYBOARD, true);
     } else if (p.proto == HID_PROTOCOL_MOUSE) {
         usb_dev_set_class(p.addr, T5_USB_MOUSE, true);
-        usb_input_mouse_attached(true);
+        usb_hid_attached(T5_HID_MOUSE, true);
     }
 }
 
-/* ---- mass storage ------------------------------------------------------------------------- */
 static msc_host_device_handle_t s_msc;
 static msc_host_vfs_handle_t s_msc_vfs;
 
@@ -350,7 +346,6 @@ t5_err_t t5_usb_storage_eject(void)
     return xQueueSend(s_work, &w, pdMS_TO_TICKS(100)) == pdTRUE ? T5_OK : T5_ERR_BUSY;
 }
 
-/* ---- CDC-ACM serial ------------------------------------------------------------------------- */
 struct t5_usb_serial {
     uint32_t magic;
     cdc_acm_dev_hdl_t h;
@@ -451,7 +446,6 @@ t5_err_t t5_usb_serial_close(t5_usb_serial_t *s)
     return T5_OK;
 }
 
-/* ---- UVC ---------------------------------------------------------------------------------------- */
 struct t5_usb_uvc {
     uint32_t magic;
     uvc_host_stream_hdl_t h;
@@ -535,6 +529,7 @@ t5_err_t t5_usb_uvc_open(uint16_t w, uint16_t h, uint8_t fps, t5_usb_uvc_frame_c
     s_uvc = u;
     t5_res_add(T5_RES_OTHER, u, uvc_release);
     t5_ev_media_t ev = { .on = true };
+    snprintf(ev.owner, sizeof ev.owner, "%s", t5_caller_id());
     t5_event_post(T5_EV_CAMERA_STATE, &ev, sizeof ev);
     *out = u;
     return T5_OK;
@@ -556,12 +551,6 @@ t5_err_t t5_usb_uvc_close(t5_usb_uvc_t *u)
     return T5_OK;
 }
 
-bool usb_uvc_streaming(void)
-{
-    return s_uvc != NULL;
-}
-
-/* ---- work task ------------------------------------------------------------------------------------ */
 static void work_task(void *arg)
 {
     (void)arg;
@@ -579,7 +568,6 @@ static void work_task(void *arg)
     }
 }
 
-/* ---- enable / power --------------------------------------------------------------------------------- */
 static t5_err_t install(void)
 {
     if (s_installed) return T5_OK;
@@ -619,7 +607,7 @@ static t5_err_t install(void)
 
 static t5_err_t power_on(bool on)
 {
-    if (on && !s_rail) return t5_rail_acquire(T5_RAIL_USB5V, "usb", 0, &s_rail);
+    if (on && !s_rail) return t5_rail_acquire_system(T5_RAIL_USB5V, "usb", 0, &s_rail);
     if (!on && s_rail) {
         T5_LOG_ON_ERR(TAG, t5_rail_release(s_rail));
         s_rail = NULL;
@@ -668,7 +656,9 @@ static t5_err_t save(void *arg)
     (void)arg;
     if (s_enabled == s_saved_enabled) return T5_OK;
     uint8_t v = s_enabled;
-    t5_err_t e = t5_storage_blob_write(SETTINGS_FILE, 1, &v, 1);
+    char path[96];
+    T5_RETURN_ON_ERR(t5_sys_path(path, sizeof path, SETTINGS_FILE));
+    t5_err_t e = t5_storage_blob_write(path, 1, &v, 1);
     if (e == T5_OK) s_saved_enabled = s_enabled;
     return e;
 }
@@ -690,9 +680,12 @@ t5_err_t t5_usb_init(void)
     if (!s_mx || !s_work) return T5_ERR_NO_MEM;
     uint8_t v = 1;
     size_t len = 0;
-    if (t5_storage_blob_read(SETTINGS_FILE, 1, &v, 1, &len) == T5_OK && len == 1) s_enabled = s_saved_enabled = v;
+    char path[96];
+    if (t5_sys_path(path, sizeof path, SETTINGS_FILE) == T5_OK && t5_storage_blob_read(path, 1, &v, 1, &len) == T5_OK &&
+        len == 1) {
+        s_enabled = s_saved_enabled = v;
+    }
     usb_midi_init();
-    usb_input_init();
     usbc_init();
     s_inited = true;
     const t5_suspend_hook_t hook = {

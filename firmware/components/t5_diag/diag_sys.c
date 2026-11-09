@@ -23,6 +23,7 @@
 #include "hal/efuse_hal.h"
 #include "sdkconfig.h"
 #include "t5_core/os.h"
+#include "t5_power/power.h"
 #include "diag_priv.h"
 
 static const char *reset_reason_str(esp_reset_reason_t r)
@@ -52,13 +53,7 @@ void diag_print_boot_banner(void)
     const esp_app_desc_t *app = esp_app_get_description();
     unsigned rev = efuse_hal_chip_revision();
     const esp_partition_t *run = esp_ota_get_running_partition();
-    printf("\nTab5 OS %s  (IDF %s, variant %s)\n", app->version, esp_get_idf_version(),
-#if CONFIG_ESP32P4_SELECTS_REV_LESS_V3
-           "rev1"
-#else
-           "rev3"
-#endif
-          );
+    printf("\nTab5 OS %s  (IDF %s)\n", app->version, esp_get_idf_version());
     printf("chip ESP32-P4 v%u.%u  cpu %d MHz  psram %u MB  reset: %s  slot: %s\n",
            rev / 100, rev % 100, esp_clk_cpu_freq() / 1000000,
            (unsigned)(esp_psram_get_size() >> 20), reset_reason_str(esp_reset_reason()),
@@ -260,8 +255,7 @@ static int cmd_psram(int argc, char **argv)
 static int cmd_reboot(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    esp_restart();
-    return 0;
+    t5_power_restart();
 }
 
 void diag_register_sys(void)
@@ -272,7 +266,7 @@ void diag_register_sys(void)
         { .command = "l2eat", .help = "l2eat KB: hold internal RAM (low-memory test), 0 frees", .hint = "KB", .func = cmd_l2eat },
         { .command = "stacks", .help = "Each task's stack: size, memory, high-water mark", .func = cmd_stacks },
         { .command = "psram", .help = "psram [MB]: pattern test and bandwidth", .hint = "[MB]", .func = cmd_psram },
-        { .command = "reboot", .help = "Software reset", .func = cmd_reboot },
+        { .command = "reboot", .help = "Restart (autosave first)", .func = cmd_reboot },
     };
     for (size_t i = 0; i < sizeof cmds / sizeof cmds[0]; i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

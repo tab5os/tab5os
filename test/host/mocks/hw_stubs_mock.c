@@ -8,6 +8,7 @@
 #include "t5_storage_hw.h"
 #include "display_hw.h"
 #include "touch_hw.h"
+#include "t5_ui/t5_ui.h"
 
 /* time */
 time_t mock_system_time;
@@ -25,10 +26,15 @@ t5_err_t t5_storage_hw_sd_mount(void)
 }
 bool t5_storage_hw_sd_alive(void) { return mock_sd.alive; }
 void t5_storage_hw_sd_unmount(void) { mock_sd.unmounts++; }
+t5_err_t t5_storage_hw_data_format(void) { return T5_OK; }
 t5_err_t t5_storage_hw_sd_format(void) { return T5_OK; }
 t5_err_t t5_storage_hw_sd_raw_open(void **card) { *card = NULL; return T5_OK; }
 void t5_storage_hw_sd_raw_close(void *card) { (void)card; }
 t5_err_t t5_storage_hw_sd_info(t5_sd_info_t *out) { memset(out, 0, sizeof *out); strcpy(out->name, "MOCK"); return T5_OK; }
+
+/* the UI, as main wires low-power mode to it */
+bool mock_ui_low_power;
+void t5_ui_set_low_power(bool on) { mock_ui_low_power = on; }
 
 /* display */
 int mock_backlight = -1;
@@ -51,6 +57,7 @@ t5_err_t t5_display_hw_backlight_freq(uint32_t hz) { (void)hz; return T5_OK; }
 t5_err_t t5_display_hw_sleep(bool sleep) { mock_panel_asleep = sleep; return T5_OK; }
 t5_err_t t5_display_hw_flush(uint16_t *fb, int y0, int y1) { (void)fb; (void)y0; (void)y1; return T5_OK; }
 t5_err_t t5_display_hw_read(uint8_t cmd, uint8_t *buf, int len) { (void)cmd; memset(buf, 0x5A, (size_t)len); return T5_OK; }
+bool t5_display_hw_wait_shown(uint32_t timeout_ms) { (void)timeout_ms; return false; }
 
 /* touch */
 t5_err_t t5_touch_hw_init(bool use_irq) { (void)use_irq; return T5_OK; }

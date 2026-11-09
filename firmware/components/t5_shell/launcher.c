@@ -13,13 +13,11 @@
  * The app list is rebuilt only when it changes; the clock updates once a
  * second and only redraws when the minute changes.
  */
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "shell_priv.h"
 
-#define MAX_APPS 48
 #define DOCK_N 5
 #define CELL_MIN_W_DP 96
 #define CELL_H_DP 100
@@ -28,26 +26,16 @@
 #define PULL_CLOSE_DP 48
 
 /* The apps the dock prefers, in order; the rest of it fills from the list. */
-static const char *const DOCK_PREFS[] = { SHELL_APP_SETTINGS, SHELL_APP_FILES, "com.t5.camera",
-                                          SHELL_APP_MANAGER, SHELL_APP_POWER };
+static const char *const DOCK_PREFS[] = { T5_APP_ID_SETTINGS, T5_APP_ID_FILES, T5_APP_ID_CAMERA,
+                                          T5_APP_ID_MANAGER, T5_APP_ID_POWER };
 
 static lv_obj_t *s_scr, *s_time, *s_date, *s_dock;
 static lv_obj_t *s_drawer, *s_recent_row, *s_recent_box, *s_grid;
 static bool s_drawer_open;
 static shell_app_t *s_apps;
 static int s_napps;
-static char s_shown_recents[SHELL_RECENTS][SHELL_ID_LEN];
-static char s_dock_ids[DOCK_N][SHELL_ID_LEN];
-
-static void set_text(lv_obj_t *l, const char *t)
-{
-    if (strcmp(lv_label_get_text(l), t)) lv_label_set_text(l, t);
-}
-
-static const char *app_name(const shell_app_t *a)
-{
-    return a->name[0] ? a->name : a->id;
-}
+static char s_shown_recents[SHELL_RECENTS][T5_APP_ID_LEN];
+static char s_dock_ids[DOCK_N][T5_APP_ID_LEN];
 
 /* A stable colour per app from its id: the accents' 700 tones, which carry
  * white icons on the dark theme. */
@@ -67,16 +55,6 @@ static const shell_app_t *find(const char *id)
         if (!strcmp(s_apps[i].id, id)) return &s_apps[i];
     }
     return NULL;
-}
-
-static int name_cmp(const void *a, const void *b)
-{
-    const char *x = app_name(a), *y = app_name(b);
-    for (; *x && *y; x++, y++) {
-        int d = tolower((unsigned char)*x) - tolower((unsigned char)*y);
-        if (d) return d;
-    }
-    return (unsigned char)*x - (unsigned char)*y;
 }
 
 static lv_obj_t *badge(lv_obj_t *parent, const shell_app_t *a, int size_dp, int icon_dp)
@@ -110,7 +88,7 @@ static void icon_long(lv_event_t *e)
 {
     const shell_app_t *a = find((const char *)lv_event_get_user_data(e));
     lv_indev_wait_release(lv_indev_active());
-    if (a) shell_app_menu(lv_event_get_current_target_obj(e), a->id, app_name(a));
+    if (a) shell_app_menu(lv_event_get_current_target_obj(e), a->id, shell_app_name(a));
 }
 
 static void make_tappable(lv_obj_t *o, const char *id)
@@ -136,7 +114,7 @@ static lv_obj_t *cell(lv_obj_t *parent, const shell_app_t *a, const char *id)
     lv_obj_set_scrollable(c, false);
     make_tappable(c, id);
     badge(c, a, BADGE_DP, 40);
-    lv_obj_t *l = md_label_create(c, app_name(a), MD_TYPE_BODY2);
+    lv_obj_t *l = md_label_create(c, shell_app_name(a), MD_TYPE_BODY2);
     lv_obj_set_size(l, LV_PCT(100), T5_DP(20));   /* one line, cut with dots */
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
@@ -170,7 +148,7 @@ static void build_grid(void)
 
 static void build_recents(void)
 {
-    char ids[SHELL_RECENTS][SHELL_ID_LEN];
+    char ids[SHELL_RECENTS][T5_APP_ID_LEN];
     memset(ids, 0, sizeof ids);
     int n = shell_recents(ids, SHELL_RECENTS);
     memcpy(s_shown_recents, ids, sizeof s_shown_recents);
@@ -193,7 +171,7 @@ static void dock_add(const shell_app_t *a, int *n)
     for (int i = 0; i < *n; i++) {
         if (!strcmp(s_dock_ids[i], a->id)) return;
     }
-    snprintf(s_dock_ids[*n], SHELL_ID_LEN, "%s", a->id);
+    snprintf(s_dock_ids[*n], sizeof s_dock_ids[*n], "%s", a->id);
     lv_obj_t *b = badge(s_dock, a, DOCK_BADGE_DP, 36);
     make_tappable(b, s_dock_ids[*n]);
     (*n)++;
@@ -213,11 +191,6 @@ static void build_dock(void)
 }
 
 /* ---- drawer ----------------------------------------------------------------------- */
-static void set_y_anim(void *o, int32_t v)
-{
-    lv_obj_set_y(o, v);
-}
-
 static void drawer_closed(lv_anim_t *a)
 {
     lv_obj_set_hidden(a->var, true);
@@ -232,7 +205,7 @@ void launcher_drawer_open(void)
 {
     if (!s_drawer || s_drawer_open) return;
     s_drawer_open = true;
-    lv_anim_delete(s_drawer, set_y_anim);
+    lv_anim_delete(s_drawer, shell_anim_y);
     lv_obj_scroll_to_y(s_grid, 0, LV_ANIM_OFF);
     int32_t h = lv_obj_get_height(s_scr);
     lv_obj_set_y(s_drawer, h);
@@ -240,7 +213,7 @@ void launcher_drawer_open(void)
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_drawer);
-    lv_anim_set_exec_cb(&a, set_y_anim);
+    lv_anim_set_exec_cb(&a, shell_anim_y);
     lv_anim_set_values(&a, h, 0);
     lv_anim_set_duration(&a, MD_DUR_DRAWER_IN_MS);
     md_anim_set_curve(&a, MD_CURVE_DECELERATION);
@@ -251,7 +224,7 @@ void launcher_drawer_close(bool animate)
 {
     if (!s_drawer || !s_drawer_open) return;
     s_drawer_open = false;
-    lv_anim_delete(s_drawer, set_y_anim);
+    lv_anim_delete(s_drawer, shell_anim_y);
     if (!animate) {
         lv_obj_set_hidden(s_drawer, true);
         return;
@@ -259,7 +232,7 @@ void launcher_drawer_close(bool animate)
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_drawer);
-    lv_anim_set_exec_cb(&a, set_y_anim);
+    lv_anim_set_exec_cb(&a, shell_anim_y);
     lv_anim_set_values(&a, lv_obj_get_y(s_drawer), lv_obj_get_height(s_scr));
     lv_anim_set_duration(&a, MD_DUR_DRAWER_OUT_MS);
     md_anim_set_curve(&a, MD_CURVE_SHARP);
@@ -357,21 +330,8 @@ static void build_drawer(void)
 void launcher_tick(void)
 {
     if (!s_scr) return;
-    struct tm tm;
-    char buf[48];
-    static const char *days[] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
-    static const char *months[] = { "January", "February", "March", "April", "May", "June", "July",
-                                    "August", "September", "October", "November", "December" };
-    if (shell_sys_time(&tm)) {
-        snprintf(buf, sizeof buf, "%02d:%02d", tm.tm_hour, tm.tm_min);
-        set_text(s_time, buf);
-        snprintf(buf, sizeof buf, "%s, %d %s", days[tm.tm_wday % 7], tm.tm_mday, months[tm.tm_mon % 12]);
-        set_text(s_date, buf);
-    } else {
-        set_text(s_time, "--:--");
-        set_text(s_date, "Set the time in Settings");
-    }
-    char ids[SHELL_RECENTS][SHELL_ID_LEN];
+    shell_show_time(s_time, s_date);
+    char ids[SHELL_RECENTS][T5_APP_ID_LEN];
     memset(ids, 0, sizeof ids);
     shell_recents(ids, SHELL_RECENTS);
     if (memcmp(ids, s_shown_recents, sizeof ids)) build_recents();
@@ -380,9 +340,9 @@ void launcher_tick(void)
 void launcher_reload(void)
 {
     if (!s_scr) return;
-    if (!s_apps) s_apps = calloc(MAX_APPS, sizeof *s_apps);
-    s_napps = s_apps ? shell_sys_apps(s_apps, MAX_APPS) : 0;
-    qsort(s_apps, (size_t)s_napps, sizeof *s_apps, name_cmp);
+    if (!s_apps) s_apps = calloc(T5_APPS_MAX, sizeof *s_apps);
+    s_napps = s_apps ? shell_sys_apps(s_apps, T5_APPS_MAX) : 0;
+    qsort(s_apps, (size_t)s_napps, sizeof *s_apps, shell_app_name_cmp);
     build_grid();
     build_recents();
     build_dock();

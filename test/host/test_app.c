@@ -16,24 +16,25 @@
 #include "t5_app/tracker.h"
 #include "t5_app/fspolicy.h"
 #include "t5_pkg/manifest.h"
-#include "t5_pkg/manifest.h"
+#include "t5_storage/paths.h"
+#include "app_session.h"
 
 /* A small ABI table standing in for the generated one (sorted by name). */
 static int fake_open(void) { return 0; }
 static void *fake_screen(void) { return (void *)0x1234; }
-const t5_abi_sym_t t5_abi_table[] = {
+static const t5_abi_sym_t s_table[] = {
     { "calloc", (const void *)calloc, 0, T5_ABI_RET_PTR, 1 },
     { "free", (const void *)free, 0, T5_ABI_RET_VOID, 1 },
     { "t5_app_screen", (const void *)fake_screen, 0, T5_ABI_RET_PTR, 1 },
     { "t5_port_open", (const void *)fake_open, T5_PERM_PORTS, T5_ABI_RET_ERR, 1 },
 };
-const size_t t5_abi_count = sizeof t5_abi_table / sizeof t5_abi_table[0];
 
 static char s_dir[64];
 
 void setUp(void)
 {
     mock_reset_all();
+    t5_abi_set_table(s_table, sizeof s_table / sizeof s_table[0]);
     strcpy(s_dir, "/tmp/t5app.XXXXXX");
     TEST_ASSERT_NOT_NULL(mkdtemp(s_dir));
 }
@@ -46,7 +47,6 @@ void tearDown(void)
     t5_tracker_set_allocator(NULL);
 }
 
-/* ---- tracker ---------------------------------------------------------------- */
 static char s_order[64];
 static int s_norder;
 
@@ -58,7 +58,7 @@ static void rel_tag(void *h)
 static void test_tracker_release_order(void)
 {
     static t5_tracker_t t;
-    t5_tracker_init(&t, 0);
+    t5_tracker_init(&t);
     static char task = 'T', timer = 'M', ui = 'U', port = 'P', lock = 'L', rail = 'R', other = 'O', task2 = 't';
     s_norder = 0;
     /* Added out of order; released by kind, newest first within a kind. */
@@ -93,7 +93,7 @@ static void rel_parent(void *h)
 static void test_tracker_reentrant_release(void)
 {
     static t5_tracker_t t;
-    t5_tracker_init(&t, 0);
+    t5_tracker_init(&t);
     s_reent = &t;
     static char parent = 'p';
     s_norder = 0;
@@ -106,7 +106,7 @@ static void test_tracker_reentrant_release(void)
 static void test_tracker_table_full(void)
 {
     static t5_tracker_t t;
-    t5_tracker_init(&t, 0);
+    t5_tracker_init(&t);
     static char h[T5_TRACK_MAX + 5];
     for (int i = 0; i < T5_TRACK_MAX; i++) TEST_ASSERT_TRUE(t5_tracker_add(&t, T5_RES_OTHER, &h[i], NULL));
     TEST_ASSERT_FALSE(t5_tracker_add(&t, T5_RES_OTHER, &h[T5_TRACK_MAX], NULL));
@@ -116,9 +116,23 @@ static void test_tracker_table_full(void)
     TEST_ASSERT_TRUE(t5_tracker_add(&t, T5_RES_OTHER, &h[T5_TRACK_MAX], NULL));
 }
 
+/* Freed blocks are kept until the test ends, so it can check what a free
+ * leaves behind without reading released memory. */
 static int s_allocs, s_frees;
+static void *s_freed[64];
 static void *count_malloc(t5_tracker_t *t, size_t n) { (void)t; s_allocs++; return malloc(n); }
-static void count_free(t5_tracker_t *t, void *p) { (void)t; s_frees++; free(p); }
+static void count_free(t5_tracker_t *t, void *p)
+{
+    (void)t;
+    if (s_frees < (int)(sizeof s_freed / sizeof s_freed[0])) s_freed[s_frees] = p;
+    else free(p);
+    s_frees++;
+}
+static void release_freed(void)
+{
+    int n = s_frees < (int)(sizeof s_freed / sizeof s_freed[0]) ? s_frees : (int)(sizeof s_freed / sizeof s_freed[0]);
+    for (int i = 0; i < n; i++) free(s_freed[i]);
+}
 
 static void test_tracker_heap(void)
 {
@@ -126,8 +140,8 @@ static void test_tracker_heap(void)
     t5_tracker_set_allocator(&a);
     s_allocs = s_frees = 0;
     static t5_tracker_t t, other;
-    t5_tracker_init(&t, 0);
-    t5_tracker_init(&other, 0);
+    t5_tracker_init(&t);
+    t5_tracker_init(&other);
     void *p[20];
     for (int i = 0; i < 20; i++) {
         p[i] = t5_tracker_malloc(&t, 100 + (size_t)i);
@@ -163,20 +177,37 @@ static void test_tracker_heap(void)
     TEST_ASSERT_EQUAL(0, t.heap_bytes);
     TEST_ASSERT_EQUAL(s_allocs, s_frees);
     TEST_ASSERT_TRUE(t.heap_peak >= 4000);
+    release_freed();
 }
 
-static void test_tracker_heap_limit(void)
+static bool even(void *h)
+{
+    return (*(char *)h & 1) == 0;
+}
+
+static void test_tracker_list_and_prune(void)
 {
     static t5_tracker_t t;
-    t5_tracker_init(&t, 1);    /* 1 KB */
-    void *a = t5_tracker_malloc(&t, 800);
-    TEST_ASSERT_NOT_NULL(a);
-    TEST_ASSERT_NULL(t5_tracker_malloc(&t, 800));
-    TEST_ASSERT_EQUAL(1, t.heap_refused);
-    t5_tracker_free_all(&t);
+    t5_tracker_init(&t);
+    static char h[6] = { 0, 1, 2, 3, 4, 5 };
+    for (int i = 0; i < 6; i++) {
+        TEST_ASSERT_TRUE(t5_tracker_add(&t, i < 4 ? T5_RES_ANIM : T5_RES_TASK, &h[i], rel_tag));
+    }
+    void *out[2];
+    TEST_ASSERT_EQUAL(4, t5_tracker_list(&t, T5_RES_ANIM, out, 2));     /* how many there are... */
+    TEST_ASSERT_EQUAL_PTR(&h[0], out[0]);                                /* ...oldest first */
+    TEST_ASSERT_EQUAL_PTR(&h[1], out[1]);
+    TEST_ASSERT_TRUE(t5_tracker_holds(&t, T5_RES_TASK, &h[4]));
+    TEST_ASSERT_FALSE(t5_tracker_holds(&t, T5_RES_ANIM, &h[4]));
+    /* Pruning forgets the dead ones without releasing them. */
+    s_norder = 0;
+    t5_tracker_prune(&t, T5_RES_ANIM, even);
+    TEST_ASSERT_EQUAL(0, s_norder);
+    TEST_ASSERT_EQUAL(2, t5_tracker_count(&t, T5_RES_ANIM));
+    TEST_ASSERT_FALSE(t5_tracker_has(&t, &h[1]));
+    TEST_ASSERT_TRUE(t5_tracker_has(&t, &h[5]));                        /* other kinds untouched */
 }
 
-/* ---- crash guard ------------------------------------------------------------ */
 static void test_crash_classify(void)
 {
     t5_crash_boot_t b = { .valid = true };
@@ -224,7 +255,8 @@ static void test_crash_db_persist_and_evict(void)
     TEST_ASSERT_NULL(t5_crash_find(&db, "app.n0"));
     TEST_ASSERT_NOT_NULL(t5_crash_find(&db, "app.new"));
     char path[96];
-    snprintf(path, sizeof path, "%s/crashes.bin", s_dir);
+    t5_sys_dir_set(s_dir);
+    TEST_ASSERT_EQUAL(T5_OK, t5_sys_path(path, sizeof path, T5_CRASH_DB_NAME));
     TEST_ASSERT_EQUAL(T5_OK, t5_crash_db_save(&db, path));
     TEST_ASSERT_EQUAL(T5_OK, t5_crash_db_load(&back, path));
     TEST_ASSERT_EQUAL(db.n, back.n);
@@ -238,7 +270,6 @@ static void test_crash_db_persist_and_evict(void)
     TEST_ASSERT_EQUAL(0, back.n);
 }
 
-/* ---- ELF imports ------------------------------------------------------------------- */
 static int s_nundef;
 static char s_undef[32][48];
 
@@ -289,7 +320,6 @@ static void test_elfsym_rejects_garbage(void)
     free(copy);
 }
 
-/* ---- ABI resolution ----------------------------------------------------------------- */
 static void test_abi_resolve_and_stubs(void)
 {
     TEST_ASSERT_NOT_NULL(t5_abi_find("free"));
@@ -308,13 +338,10 @@ static void test_abi_resolve_and_stubs(void)
     TEST_ASSERT_NULL(((void *(*)(void))t5_abi_stub(T5_ABI_RET_PTR))());
     TEST_ASSERT_FALSE(((bool (*)(void))t5_abi_stub(T5_ABI_RET_BOOL))());
     TEST_ASSERT_EQUAL(0, t5_abi_resolve("esp_restart", ~0u, &denied));
-    /* libgcc helpers are published in api_v1.sym like any symbol: nothing
-     * is let through by name, so install and load agree. */
-    TEST_ASSERT_FALSE(t5_abi_is_runtime_helper("__divdi3"));
-    TEST_ASSERT_FALSE(t5_abi_is_runtime_helper("_start"));
+    t5_abi_set_table(NULL, 0);
+    TEST_ASSERT_NULL(t5_abi_find("free"));
 }
 
-/* ---- isolation (isolate.h) ---------------------------------------------------- */
 #define TXT_LO 0x48100000u
 #define TXT_HI 0x48104000u
 
@@ -408,7 +435,7 @@ static void test_fs_scope(void)
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/sd/apps/com.a/app.elf", true, &n));         /* install dir is read only */
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/appdata/com.ab/x", false, &n));        /* a neighbour, same prefix */
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/appdata/com.b/x", false, &n));
-    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/sys/crashes.bin", false, &n));
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs(T5_SYS_DIR "/" T5_CRASH_DB_NAME, false, &n));
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/SD/APPS/com.b/x", false, &n));
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/other", false, &n));
     TEST_ASSERT_EQUAL(T5_FS_ALLOW, fs("/sd/Other/song.mp3", false, &n));           /* picked */
@@ -462,9 +489,9 @@ static void test_iso_l2_reserve(void)
     t5_iso_l2_t s = {0};
     TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, 80 * 1024, 0));
     TEST_ASSERT_EQUAL(T5_ISO_L2_RELEASE, t5_iso_l2_check(&s, 10 * 1024, 100));          /* reserve goes first */
-    /* The reserve is back in the heap: 26 KB free is 10 KB really. */
-    TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, 26 * 1024, 600));
-    TEST_ASSERT_EQUAL(T5_ISO_L2_CLOSE_APP, t5_iso_l2_check(&s, 26 * 1024, 100 + T5_ISO_LOW_FOR_MS));
+    /* The reserve is back in the heap: free memory counts without it. */
+    TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, 10 * 1024 + T5_ISO_L2_RESERVE, 600));
+    TEST_ASSERT_EQUAL(T5_ISO_L2_CLOSE_APP, t5_iso_l2_check(&s, 10 * 1024 + T5_ISO_L2_RESERVE, 100 + T5_ISO_LOW_FOR_MS));
     TEST_ASSERT_EQUAL(T5_ISO_L2_RETAKE, t5_iso_l2_check(&s, T5_ISO_L2_PLENTY, 5000));
     TEST_ASSERT_EQUAL(T5_ISO_L2_NONE, t5_iso_l2_check(&s, T5_ISO_L2_PLENTY, 5100));
     /* Recovered in time: no close. */
@@ -483,7 +510,7 @@ static void *keep_malloc(t5_tracker_t *t, size_t n) { (void)t; return s_only_blo
 static void test_tracker_drop_all(void)
 {
     static t5_tracker_t t;
-    t5_tracker_init(&t, 0);
+    t5_tracker_init(&t);
     t5_tracker_alloc_t a = { keep_malloc, count_free, drop_everything };
     t5_tracker_set_allocator(&a);
     s_dropped = false;
@@ -525,6 +552,35 @@ static void test_iso_hog(void)
     TEST_ASSERT_FALSE(t5_iso_hog(&st, 0, 0));
 }
 
+/* The app in front comes back after a power-off; a torn file brings back nothing. */
+static void test_session_survives_power_off(void)
+{
+    t5_sys_dir_set(s_dir);
+    app_session_load();
+    TEST_ASSERT_EQUAL_STRING("", app_session_restored());
+    app_session_set("com.example.notes");
+    TEST_ASSERT_EQUAL(T5_OK, app_session_save(NULL));
+    app_session_load();
+    TEST_ASSERT_EQUAL_STRING("com.example.notes", app_session_restored());
+
+    app_session_set(NULL);            /* back on the launcher */
+    TEST_ASSERT_EQUAL(T5_OK, app_session_save(NULL));
+    app_session_load();
+    TEST_ASSERT_EQUAL_STRING("", app_session_restored());
+
+    app_session_set("com.example.notes");
+    TEST_ASSERT_EQUAL(T5_OK, app_session_save(NULL));
+    char path[96];
+    snprintf(path, sizeof path, "%s/session.bin", s_dir);
+    FILE *f = fopen(path, "r+b");
+    TEST_ASSERT_NOT_NULL(f);
+    fseek(f, -3, SEEK_END);
+    fputc('X', f);
+    fclose(f);
+    app_session_load();
+    TEST_ASSERT_EQUAL_STRING("", app_session_restored());
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -532,7 +588,7 @@ int main(void)
     RUN_TEST(test_tracker_reentrant_release);
     RUN_TEST(test_tracker_table_full);
     RUN_TEST(test_tracker_heap);
-    RUN_TEST(test_tracker_heap_limit);
+    RUN_TEST(test_tracker_list_and_prune);
     RUN_TEST(test_crash_classify);
     RUN_TEST(test_crash_block_after_two);
     RUN_TEST(test_crash_db_persist_and_evict);
@@ -551,5 +607,6 @@ int main(void)
     RUN_TEST(test_tracker_drop_all);
     RUN_TEST(test_iso_mem_check);
     RUN_TEST(test_iso_hog);
+    RUN_TEST(test_session_survives_power_off);
     return UNITY_END();
 }

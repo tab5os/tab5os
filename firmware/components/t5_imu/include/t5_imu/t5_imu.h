@@ -31,11 +31,7 @@ typedef struct {
 
 /* Start init in the background. */
 t5_err_t t5_imu_start(void);
-/* Same work, blocking. Used by the background task and by tests. */
-t5_err_t t5_imu_init_blocking(void);
 t5_imu_status_t t5_imu_status(void);
-/* Wait up to ms for READY or FAILED. */
-t5_imu_status_t t5_imu_wait(uint32_t ms);
 int t5_imu_attempts(void);
 
 t5_err_t t5_imu_read_accel(t5_imu_accel_t *out);
@@ -62,11 +58,6 @@ t5_err_t t5_imu_motion_enable(const t5_imu_motion_cfg_t *cfg);
 t5_err_t t5_imu_motion_disable(void);
 /* Reads (and so clears, if latched) the feature interrupt status. */
 t5_err_t t5_imu_motion_status(bool *moved);
-
-/* ---- Pure helpers (host-tested) ---------------------------------------- */
-int16_t t5_imu_raw_to_mg(int16_t raw);   /* +-4 g range */
-/* Pack the 4-byte any-motion block (page 1, offset 0x0C). */
-void t5_imu_pack_any_motion(uint16_t threshold_mg, uint16_t duration_ms, bool enable, uint8_t out[4]);
 
 #ifdef __cplusplus
 }

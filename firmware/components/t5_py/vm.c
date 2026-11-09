@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0
  * The MicroPython VM (plan 8.1): one at a time, on its own task, with a GC
- * heap in PSRAM charged to the app that started it.
+ * heap in PSRAM.
  *
  * Lifetime: t5_py_start() makes the task; it runs the script and/or the
  * REPL, then (if the script built UI with callbacks) an event loop until it
@@ -21,6 +21,7 @@
 #include "esp_rom_sys.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
@@ -40,6 +41,7 @@
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
+#include "t5_storage/paths.h"
 #include "t5_ui/t5_ui.h"
 #include "py_priv.h"
 
@@ -51,9 +53,35 @@ static const char *TAG = "t5.py";
 
 t5_py_t *py_vm;                        /* the VM (one at a time) */
 static SemaphoreHandle_t s_lock;       /* guards py_vm across start/stop */
+static EventGroupHandle_t s_events;
+#define VM_ENDED BIT0                  /* the VM task is done with the VM (set after finished) */
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
-/* ---- HAL ------------------------------------------------------------------------------ */
+SemaphoreHandle_t py_mutex_once(SemaphoreHandle_t *slot)
+{
+    if (*slot) return *slot;
+    SemaphoreHandle_t l = xSemaphoreCreateMutex();
+    portENTER_CRITICAL(&s_mux);
+    if (!*slot) {
+        *slot = l;
+        l = NULL;
+    }
+    portEXIT_CRITICAL(&s_mux);
+    if (l) vSemaphoreDelete(l);
+    return *slot;
+}
+
+const char *t5_py_state_name(t5_py_state_t st)
+{
+    switch (st) {
+    case T5_PY_RUNNING: return "running";
+    case T5_PY_DONE: return "done";
+    case T5_PY_EXCEPTION: return "exception";
+    case T5_PY_STOPPED: return "stopped";
+    default: return "?";
+    }
+}
+
 uint32_t t5_py_atomic_begin(void)
 {
     portENTER_CRITICAL(&s_mux);
@@ -82,7 +110,6 @@ void t5_py_wait_event(uint32_t timeout_ms)
     /* timeout_ms is (mp_uint_t)-1 for "indefinitely": wake at least every
      * 100 ms anyway, so a stop request is never missed. */
     uint32_t cap = 100;
-    extern uint32_t py_net_poll_tick;        /* mod_socket.c: sockets are being polled (select, asyncio) */
     if (mp_hal_ticks_ms() - py_net_poll_tick < 500) cap = 10;
     uint32_t ms = timeout_ms > cap ? cap : timeout_ms;
     if (py_vm && !py_vm->stop) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms ? ms : 1));
@@ -164,19 +191,20 @@ MP_NORETURN void nlr_jump_fail(void *val)
     abort();
 }
 
-/* ---- errors ------------------------------------------------------------------------------ */
-static int t5_errno(t5_err_t e)
+int py_errno(t5_err_t e, py_errno_ctx_t ctx)
 {
+    bool sock = ctx == PY_ERRNO_SOCKET;
     switch (e) {
-    case T5_ERR_BUSY: return MP_EBUSY;
+    case T5_ERR_BUSY: return sock ? MP_EADDRINUSE : MP_EBUSY;
+    case T5_ERR_STATE: return sock ? MP_ENOTCONN : MP_EIO;
     case T5_ERR_DENIED: return MP_EACCES;
     case T5_ERR_TIMEOUT: return MP_ETIMEDOUT;
     case T5_ERR_NO_MEM: return MP_ENOMEM;
     case T5_ERR_INVALID_ARG: return MP_EINVAL;
     case T5_ERR_NOT_FOUND: return MP_ENOENT;
     case T5_ERR_NOT_SUPPORTED: return MP_EOPNOTSUPP;
-    case T5_ERR_NACK: return MP_ENODEV;
-    default: return MP_EIO;
+    case T5_ERR_NACK: return sock ? MP_ECONNRESET : MP_ENODEV;
+    default: return sock ? MP_ECONNRESET : MP_EIO;
     }
 }
 
@@ -192,7 +220,7 @@ MP_NORETURN void py_raise_t5(t5_err_t e)
     if (e == T5_ERR_DENIED) {
         py_raise_perm(t5_err_str(e));
     }
-    mp_obj_t args[2] = { MP_OBJ_NEW_SMALL_INT(t5_errno(e)), mp_obj_new_str_from_cstr(t5_err_str(e)) };
+    mp_obj_t args[2] = { MP_OBJ_NEW_SMALL_INT(py_errno(e, PY_ERRNO_GENERIC)), mp_obj_new_str_from_cstr(t5_err_str(e)) };
     nlr_raise(mp_obj_exception_make_new(&mp_type_OSError, 2, 0, args));
 }
 
@@ -236,12 +264,6 @@ void py_schedule(mp_obj_t fn, mp_obj_t arg)
     if (!vm || vm->stop || vm->closing || fn == mp_const_none) return;
     if (!mp_sched_schedule(fn, arg)) T5_LOGW(TAG, "callback queue full, one dropped");
     py_wake();
-}
-
-/* ---- the VM task -------------------------------------------------------------------------- */
-static void set_state(t5_py_t *vm, t5_py_state_t st)
-{
-    vm->state = st;
 }
 
 /* Run scheduled callbacks until stopped (scripts that built a UI). */
@@ -297,7 +319,7 @@ static void vm_task(void *arg)
     /* sys.path: the script's directory, then lib/ under the working dir. */
     mp_obj_list_init(MP_OBJ_TO_PTR(mp_sys_path), 0);
     if (vm->path) {
-        char dir[PY_PATH_MAX];
+        char dir[T5_FS_PATH_MAX];
         snprintf(dir, sizeof dir, "%s", vm->path);
         char *slash = strrchr(dir, '/');
         if (slash && slash != dir) *slash = 0;
@@ -305,7 +327,7 @@ static void vm_task(void *arg)
     } else {
         mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(MP_QSTR_));
     }
-    char lib[PY_PATH_MAX + 8];
+    char lib[T5_FS_PATH_MAX + 8];
     snprintf(lib, sizeof lib, "%s/lib", vm->cwd);
     mp_obj_list_append(mp_sys_path, mp_obj_new_str_from_cstr(lib));
     mp_obj_list_append(mp_sys_path, MP_OBJ_NEW_QSTR(MP_QSTR__dot_frozen));   /* the frozen stdlib, last */
@@ -341,13 +363,13 @@ static void vm_task(void *arg)
         nlr_pop();
     }
     mp_deinit();
-    set_state(vm, how);
+    vm->state = how;
     if (vm->cfg.done) vm->cfg.done(vm, how, vm->cfg.arg);
     vm->finished = true;            /* last touch of vm: the stopper may free it now */
+    xEventGroupSetBits(s_events, VM_ENDED);
     vTaskDelete(NULL);
 }
 
-/* ---- public API ---------------------------------------------------------------------------- */
 static void vm_free(t5_py_t *vm)
 {
     if (vm->in) vStreamBufferDelete(vm->in);
@@ -363,16 +385,16 @@ static void teardown(t5_py_t *vm, uint32_t timeout_ms)
     if (!vm->finished) {
         vm->stop = true;
         mp_sched_vm_abort();
+        /* Every wait on the VM task is bounded (t5_py_wait_event), so one
+         * wake-up is enough even if a wait other than the event loop's
+         * takes it. */
         xTaskNotifyGive(vm->task);
-        uint32_t t0 = t5_time_ms();
-        while (!vm->finished && t5_time_ms() - t0 < timeout_ms) {
-            xTaskNotifyGive(vm->task);
-            vTaskDelay(pdMS_TO_TICKS(5));
-        }
+        xEventGroupWaitBits(s_events, VM_ENDED, pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms));
         if (!vm->finished) {
             T5_LOGW(TAG, "VM didn't stop within %u ms: killing its task", (unsigned)timeout_ms);
             vTaskDelete(vm->task);
             vm->finished = true;
+            xEventGroupSetBits(s_events, VM_ENDED);
         }
     }
     /* Widgets may outlive the VM (they belong to the app's screen): make sure
@@ -396,28 +418,16 @@ static void tracked_release(void *h)
     xSemaphoreGive(s_lock);
 }
 
-static void ensure_lock(void)
-{
-    if (s_lock) return;
-    SemaphoreHandle_t l = xSemaphoreCreateMutex();
-    portENTER_CRITICAL(&s_mux);
-    if (!s_lock) {
-        s_lock = l;
-        l = NULL;
-    }
-    portEXIT_CRITICAL(&s_mux);
-    if (l) vSemaphoreDelete(l);
-}
-
 t5_err_t t5_py_start(const t5_py_cfg_t *cfg, t5_py_t **out)
 {
     if (!cfg || !out || (!cfg->path && !cfg->code && !cfg->repl)) return T5_ERR_INVALID_ARG;
-    ensure_lock();
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (py_vm) {
+    xSemaphoreTake(py_mutex_once(&s_lock), portMAX_DELAY);
+    if (!s_events) s_events = xEventGroupCreate();
+    if (py_vm || !s_events) {
         xSemaphoreGive(s_lock);
-        return T5_ERR_BUSY;
+        return py_vm ? T5_ERR_BUSY : T5_ERR_NO_MEM;
     }
+    xEventGroupClearBits(s_events, VM_ENDED);
     t5_py_t *vm = calloc(1, sizeof *vm);
     t5_err_t e = vm ? T5_OK : T5_ERR_NO_MEM;
     if (e == T5_OK) {
@@ -441,8 +451,7 @@ t5_err_t t5_py_start(const t5_py_cfg_t *cfg, t5_py_t **out)
     if (e == T5_OK) {
         if (cfg->cwd) snprintf(vm->cwd, sizeof vm->cwd, "%s", cfg->cwd);
         else if (vm->app) snprintf(vm->cwd, sizeof vm->cwd, "%s", t5_app_data_dir(vm->app));
-        else snprintf(vm->cwd, sizeof vm->cwd, "/data/user");
-        py_fs_setup_roots(vm);
+        else snprintf(vm->cwd, sizeof vm->cwd, "%s", T5_USER_DIR);
         vm->state = T5_PY_RUNNING;
         py_vm = vm;
         /* Created without the app context so the tracker doesn't own the
@@ -493,8 +502,7 @@ void t5_py_interrupt(t5_py_t *vm)
 t5_err_t t5_py_stop(t5_py_t *vm, uint32_t timeout_ms)
 {
     if (!vm) return T5_ERR_INVALID_ARG;
-    ensure_lock();
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    xSemaphoreTake(py_mutex_once(&s_lock), portMAX_DELAY);
     if (vm != py_vm) {
         xSemaphoreGive(s_lock);
         return T5_ERR_STATE;
@@ -505,9 +513,12 @@ t5_err_t t5_py_stop(t5_py_t *vm, uint32_t timeout_ms)
     return T5_OK;
 }
 
-t5_py_state_t t5_py_state(const t5_py_t *vm)
+bool t5_py_wait(t5_py_t *vm, uint32_t timeout_ms)
 {
-    return vm ? vm->state : T5_PY_DONE;
+    if (!vm || vm->finished) return vm != NULL;
+    TickType_t t = timeout_ms == T5_PY_FOREVER ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    xEventGroupWaitBits(s_events, VM_ENDED, pdFALSE, pdTRUE, t);
+    return vm->finished;
 }
 
 bool t5_py_busy(void)
@@ -515,11 +526,9 @@ bool t5_py_busy(void)
     return py_vm != NULL;
 }
 
-/* ---- headless runs (console, tests) ----------------------------------------------------------- */
 typedef struct {
     char *buf;
     size_t n, len;
-    volatile bool done;
 } capture_t;
 
 static void cap_out(const char *s, size_t n, void *arg)
@@ -533,26 +542,17 @@ static void cap_out(const char *s, size_t n, void *arg)
     c->buf[c->len] = 0;
 }
 
-static void cap_done(t5_py_t *vm, t5_py_state_t how, void *arg)
-{
-    (void)vm;
-    (void)how;
-    ((capture_t *)arg)->done = true;
-}
-
 t5_py_state_t t5_py_exec_capture(const char *code, char *out, size_t n, uint32_t timeout_ms)
 {
-    capture_t c = { out, n, 0, false };
+    capture_t c = { out, n, 0 };
     if (out && n) out[0] = 0;
-    t5_py_cfg_t cfg = { .code = code, .out = cap_out, .done = cap_done, .arg = &c, .heap_bytes = 512 * 1024 };
+    t5_py_cfg_t cfg = { .code = code, .out = cap_out, .arg = &c, .heap_bytes = 512 * 1024 };
     t5_py_t *vm;
     if (t5_py_start(&cfg, &vm) != T5_OK) {
         if (out && n) snprintf(out, n, "VM busy or out of memory\n");
         return T5_PY_STOPPED;
     }
-    uint32_t t0 = t5_time_ms();
-    while (!c.done && t5_time_ms() - t0 < timeout_ms) vTaskDelay(pdMS_TO_TICKS(10));
-    t5_py_state_t st = c.done ? t5_py_state(vm) : T5_PY_STOPPED;
+    t5_py_state_t st = t5_py_wait(vm, timeout_ms) ? vm->state : T5_PY_STOPPED;
     t5_py_stop(vm, 500);
     return st;
 }

@@ -1,8 +1,9 @@
 # Audio (plan 7.1-7.3): ES8388 out, ES7210 in, mixer, echo cancellation.
 # dsp.c is pure C (host-tested); audio_hw.c is the only file that touches
 # esp_codec_dev and I2S.
+include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS "dsp.c" "audio.c" "audio_hw.c"
+    SRCS ${T5_AUDIO_PORTABLE_SRCS} "audio.c" "audio_hw.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core

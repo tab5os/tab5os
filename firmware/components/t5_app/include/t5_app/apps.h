@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
  * App runtime (plan 5.4–5.12): launching, the lifecycle, tracking and
  * cleanup, native ELF loading, permissions, the crash guard and the UI
- * watchdog. This is the OS side; apps see t5_app/app.h.
+ * watchdog. This is the OS side; apps see t5_app/app.h, and with the
+ * system permission t5_app/system.h.
  *
  * One app is in the foreground at a time. Launching another exits the
  * current one (Phase 6 may keep suspended apps around).
@@ -21,8 +22,10 @@
 #include <stdint.h>
 #include "t5_app/app.h"
 #include "t5_app/crashguard.h"
+#include "t5_app/system.h"
 #include "t5_core/err.h"
 #include "t5_core/res.h"
+#include "t5_pkg/pkg.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,53 +63,50 @@ T5_MUST_CHECK t5_err_t t5_apps_register_builtin(const t5_builtin_app_t *app);
 /* Runtimes other than native ELF (plan 8.1): apps whose manifest says
  * runtime = "micropython" are run through desc, like a built-in app, with
  * the same tracking. t5_py registers itself here before t5_apps_init(). */
-T5_MUST_CHECK t5_err_t t5_apps_set_runtime(int runtime, const t5_app_desc_t *desc);
+T5_MUST_CHECK t5_err_t t5_apps_set_runtime(t5_runtime_t runtime, const t5_app_desc_t *desc);
 /* For a runtime: the installed entry file, the [background] entry name and
  * the manifest's min_heap in bytes (0 if unset). */
 const char *t5_apps_entry_path(t5_app_t *app);
 const char *t5_apps_bg_entry(t5_app_t *app);
 size_t t5_apps_min_heap(t5_app_t *app);
 
-/* The home screen (plan 6.3). The shell registers it before t5_apps_init();
- * without one a plain app list is used. All hooks run on the UI task.
+/* What the runtime tells the person about; the home screen words it. */
+typedef enum {
+    T5_APPS_NOTICE_SAFE_MODE,       /* an installed app was not launched: safe mode */
+    T5_APPS_NOTICE_CRASHED,         /* the app crashed and was closed */
+    T5_APPS_NOTICE_HUNG,            /* it stopped responding and was closed */
+    T5_APPS_NOTICE_LOW_MEMORY,      /* it was closed because memory ran low */
+} t5_apps_notice_t;
+
+/* The home screen (plan 6.3). The shell registers it before t5_apps_init(),
+ * which fails without one. All hooks run on the UI task.
  *   screen   the home screen object (created on first call)
  *   refresh  the app list changed (install, removal, crash counts)
  *   prepare  an app's root screen was just created (status bar inset)
- *   changed  the foreground changed: an app id, or "" for home */
+ *   changed  the foreground changed: an app id, or "" for home
+ *   notice   tell the person about app_name (may be NULL)
+ * The order the home screen can rely on (the simulator's stand-in runtime,
+ * sim/sim_shell_sys.c, keeps it too):
+ *   launch  the app's screen is created, prepare(screen, id), changed(id),
+ *           the app's on_create fills the screen, then it is loaded
+ *   exit    the home screen is loaded, changed(""), then the app's screen
+ *           is deleted, then refresh() */
 struct _lv_obj_t;
 typedef struct {
     struct _lv_obj_t *(*screen)(void);
     void (*refresh)(void);
     void (*prepare)(struct _lv_obj_t *app_screen, const char *id);
     void (*changed)(const char *id);
+    void (*notice)(t5_apps_notice_t what, const char *app_name);
 } t5_apps_home_t;
 void t5_apps_set_home(const t5_apps_home_t *home);
 
-/* Safe from any task: the work runs on the UI task. */
-T5_MUST_CHECK t5_err_t t5_apps_launch(const char *id);
-/* Launch with an argument the app reads with t5_app_launch_arg() (a path,
- * a settings page, an app id). If the app is already in front with another
- * argument it is restarted. */
-T5_MUST_CHECK t5_err_t t5_apps_launch_arg(const char *id, const char *arg);
 T5_MUST_CHECK t5_err_t t5_apps_exit_current(void);
 /* Blocking variants for the console and tests (wait up to timeout_ms). */
 T5_MUST_CHECK t5_err_t t5_apps_launch_wait(const char *id, uint32_t timeout_ms);
 T5_MUST_CHECK t5_err_t t5_apps_exit_wait(uint32_t timeout_ms);
 /* Copies the foreground app's id, "" if the launcher is showing. */
 void t5_apps_current(char *id, size_t n);
-
-typedef struct {
-    char id[64];
-    char name[48];
-    char version[16];
-    bool builtin;
-    bool running;
-    bool autolaunch_blocked;
-    uint16_t crashes;               /* consecutive */
-    char icon[8];                   /* MD_ICON_* glyph, "" for none */
-    uint32_t perms;                 /* T5_PERM_* declared */
-} t5_app_entry_t;
-int t5_apps_list(t5_app_entry_t *out, int max);
 
 /* The foreground app's tracked resources. */
 typedef struct {
@@ -118,45 +118,29 @@ typedef struct {
 } t5_app_usage_t;
 T5_MUST_CHECK t5_err_t t5_apps_usage(t5_app_usage_t *out);
 
-/* App Manager (plan 6.7): everything known about one app. */
-typedef struct {
-    t5_app_entry_t entry;
-    char install_dir[192];
-    char data_dir[192];
-    uint64_t install_bytes;           /* package size, 0 for built-ins */
-    uint64_t data_bytes;              /* app data dir, recursive */
-    bool on_sd;
-    int64_t install_time;
-    uint32_t granted, denied;         /* runtime answers for camera and mic */
-    uint16_t crashes_total;
-    uint8_t last_crash_kind;          /* t5_crash_kind_t */
-    int64_t last_crash_time;
-    bool has_dump;
-    char dump_path[192];
-    char runtime[12];                 /* "native", "micropython", "built-in" */
-} t5_app_info_t;
-T5_MUST_CHECK t5_err_t t5_apps_info(const char *id, t5_app_info_t *out);
+/* A permission group as App Manager lists it ("See shared files", "camera"). */
+const char *t5_perm_label(uint32_t perm_bit);
 /* Change a camera or mic answer (App Manager); granted=false also
  * forgets "never asked", so the app is asked again next time. */
 T5_MUST_CHECK t5_err_t t5_apps_set_grant(const char *id, uint32_t perm, bool granted);
-T5_MUST_CHECK t5_err_t t5_apps_forget_grant(const char *id, uint32_t perm);
 /* Clear the crash record (and the auto-launch block). */
 T5_MUST_CHECK t5_err_t t5_apps_crash_reset(const char *id);
 
-/* Per-app average draw (plan 6.8), highest first. See t5_app/energy.h. */
-#include "t5_app/energy.h"
-int t5_apps_energy(t5_energy_rec_t *out, int max);
 void t5_apps_energy_reset(void);
 
 /* Install a .t5app (plan 5.8): validates the manifest and, for native
- * apps, that every symbol the ELF imports is in the ABI (plan 5.6).
- * dest: 0 auto, 1 SD, 2 /data. */
-T5_MUST_CHECK t5_err_t t5_apps_install(const char *path, int dest, char *err, size_t errlen);
+ * apps, that every symbol the ELF imports is in the ABI (plan 5.6). A
+ * running copy of the app is closed first; T5_ERR_BUSY if it doesn't stop.
+ * Not from the UI task while that app is in front of it. man, if not NULL,
+ * gets the installed app's manifest. */
+T5_MUST_CHECK t5_err_t t5_apps_install(const char *path, t5_pkg_dest_t dest, t5_manifest_t *man, char *err,
+                                       size_t errlen);
+/* "sd", "data"; anything else (NULL, "auto") is T5_PKG_DEST_AUTO. */
+t5_pkg_dest_t t5_apps_dest_parse(const char *s);
 T5_MUST_CHECK t5_err_t t5_apps_remove(const char *id, bool keep_data);
 /* The ABI check alone. missing gets a comma-separated list. */
 T5_MUST_CHECK t5_err_t t5_apps_check_abi(const uint8_t *elf, size_t len, char *missing, size_t n);
 
-bool t5_apps_autolaunch_allowed(const char *id);
 int t5_apps_crashes(t5_crash_rec_t *out, int max);
 /* Where an app's last core dump was saved, if any. */
 T5_MUST_CHECK t5_err_t t5_apps_coredump_path(const char *id, char *path, size_t n);
@@ -165,27 +149,14 @@ T5_MUST_CHECK t5_err_t t5_apps_coredump_path(const char *id, char *path, size_t 
  * max_seconds. Blocks the caller. */
 T5_MUST_CHECK t5_err_t t5_apps_run_alarm(const char *id);
 
-/* Services call this before using camera or mic on an app's behalf
- * (Phase 7). System callers always pass. */
-T5_MUST_CHECK t5_err_t t5_perm_check(uint32_t perm);
-
-/* Diagnostics: the watchdog's dialog drawn over a healthy UI (it is only
- * rendered once an app has started). */
-T5_MUST_CHECK t5_err_t anr_test_show(void);
-T5_MUST_CHECK t5_err_t anr_test_hide(void);
-/* Diagnostics: press "Close app" while the UI task is stuck in an app
- * (T5_ERR_STATE if it isn't). Returns if the app was stopped without a
- * restart; otherwise the device restarts. */
-T5_MUST_CHECK t5_err_t anr_test_close(void);
-/* Faults survived without a reboot since boot (t5_core/fault.h). */
-uint32_t t5_apps_faults_survived(void);
-
 /* Close the file picker as if the person had backed out: true if one was
  * open. For the home gesture. */
 bool t5_apps_modal_dismiss(void);
 /* May app use the normalised or raw path abs? May ask the person (not on the
  * UI task: there it asks and answers no for this call). */
 bool t5_app_fs_check(t5_app_t *app, const char *abs, bool write);
+/* Do writes to path count against the app's data-dir quota? */
+bool t5_app_fs_quota_applies(t5_app_t *app, const char *path);
 /* Would writing n more bytes keep the app inside its data-dir quota? */
 bool t5_app_fs_room(t5_app_t *app, size_t n);
 

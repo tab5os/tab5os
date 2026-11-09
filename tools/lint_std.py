@@ -8,8 +8,9 @@
   rule 7  every t5_err_t function a strict component's public headers
           declare is marked T5_MUST_CHECK
 
-The strict components are read from firmware/CMakeLists.txt (STRICT ...), so
-the list lives in one place. Exit status 1 if anything is found.
+The strict components are read from the STRICT lists in firmware/CMakeLists.txt
+and recovery/CMakeLists.txt, so each list lives in one place. Exit status 1 if
+anything is found.
 
     tools/lint_std.py
 """
@@ -18,7 +19,6 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMP = os.path.join(ROOT, "firmware", "components")
 OUR_CODE = ["firmware/components", "firmware/main", "firmware/sysapps", "recovery/main"]
 VENDORED = {"esp_driver_ppa"}
 
@@ -32,18 +32,27 @@ JMP_OK = {
 
 # file -> functions whose recursion has an explicit depth limit (rule 1).
 RECURSION_OK = {
-    "t5_app/lifecycle.c": {"du"},                                    # depth > 6 stops
-    "t5_ports/profiles.c": {"skip"},                                 # DEPTH_MAX
-    "t5_pkg/toml.c": {"parse_value", "parse_array", "value_free"},   # nested arrays refused: depth 2
+    "firmware/components/t5_app/lifecycle.c": {"du"},                                    # depth > 6 stops
+    "firmware/components/t5_ports/profiles.c": {"skip"},                                 # DEPTH_MAX
+    "firmware/components/t5_pkg/toml.c": {"parse_value", "parse_array", "value_free"},   # nested arrays: depth 2
+    "recovery/main/recovery.c": {"rm_tree"},                                             # RM_TREE_DEPTH_MAX
 }
 
 
 def strict_components():
-    text = open(os.path.join(ROOT, "firmware", "CMakeLists.txt")).read()
-    m = re.search(r"\bSTRICT\s+([^)]*)\)", text)
-    if not m:
-        sys.exit("lint_std: no STRICT list in firmware/CMakeLists.txt")
-    return m.group(1).split()
+    """Directories (relative to ROOT) of the strict components of the firmware
+    and recovery projects; a project's "main" is its own main/."""
+    out = []
+    for project in ("firmware", "recovery"):
+        text = open(os.path.join(ROOT, project, "CMakeLists.txt")).read()
+        m = re.search(r"\bSTRICT\s+([^)]*)\)", text)
+        if not m:
+            sys.exit("lint_std: no STRICT list in %s/CMakeLists.txt" % project)
+        for comp in m.group(1).split():
+            d = os.path.join(project, "main") if comp == "main" else os.path.join("firmware", "components", comp)
+            if d not in out:
+                out.append(d)
+    return out
 
 
 def strip_c(text):
@@ -84,22 +93,21 @@ def main():
             line = text.count("\n", 0, m.start()) + 1
             problems.append("%s:%d: rule 1: %s" % (os.path.relpath(path, ROOT), line, m.group(1)))
 
-    for comp in strict_components():
-        cdir = os.path.join(COMP, comp)
-        if not os.path.isdir(cdir):
+    for cdir in strict_components():
+        if not os.path.isdir(os.path.join(ROOT, cdir)):
             continue
-        for path in c_files([os.path.relpath(cdir, ROOT)], (".c",)):
-            rel = os.path.relpath(path, COMP)
+        for path in c_files([cdir], (".c",)):
+            rel = os.path.relpath(path, ROOT)
             text = strip_c(open(path, errors="replace").read())
             for name, line, body in functions(text):
                 # Not a member call: a->on_rotate() is the app's, not this function.
                 calls_self = re.search(r"(?<![\w.>])%s\s*\(" % re.escape(name), body)
                 if calls_self and name not in RECURSION_OK.get(rel, ()):
-                    problems.append("firmware/components/%s:%d: rule 1: %s() calls itself; make it "
+                    problems.append("%s:%d: rule 1: %s() calls itself; make it "
                                     "iterative, or give it a depth limit and list it in RECURSION_OK"
                                     % (rel, line, name))
         inc = os.path.join(cdir, "include")
-        for path in c_files([os.path.relpath(inc, ROOT)], (".h",)) if os.path.isdir(inc) else []:
+        for path in c_files([inc], (".h",)) if os.path.isdir(os.path.join(ROOT, inc)) else []:
             for n, line in enumerate(open(path, errors="replace"), 1):
                 if re.match(r"t5_err_t\s+\w+\s*\(", line):
                     problems.append("%s:%d: rule 7: mark it T5_MUST_CHECK (or don't return t5_err_t)"
@@ -110,7 +118,8 @@ def main():
     if problems:
         print("lint_std: %d problem(s); see docs/coding-standard.md" % len(problems))
         return 1
-    print("lint_std: OK (strict: %s)" % " ".join(strict_components()))
+    print("lint_std: OK (strict: %s)" % " ".join(os.path.basename(d) if "components" in d else d
+                                                 for d in strict_components()))
     return 0
 
 

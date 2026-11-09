@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Tab5 OS second-stage bootloader: IDF's, with the boot-attempt counter
- * (t5_ota/bootctl.h) deciding between the OS and the recovery image.
+ * (t5_bootfmt/bootctl.h) deciding between the OS and the recovery image.
  */
 #include <stdbool.h>
 #include <string.h>
@@ -15,7 +15,7 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "soc/reset_reasons.h"
-#include "t5_ota/bootctl.h"
+#include "t5_bootfmt/bootctl.h"
 
 static const char *TAG = "t5boot";
 
@@ -26,45 +26,31 @@ static bool recovery_valid(const bootloader_state_t *bs)
     return esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &bs->test, &meta) == ESP_OK;
 }
 
+_Static_assert(T5_BOOTCTL_SECTOR_FROM_END == FLASH_SECTOR_SIZE, "the record is one flash sector");
+
 /* Count this boot; returns the index to boot. */
 static int choose(bootloader_state_t *bs)
 {
     int normal = bootloader_utility_get_selected_boot_partition(bs);
     if (bs->test.size < 2 * T5_BOOTCTL_SECTOR_FROM_END) return normal;
     uint32_t addr = bs->test.offset + bs->test.size - T5_BOOTCTL_SECTOR_FROM_END;
-    uint8_t rec[T5_BOOTCTL_ATTEMPT_BYTES + T5_BOOTCTL_REQ_LEN];
+    uint8_t rec[T5_BOOTCTL_REC_LEN];
     if (bootloader_flash_read(addr, rec, sizeof rec, false) != ESP_OK) return normal;
 
-    bool want_recovery = !memcmp(rec + T5_BOOTCTL_REQ_OFFSET, T5_BOOTCTL_REQ_RECOVERY, T5_BOOTCTL_REQ_LEN);
-    int failed = t5_bootctl_count(rec);
-    soc_reset_reason_t why = esp_rom_get_reset_reason(0);
-    if (!want_recovery && why != RESET_REASON_CORE_DEEP_SLEEP) {
-        /* Count this attempt: clear the lowest set bit. */
-        for (int i = 0; i < T5_BOOTCTL_ATTEMPT_BYTES; i++) {
-            if (rec[i]) {
-                /* Flash writes are whole aligned words: rewrite the word
-                 * with one more bit cleared (the rest programs as itself). */
-                int w = i & ~3;
-                uint32_t word;
-                memcpy(&word, rec + w, 4);
-                uint8_t *wb = (uint8_t *)&word;
-                wb[i - w] = rec[i] & (uint8_t)(rec[i] - 1);
-                if (bootloader_flash_write(addr + (uint32_t)w, &word, 4, false) != ESP_OK) {
-                    ESP_LOGE(TAG, "can't count this boot");
-                }
-                break;
-            }
-        }
+    t5_bootctl_boot_t b = t5_bootctl_boot(rec, esp_rom_get_reset_reason(0) == RESET_REASON_CORE_DEEP_SLEEP);
+    if (b.mark && bootloader_flash_write(addr + b.word_off, &b.word, 4, false) != ESP_OK) {
+        ESP_LOGE(TAG, "can't count this boot");
     }
-    if (want_recovery || failed >= T5_BOOTCTL_RECOVERY_AFTER) {
+    if (b.recovery) {
         if (recovery_valid(bs)) {
-            ESP_LOGW(TAG, "%s: starting recovery", want_recovery ? "requested" : "three failed boots");
+            if (b.requested) ESP_LOGW(TAG, "requested: starting recovery");
+            else ESP_LOGW(TAG, "%d failed boots: starting recovery", b.failed);
             return TEST_APP_INDEX;
         }
         ESP_LOGE(TAG, "no recovery image: starting the OS anyway");
-        bootloader_flash_erase_sector(addr / 0x1000u);
-    } else if (failed) {
-        ESP_LOGW(TAG, "%d unconfirmed boot%s before this one", failed, failed > 1 ? "s" : "");
+        bootloader_flash_erase_sector(addr / FLASH_SECTOR_SIZE);
+    } else if (b.failed) {
+        ESP_LOGW(TAG, "%d unconfirmed boot%s before this one", b.failed, b.failed > 1 ? "s" : "");
     }
     return normal;
 }

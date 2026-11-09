@@ -17,8 +17,6 @@ extern "C" {
 #define T5_RTC_FLAG_VLF   0x02   /* oscillation stopped / power lost: time invalid */
 #define T5_RTC_FLAG_AF    0x08   /* alarm fired */
 #define T5_RTC_FLAG_TF    0x10   /* countdown timer fired */
-#define T5_RTC_FLAG_UF    0x20   /* update interrupt */
-#define T5_RTC_FLAG_VBLF  0x80   /* backup voltage low */
 
 /* Opens the device, records the flags (wake reason) and then clears AF/TF
  * and disables alarm and timer interrupts. */
@@ -28,11 +26,9 @@ uint8_t t5_rtc_boot_flags(void);
 
 /* valid is false if VLF is set or the registers don't decode to a sane date. */
 t5_err_t t5_rtc_read(struct tm *out, bool *valid);
-/* Writes the time, restarts the sub-second divider and clears VLF. */
-t5_err_t t5_rtc_write(const struct tm *tm);
+/* Set the time with t5_time_set(), which keeps the system clock in step. */
 
 t5_err_t t5_rtc_flags(uint8_t *flags);
-t5_err_t t5_rtc_clear_flags(uint8_t flags);
 
 /* Alarm at minute resolution (day of month + hour + minute, UTC). */
 t5_err_t t5_rtc_alarm_set(const struct tm *at);
@@ -47,7 +43,7 @@ t5_err_t t5_rtc_timer_set(uint32_t seconds, uint32_t *actual);
 t5_err_t t5_rtc_ram_read(uint8_t out[T5_RTC_RAM_LEN]);
 t5_err_t t5_rtc_ram_write(const uint8_t in[T5_RTC_RAM_LEN]);
 
-/* ---- Pure helpers (host-tested) ---------------------------------------- */
+/* Pure helpers. */
 uint8_t t5_rtc_bin2bcd(uint8_t v);
 uint8_t t5_rtc_bcd2bin(uint8_t v);
 bool t5_rtc_bcd_valid(uint8_t v);

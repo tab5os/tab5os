@@ -21,12 +21,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "t5_core/os.h"
+#include "t5_bsp/panel.h"
 #include "t5_display/t5_display.h"
+#include "t5_display/timing.h"
 #include "t5_imu/t5_imu.h"
 #include "t5_input/t5_touch.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_time/rtc.h"
 #include "t5_time/t5_time.h"
+#include "t5_storage/storage_diag.h"
 #include "diag_priv.h"
 
 /* ---- rtc ---------------------------------------------------------------- */
@@ -246,7 +249,6 @@ static int cmd_fs(int argc, char **argv)
     if (!strcmp(argv[1], "eject")) { printf("%s\n", t5_err_str(t5_storage_sd_eject())); return 0; }
     if (!strcmp(argv[1], "rescan")) { printf("%s\n", t5_err_str(t5_storage_sd_rescan())); return 0; }
     if (!strcmp(argv[1], "sdraw")) {
-        extern int t5_storage_hw_sd_raw_bench(uint32_t, uint32_t);
         static const uint32_t ios[] = { 1, 8, 64, 128 };
         for (size_t i = 0; i < 4; i++) {
             printf("raw read, %3u sectors/io: %d KB/s\n", (unsigned)ios[i], t5_storage_hw_sd_raw_bench(ios[i], 8192));
@@ -254,7 +256,6 @@ static int cmd_fs(int argc, char **argv)
         return 0;
     }
     if (!strcmp(argv[1], "sdfat")) {
-        extern int t5_storage_hw_sd_fat_info(int *, int *);
         int type = 0, cl = 0;
         if (t5_storage_hw_sd_fat_info(&type, &cl)) { printf("no card\n"); return 1; }
         printf("FAT type %d (1=FAT12 2=FAT16 3=FAT32 4=exFAT), cluster %d bytes\n", type, cl);
@@ -321,7 +322,7 @@ static int cmd_disp(int argc, char **argv)
     uint32_t v, r, g, b;
     if (argc == 1) {
         printf("panel %s, %s, brightness %d%% (applied %d%%), %s, showing fb %d, %u frames scanned\n",
-               t5_display_panel_name(t5_display_panel()), t5_display_ready() ? "ready" : "NOT READY",
+               t5_bsp_panel_name(t5_bsp_panel()->panel), t5_display_ready() ? "ready" : "NOT READY",
                t5_display_brightness(), t5_display_effective_brightness(),
                t5_display_asleep() ? "asleep" : "awake", t5_display_scanout(), (unsigned)t5_display_frames());
         printf("backlight pin G%d: output signal %u (LEDC is %u, plain GPIO is %u), level %d\n", T5_PIN_LCD_BACKLIGHT,
@@ -332,20 +333,21 @@ static int cmd_disp(int argc, char **argv)
     if (!strcmp(argv[1], "bl") && argc >= 3 && diag_parse_u32(argv[2], 0, 100, &v)) {
         return t5_display_set_brightness((int)v) != T5_OK;
     }
-    if (!strcmp(argv[1], "blfreq") && argc >= 3 && diag_parse_u32(argv[2], 100, 40000, &v)) {
+    if (!strcmp(argv[1], "blfreq") && argc >= 3 && diag_parse_u32(argv[2], T5_DISPLAY_BL_HZ_MIN, T5_DISPLAY_BL_HZ_MAX, &v)) {
         t5_err_t e = t5_display_set_backlight_freq(v);
         printf("%s\n", t5_err_str(e));
         return e != T5_OK;
     }
     if (!strcmp(argv[1], "timing") && argc >= 3) {
         if (!strcmp(argv[2], "reset")) {
-            remove(T5_DATA_PATH "/display_timing.txt");
+            remove(T5_DISPLAY_TIMING_FILE);
             printf("timing override removed; reboot to apply\n");
             return 0;
         }
         uint32_t pclk, vfp;
-        if (argc >= 4 && diag_parse_u32(argv[2], 40, 90, &pclk) && diag_parse_u32(argv[3], 4, 400, &vfp)) {
-            FILE *f = fopen(T5_DATA_PATH "/display_timing.txt", "w");
+        if (argc >= 4 && diag_parse_u32(argv[2], T5_DISPLAY_PCLK_MHZ_MIN, T5_DISPLAY_PCLK_MHZ_MAX, &pclk) &&
+            diag_parse_u32(argv[3], T5_DISPLAY_VFP_MIN, T5_DISPLAY_VFP_MAX, &vfp)) {
+            FILE *f = fopen(T5_DISPLAY_TIMING_FILE, "w");
             if (!f) { printf("can't write /data\n"); return 1; }
             fprintf(f, "%u %u\n", (unsigned)pclk, (unsigned)vfp);
             fclose(f);

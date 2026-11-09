@@ -41,6 +41,7 @@ struct t5_mqtt {
     t5_nethdr_t hdr;
     esp_mqtt_client_handle_t c;
     SemaphoreHandle_t mu;       /* the queue */
+    SemaphoreHandle_t sig;      /* given on every event: waits wake at once */
     ev_item_t *head, *tail;
     int count;
     size_t bytes, max_msg;
@@ -51,7 +52,13 @@ struct t5_mqtt {
     volatile bool failed_once;
 };
 
-/* ---- the queue (esp-mqtt's task puts, the app's task takes) ------------------------- */
+/* Until the next event, a slice at most (closing and cancelling are seen
+ * at slice ends). */
+static void wait_event(t5_mqtt_t *m, uint32_t left)
+{
+    xSemaphoreTake(m->sig, pdMS_TO_TICKS(left < NET_SLICE_MS ? left : NET_SLICE_MS));
+}
+
 static void push(t5_mqtt_t *m, ev_item_t *it)
 {
     xSemaphoreTake(m->mu, portMAX_DELAY);
@@ -84,6 +91,7 @@ static void push(t5_mqtt_t *m, ev_item_t *it)
         m->bytes += it->data_len;
     }
     xSemaphoreGive(m->mu);
+    xSemaphoreGive(m->sig);
 }
 
 static ev_item_t *item_new(t5_mqtt_ev_type_t type, int msg_id, size_t topic_len, size_t data_len)
@@ -191,7 +199,15 @@ static void mqtt_free(t5_mqtt_t *m)
     }
     free(m->partial);
     if (m->mu) vSemaphoreDelete(m->mu);
+    if (m->sig) vSemaphoreDelete(m->sig);
     free(m);
+}
+
+static void destroy_mqtt(void *h)
+{
+    t5_mqtt_t *m = h;
+    if (m->connected) esp_mqtt_client_disconnect(m->c);
+    mqtt_free(m);
 }
 
 static void release_mqtt(void *h)
@@ -237,8 +253,9 @@ static t5_err_t wait_connected(t5_mqtt_t *m, uint32_t timeout)
         if (m->connected) return T5_OK;
         if (m->refused) return T5_ERR_DENIED;
         if (m->hdr.closing || net_cancelled()) return T5_ERR_STATE;
-        if (!net_left(dl, timeout)) return m->failed_once ? T5_ERR_IO : T5_ERR_TIMEOUT;
-        t5_delay_ms(20);
+        uint32_t left = net_left(dl, timeout);
+        if (!left) return m->failed_once ? T5_ERR_IO : T5_ERR_TIMEOUT;
+        wait_event(m, left);
     }
 }
 
@@ -251,20 +268,21 @@ t5_err_t t5_mqtt_connect(const t5_mqtt_cfg_t *cfg, t5_mqtt_t **out)
     if (!m) return T5_ERR_NO_MEM;
     m->max_msg = cfg->max_msg ? (cfg->max_msg < LIMIT_MAX_MSG ? cfg->max_msg : LIMIT_MAX_MSG) : DEFAULT_MAX_MSG;
     m->mu = xSemaphoreCreateMutex();
+    m->sig = xSemaphoreCreateBinary();
     snprintf(m->hdr.what, sizeof m->hdr.what, "mqtt %.34s", cfg->uri);
     esp_mqtt_client_config_t c = { 0 };
     fill_config(&c, cfg);
     /* The client's task must not carry the app context: it isn't the app's. */
     void *saved = t5_app_ctx_get();
     t5_app_ctx_set(NULL);
-    m->c = m->mu ? esp_mqtt_client_init(&c) : NULL;
+    m->c = m->mu && m->sig ? esp_mqtt_client_init(&c) : NULL;
     if (m->c) esp_mqtt_client_register_event(m->c, MQTT_EVENT_ANY, on_event, m);
     t5_app_ctx_set(saved);
     if (!m->c) {
         mqtt_free(m);
         return T5_ERR_INVALID_ARG;         /* most likely a bad URI */
     }
-    t5_err_t e = nh_register(&m->hdr, NH_MQTT, release_mqtt);
+    t5_err_t e = nh_register(&m->hdr, NH_MQTT, release_mqtt, destroy_mqtt);
     if (e != T5_OK) {
         mqtt_free(m);
         return e;
@@ -276,7 +294,7 @@ t5_err_t t5_mqtt_connect(const t5_mqtt_cfg_t *cfg, t5_mqtt_t **out)
     if (e == T5_OK) e = wait_connected(m, cfg->timeout_ms ? cfg->timeout_ms : NET_DEFAULT_TIMEOUT_MS);
     nh_release(m);
     if (e != T5_OK) {
-        if (nh_unregister(m, NH_MQTT) == T5_OK) mqtt_free(m);
+        T5_IGNORE(nh_unregister(m, NH_MQTT));     /* or someone else closed it already (app exit) */
         return e;
     }
     *out = m;
@@ -285,10 +303,7 @@ t5_err_t t5_mqtt_connect(const t5_mqtt_cfg_t *cfg, t5_mqtt_t **out)
 
 t5_err_t t5_mqtt_close(t5_mqtt_t *m)
 {
-    T5_RETURN_ON_ERR(nh_unregister(m, NH_MQTT));
-    if (m->connected) esp_mqtt_client_disconnect(m->c);
-    mqtt_free(m);
-    return T5_OK;
+    return nh_unregister(m, NH_MQTT);
 }
 
 /* ---- use ------------------------------------------------------------------------------ */
@@ -377,7 +392,7 @@ t5_err_t t5_mqtt_next(t5_mqtt_t *m, t5_mqtt_event_t *ev, void *buf, size_t cap, 
         }
         uint32_t left = net_left(dl, timeout_ms);
         if (!left) break;
-        t5_delay_ms(left < 20 ? left : 20);
+        wait_event(m, left);
     }
     nh_release(m);
     return e;

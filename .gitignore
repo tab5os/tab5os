@@ -6,11 +6,7 @@
 build/
 build-*/
 sdkconfig
-sdkconfig.rev1
-sdkconfig.rev3
 sdkconfig.old
-test/device/sdkconfig.*
-!test/device/sdkconfig.defaults
 managed_components/
 
 # Recovery image, releases

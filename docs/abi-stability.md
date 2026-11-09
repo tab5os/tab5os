@@ -51,7 +51,7 @@ While level 1 is a candidate, a deliberate change is possible and visible: edit 
 
 ```sh
 python3 tools/abi/abi.py freeze sdk/abi/api_v1.sym
-python tools/abi/layout.py gen firmware/build-rev1
+python tools/abi/layout.py gen firmware/build
 ```
 
 **Releasing level 1 is the point of no return.** Do it when the first public SDK ships:
@@ -66,7 +66,7 @@ After that, `freeze` refuses to rewrite the lock.
 
 Additions after release raise the API level, because an app built against a new symbol can't run on an older OS at the same level.
 
-1. Raise `T5_API_LEVEL` (`t5_app/app.h` and `t5_pkg/manifest.h`) and `API_LEVEL` in `tools/t5/t5pack.py`.
+1. Raise `T5_API_LEVEL` in `t5_pkg/manifest.h` (the only definition: `t5_app/app.h` includes it, and `tools/t5/t5pack.py` reads it).
 2. Add the symbol to `api_v1.sym` with `since=2`.
 3. A new callback in `t5_app_desc_t` is read only when `desc->api` is at least the level that added it. Older apps' descriptors are shorter, so reading past the end is a bug.
 
@@ -74,6 +74,5 @@ The app's manifest `api` key says the level it needs, and an OS with a lower lev
 
 ## What isn't covered
 
-- **Functions declared in headers but not exported.** The headers come from the firmware and show more than the ABI, so calling one of these compiles and is then refused at install. Only `api_v1.sym` counts.
+- **Functions declared in headers but not exported.** The headers come from the firmware and show more than the ABI, so calling one of these compiles; `t5 pack` then refuses the app (it checks the ELF's imports against `api_v1.sym`), as the installer would. Only `api_v1.sym` counts.
 - **Internals of opaque types** such as `lv_obj_t` and `t5_app_t`. Apps hold pointers and never see inside them.
-- **`rev3` builds.** The check runs on `rev1`.

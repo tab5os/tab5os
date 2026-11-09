@@ -9,32 +9,53 @@
 #include "t5_pkg/toml.h"
 #include "t5_pkg/zip.h"
 
-static const struct {
-    uint32_t bit;
-    const char *name;
-} s_perms[] = {
-    {T5_PERM_CAMERA, "camera"},
-    {T5_PERM_MIC, "mic"},
-    {T5_PERM_NET, "net"},
-    {T5_PERM_BLE, "ble"},
-    {T5_PERM_PORTS, "ports"},
-    {T5_PERM_USB, "usb"},
-    {T5_PERM_STORAGE, "storage"},
-    {T5_PERM_SHARED_READ, "shared_read"},
-    {T5_PERM_SHARED_WRITE, "shared_write"},
-    {T5_PERM_ALL_FILES, "all_files"},
-    {T5_PERM_BACKGROUND_WAKE, "background_wake"},
-    {T5_PERM_SYSTEM, "system"},
+const t5_perm_info_t t5_perms[] = {
+    {T5_PERM_CAMERA, "camera", true},
+    {T5_PERM_MIC, "mic", true},
+    {T5_PERM_NET, "net", false},
+    {T5_PERM_BLE, "ble", false},
+    {T5_PERM_PORTS, "ports", false},
+    {T5_PERM_USB, "usb", false},
+    {T5_PERM_STORAGE, "storage", false},
+    {T5_PERM_SHARED_READ, "shared_read", true},
+    {T5_PERM_SHARED_WRITE, "shared_write", true},
+    {T5_PERM_ALL_FILES, "all_files", true},
+    {T5_PERM_BACKGROUND_WAKE, "background_wake", false},
+    {T5_PERM_SYSTEM, "system", false},
 };
-#define NPERMS (sizeof s_perms / sizeof s_perms[0])
+const size_t t5_perm_count = sizeof t5_perms / sizeof t5_perms[0];
 
+static const char *const s_runtimes[T5_RUNTIME_COUNT] = {
+    [T5_RUNTIME_NATIVE] = "native",
+    [T5_RUNTIME_MICROPYTHON] = "micropython",
+};
+
+/* The keys a manifest may have (tools/t5/t5pack.py reads these tables). */
+static const char *const s_top_keys[] = {"id", "name", "version", "api", "runtime", "entry", "icon",
+                                         "min_heap_mb", "min_heap_kb", "orientation"};
 /* Top-level keys accepted but not stored (informational). */
 static const char *const s_info_keys[] = {"description", "author", "homepage", "license"};
+static const char *const s_bg_keys[] = {"entry", "max_seconds"};
+static const char *const s_orients[] = {
+    [T5_ORIENT_ANY] = "any",
+    [T5_ORIENT_LANDSCAPE] = "landscape",
+    [T5_ORIENT_PORTRAIT] = "portrait",
+};
+
+#define COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
+static bool listed(const char *k, const char *const *list, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (strcmp(k, list[i]) == 0) return true;
+    }
+    return false;
+}
 
 const char *t5_perm_name(uint32_t perm_bit)
 {
-    for (size_t i = 0; i < NPERMS; i++) {
-        if (s_perms[i].bit == perm_bit) return s_perms[i].name;
+    for (size_t i = 0; i < t5_perm_count; i++) {
+        if (t5_perms[i].bit == perm_bit) return t5_perms[i].name;
     }
     return NULL;
 }
@@ -42,17 +63,31 @@ const char *t5_perm_name(uint32_t perm_bit)
 uint32_t t5_perm_from_name(const char *name)
 {
     if (!name) return 0;
-    for (size_t i = 0; i < NPERMS; i++) {
-        if (strcmp(s_perms[i].name, name) == 0) return s_perms[i].bit;
+    for (size_t i = 0; i < t5_perm_count; i++) {
+        if (strcmp(t5_perms[i].name, name) == 0) return t5_perms[i].bit;
     }
     return 0;
+}
+
+uint32_t t5_perm_prompted(void)
+{
+    uint32_t m = 0;
+    for (size_t i = 0; i < t5_perm_count; i++) {
+        if (t5_perms[i].prompted) m |= t5_perms[i].bit;
+    }
+    return m;
+}
+
+const char *t5_runtime_name(t5_runtime_t rt)
+{
+    return ((unsigned)rt < T5_RUNTIME_COUNT) ? s_runtimes[rt] : "?";
 }
 
 bool t5_manifest_id_ok(const char *id)
 {
     if (!id) return false;
     size_t len = strlen(id);
-    if (len == 0 || len > 63) return false;
+    if (len == 0 || len >= T5_APP_ID_LEN) return false;
     int segs = 1;
     size_t seglen = 0;
     for (size_t i = 0; i < len; i++) {
@@ -69,8 +104,6 @@ bool t5_manifest_id_ok(const char *id)
     }
     return seglen > 0 && segs >= 2;
 }
-
-/* --- versions ------------------------------------------------------------ */
 
 typedef struct {
     uint32_t num[3];
@@ -120,7 +153,7 @@ static bool idents_ok(const char *p, size_t len)
 
 static bool semver_parse(const char *v, semver_t *sv)
 {
-    if (!v || strlen(v) >= 16) return false;
+    if (!v || strlen(v) >= T5_APP_VERSION_LEN) return false;
     const char *p = v;
     for (int i = 0; i < 3; i++) {
         if (!parse_num(&p, &sv->num[i])) return false;
@@ -206,8 +239,6 @@ int t5_version_cmp(const char *a, const char *b)
     }
 }
 
-/* --- manifest -------------------------------------------------------------- */
-
 typedef struct {
     char *err;
     size_t errlen;
@@ -232,7 +263,6 @@ static bool printable(const char *s)
     return true;
 }
 
-/* Fetch an optional string; copy into dst (cap bytes). */
 static t5_err_t get_str(ctx_t *c, const t5_toml_doc_t *d, const char *key, bool required, char *dst,
                         size_t cap, bool *present)
 {
@@ -293,21 +323,15 @@ static bool c_ident_ok(const char *p)
 
 static t5_err_t check_keys(ctx_t *c, const t5_toml_doc_t *d)
 {
-    static const char *const top[] = {"id", "name", "version", "api", "runtime", "entry", "icon",
-                                      "min_heap_mb", "min_heap_kb", "orientation"};
     for (int i = 0; i < d->n; i++) {
         const char *k = d->kv[i].key;
-        bool ok = false;
+        bool ok;
         if (strncmp(k, "permissions.", 12) == 0) {
-            ok = strcmp(k + 12, "ports") == 0 ||
-                 (t5_perm_from_name(k + 12) && strcmp(k + 12, "ports") != 0);
+            ok = strcmp(k + 12, "ports") == 0 || t5_perm_from_name(k + 12);
         } else if (strncmp(k, "background.", 11) == 0) {
-            ok = strcmp(k + 11, "entry") == 0 || strcmp(k + 11, "max_seconds") == 0;
+            ok = listed(k + 11, s_bg_keys, COUNT(s_bg_keys));
         } else {
-            for (size_t j = 0; j < sizeof top / sizeof top[0] && !ok; j++) ok = strcmp(k, top[j]) == 0;
-            for (size_t j = 0; j < sizeof s_info_keys / sizeof s_info_keys[0] && !ok; j++) {
-                ok = strcmp(k, s_info_keys[j]) == 0;
-            }
+            ok = listed(k, s_top_keys, COUNT(s_top_keys)) || listed(k, s_info_keys, COUNT(s_info_keys));
         }
         if (!ok) return bad(c, "line %d: unknown key '%s'", d->kv[i].line, k);
     }
@@ -345,13 +369,11 @@ static t5_err_t validate(ctx_t *c, const t5_toml_doc_t *d, t5_manifest_t *m)
 
     char rt[16];
     T5_RETURN_ON_ERR(get_str(c, d, "runtime", true, rt, sizeof rt, NULL));
-    if (strcmp(rt, "native") == 0) {
-        m->runtime = T5_RUNTIME_NATIVE;
-    } else if (strcmp(rt, "micropython") == 0) {
-        m->runtime = T5_RUNTIME_MICROPYTHON;
-    } else {
-        return bad(c, "runtime: unknown '%s' (native or micropython)", rt);
+    m->runtime = T5_RUNTIME_COUNT;
+    for (int i = 0; i < T5_RUNTIME_COUNT; i++) {
+        if (strcmp(rt, s_runtimes[i]) == 0) m->runtime = (t5_runtime_t)i;
     }
+    if (m->runtime == T5_RUNTIME_COUNT) return bad(c, "runtime: unknown '%s' (native or micropython)", rt);
 
     T5_RETURN_ON_ERR(get_str(c, d, "entry", true, m->entry, sizeof m->entry, NULL));
     if (!path_ok(m->entry)) return bad(c, "entry: '%s' is not a relative file path", m->entry);
@@ -369,21 +391,20 @@ static t5_err_t validate(ctx_t *c, const t5_toml_doc_t *d, t5_manifest_t *m)
     m->orientation = T5_ORIENT_LANDSCAPE;
     T5_RETURN_ON_ERR(get_str(c, d, "orientation", false, orient, sizeof orient, &present));
     if (present) {
-        if (strcmp(orient, "any") == 0) m->orientation = T5_ORIENT_ANY;
-        else if (strcmp(orient, "landscape") == 0) m->orientation = T5_ORIENT_LANDSCAPE;
-        else if (strcmp(orient, "portrait") == 0) m->orientation = T5_ORIENT_PORTRAIT;
-        else return bad(c, "orientation: unknown '%s' (any, landscape or portrait)", orient);
+        size_t i = 0;
+        while (i < COUNT(s_orients) && strcmp(orient, s_orients[i])) i++;
+        if (i == COUNT(s_orients)) return bad(c, "orientation: unknown '%s' (any, landscape or portrait)", orient);
+        m->orientation = (t5_orient_pref_t)i;
     }
 
-    /* [permissions] */
-    for (size_t i = 0; i < NPERMS; i++) {
-        if (s_perms[i].bit == T5_PERM_PORTS) continue;
+    for (size_t i = 0; i < t5_perm_count; i++) {
+        if (t5_perms[i].bit == T5_PERM_PORTS) continue;
         char key[48];
-        snprintf(key, sizeof key, "permissions.%s", s_perms[i].name);
+        snprintf(key, sizeof key, "permissions.%s", t5_perms[i].name);
         const t5_toml_value_t *v = t5_toml_get(d, key);
         if (!v) continue;
         if (v->type != T5_TOML_BOOL) return bad(c, "%s: must be true or false", key);
-        if (v->b) m->perms |= s_perms[i].bit;
+        if (v->b) m->perms |= t5_perms[i].bit;
     }
     const t5_toml_value_t *pv = t5_toml_get(d, "permissions.ports");
     if (pv) {
@@ -405,14 +426,13 @@ static t5_err_t validate(ctx_t *c, const t5_toml_doc_t *d, t5_manifest_t *m)
         if (m->nports) m->perms |= T5_PERM_PORTS;
     }
 
-    /* [background] */
     m->bg_max_seconds = T5_MANIFEST_BG_DEFAULT_SECONDS;
     if (t5_toml_has_table(d, "background")) {
         m->background = true;
         if (!(m->perms & T5_PERM_BACKGROUND_WAKE)) {
             return bad(c, "[background] needs background_wake = true in [permissions]");
         }
-        strcpy(m->bg_entry, "on_alarm");
+        strcpy(m->bg_entry, T5_MANIFEST_BG_DEFAULT_ENTRY);
         T5_RETURN_ON_ERR(get_str(c, d, "background.entry", false, m->bg_entry, sizeof m->bg_entry, NULL));
         if (!c_ident_ok(m->bg_entry)) return bad(c, "background.entry: '%s' is not a function name", m->bg_entry);
         int64_t secs = 0;

@@ -3,7 +3,7 @@
  *
  * One connection per request ("Connection: close"), so a body without a
  * length simply ends when the server closes. The response head is read
- * into one buffer (at most HEAD_MAX) and parsed in place; whatever arrived
+ * into one buffer (at most NET_HEAD_MAX) and parsed in place; whatever arrived
  * after it waits in rx and is decoded on the first reads.
  *
  * The handle is registered before connecting, so an app that exits during
@@ -19,7 +19,6 @@
 
 static const char *TAG = "net.http";
 
-#define HEAD_MAX 16384
 #define RX_CAP 2048
 #define MAX_REDIRECTS 5
 
@@ -192,7 +191,7 @@ static t5_err_t read_head(t5_http_t *h)
         end = t5np_head_end(buf, len);
         if (end) break;
         if (len + 1 >= cap) {
-            if (cap >= HEAD_MAX) {
+            if (cap >= NET_HEAD_MAX) {
                 free(buf);
                 return T5_ERR_IO;
             }
@@ -355,6 +354,11 @@ static void http_free(t5_http_t *h)
     free(h);
 }
 
+static void destroy_http(void *h)
+{
+    http_free(h);
+}
+
 static void release_http(void *h)
 {
     T5_IGNORE(t5_http_close(h));        /* app exit: nothing to report to */
@@ -376,7 +380,7 @@ t5_err_t t5_http_open(const t5_http_req_t *req, t5_http_t **out)
         free(h);
         return T5_ERR_NO_MEM;
     }
-    t5_err_t e = nh_register(&h->hdr, NH_HTTP, release_http);
+    t5_err_t e = nh_register(&h->hdr, NH_HTTP, release_http, destroy_http);
     if (e != T5_OK) {
         http_free(h);
         return e;
@@ -386,8 +390,7 @@ t5_err_t t5_http_open(const t5_http_req_t *req, t5_http_t **out)
     nh_release(h);
     if (e != T5_OK) {
         if (e != T5_ERR_STATE) T5_LOGD(TAG, "%s: %s", h->url, t5_err_str(e));
-        /* If someone else is closing it (app exit), they free it. */
-        if (nh_unregister(h, NH_HTTP) == T5_OK) http_free(h);
+        T5_IGNORE(nh_unregister(h, NH_HTTP));     /* or someone else closed it already (app exit) */
         return e;
     }
     *out = h;
@@ -520,9 +523,7 @@ bool http_poll_buffered(t5_http_t *h, int *fd)
 
 t5_err_t t5_http_close(t5_http_t *h)
 {
-    T5_RETURN_ON_ERR(nh_unregister(h, NH_HTTP));
-    http_free(h);
-    return T5_OK;
+    return nh_unregister(h, NH_HTTP);
 }
 
 int t5_http_fetch(const t5_http_req_t *req, void *buf, size_t cap, int *status)

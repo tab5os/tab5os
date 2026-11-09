@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include "t5_battery/gauge.h"
 #include "t5_battery/policy.h"
 
 uint32_t t5_discharge_step(t5_discharge_t *st, int pct, uint16_t mv, int32_t ma10, bool usb)
@@ -14,14 +15,14 @@ uint32_t t5_discharge_step(t5_discharge_t *st, int pct, uint16_t mv, int32_t ma1
         return act;
     }
     /* Voltage floors first: they protect the pack even if the gauge is wrong. */
-    bool plausible = mv >= 5000 && mv <= 9000;
-    if (plausible && mv <= T5_DIS_EMERGENCY_MV) {
+    bool plausible = t5_gauge_sample_plausible(mv);
+    if (plausible && mv <= T5_PACK_CRITICAL_MV) {
         if (++st->emergency_count >= T5_DIS_EMERGENCY_SAMPLES) return act | T5_DIS_ACT_EMERGENCY_OFF;
     } else {
         st->emergency_count = 0;
     }
-    bool light = ma10 < T5_DIS_LIGHT_LOAD_MA10;
-    bool low_v = plausible && mv <= T5_DIS_OFF_MV && light;
+    bool light = ma10 < T5_PACK_LIGHT_LOAD_MA10;
+    bool low_v = plausible && mv <= T5_PACK_EMPTY_MV && light;
     bool low_pct = pct >= 0 && pct <= T5_DIS_OFF_PCT;
     if (low_v || low_pct) {
         if (++st->off_count >= T5_DIS_OFF_SAMPLES) return act | T5_DIS_ACT_SOFT_OFF;
@@ -83,17 +84,15 @@ void t5_charge_step(const t5_charge_in_t *in, t5_charge_state_t prev, t5_charge_
         return;
     }
     out->chg_en = true;
-    bool full_v = in->mv >= 8300 && in->mv <= 9000;
-    bool tapered = in->ma10 > -T5_CHG_FULL_MA10;
+    bool full_v = in->mv >= T5_PACK_CHARGED_MV && in->mv <= T5_PACK_MAX_MV;
+    bool tapered = in->ma10 > -T5_PACK_TAPER_MA10;
     out->state = (full_v && tapered) || in->percent >= 100 ? T5_CHG_FULL : T5_CHG_CHARGING;
 }
 
 bool t5_usb_power_guess(int32_t ma10, uint16_t mv, bool host_link)
 {
-    /* On battery alone the running P4 and panel draw well over 100 mA, so a
-     * small or negative battery current means something else powers the
-     * board. The bus-voltage jump to ~4.4 V only happens on USB (bench 0.4). */
+    /* The bus-voltage jump below the pack's range only happens on USB. */
     if (host_link) return true;
-    if (mv < 5000) return true;
-    return ma10 < 500;
+    if (mv < T5_PACK_MIN_MV) return true;
+    return ma10 < T5_PACK_IDLE_MA10;
 }

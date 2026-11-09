@@ -13,6 +13,8 @@
 #define EXT_RAM_BSS_ATTR
 #endif
 #include "t5_ports/profiles.h"
+#include "t5_storage/paths.h"
+#include "ports_priv.h"
 
 static const char *TAG = "t5.profiles";
 
@@ -299,7 +301,7 @@ int t5_profile_parse(const char *json, size_t len, t5_profile_t *out, int max)
 }
 
 /* ---- registry ------------------------------------------------------------- */
-void t5_profiles_reset(void)
+void profiles_reset(void)
 {
     s_nloaded = 0;
 }
@@ -373,8 +375,8 @@ int t5_profiles_load_dir(const char *dir)
 
 int t5_profiles_reload(void)
 {
-    t5_profiles_reset();
-    return t5_profiles_load_dir("/data/profiles") + t5_profiles_load_dir("/sd/profiles");
+    profiles_reset();
+    return t5_profiles_load_dir(T5_PROFILES_DATA_DIR) + t5_profiles_load_dir(T5_PROFILES_SD_DIR);
 }
 
 /* ---- scan and suggestions ------------------------------------------------- */

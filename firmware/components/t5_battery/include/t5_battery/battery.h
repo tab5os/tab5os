@@ -44,8 +44,8 @@ void t5_battery_status(t5_battery_status_t *out);
 int t5_battery_percent(void);
 
 /* Settings (saved). */
-T5_MUST_CHECK t5_err_t t5_battery_set_charge_limit(bool on);   /* 80% stop, restart at 75% */
-T5_MUST_CHECK t5_err_t t5_battery_set_fast_charge(bool on);
+void t5_battery_set_charge_limit(bool on);   /* 80% stop, restart at 75% */
+void t5_battery_set_fast_charge(bool on);
 bool t5_battery_charge_limit(void);
 bool t5_battery_fast_charge(void);
 
@@ -56,10 +56,16 @@ T5_MUST_CHECK t5_err_t t5_battery_trace_start(const char *path);
 void t5_battery_trace_stop(void);
 const char *t5_battery_trace_path(void);   /* NULL when not logging */
 
+/* Charge mode shows the level on the panel before its first deep sleep.
+ * The composition root draws it: fn runs on the task that asked for the
+ * shutdown and returns with the panel asleep. */
+typedef void (*t5_battery_charge_screen_fn_t)(int percent, void *arg);
+void t5_battery_set_charge_screen(t5_battery_charge_screen_fn_t fn, void *arg);
+
 /* Charge mode, on a charge-timer wake: check USB and temperature, then
  * deep sleep again, or leave charge mode (soft off on unplug). Call early in
- * boot, after the expanders and the RTC. Returns only if charge mode ended
- * and the OS should boot normally. */
+ * boot, after the expanders, the RTC and storage (the charge settings).
+ * Returns only if charge mode ended and the OS should boot normally. */
 void t5_battery_charge_mode_resume(void);
 
 /* One sampling step (the task runs it; host tests too). */

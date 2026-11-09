@@ -17,6 +17,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
 #include "t5_ui/rotation.h"
@@ -26,12 +27,17 @@ extern "C" {
 #endif
 
 /* Start LVGL, the display pipeline, touch input and the UI task.
- * Needs t5_display_init() and t5_touch_init() first. */
+ * Needs t5_display_init() and t5_touch_init() first. LVGL's default group,
+ * where keyboard focus lives, exists from here on, so text fields can join
+ * it before a USB keyboard is plugged in. */
 t5_err_t t5_ui_init(void);
 bool t5_ui_ready(void);
 /* The display's backlight stays off from boot; this turns it on once the
  * next frame (with whatever the caller just put up) is on the panel. */
 void t5_ui_reveal(void);
+/* True while a USB keyboard is attached (the shell then hides the on-screen
+ * one); keypads an app makes for itself don't count. */
+bool t5_ui_hw_keyboard(void);
 
 /* Recursive lock around LVGL for tasks other than the UI task. */
 void t5_ui_lock(void);
@@ -50,12 +56,16 @@ t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms);
  * After T5_ERR_TIMEOUT the call may still be running: arg must outlive it. */
 t5_err_t t5_ui_call_paused(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms);
 
-/* The UI draws in a 100 KB internal RAM block. lend frees it (the UI draws
- * in PSRAM meanwhile, slower) for a driver that needs contiguous internal RAM,
- * such as the H.264 encoder; reclaim takes it back if it is free again. Both
- * block until done; callable from any task and before t5_ui_init. */
-void t5_ui_lend_internal(void);
-void t5_ui_reclaim_internal(void);
+/* The UI draws in a 100 KB internal RAM block. lend hands it to a driver
+ * that needs contiguous internal RAM, such as the H.264 encoder (the UI draws
+ * in PSRAM meanwhile, slower): it returns the block and its size, or NULL if
+ * the UI had none. reclaim gives it back; with NULL the UI allocates a new
+ * one if it can. Both block until done; callable from any task and before
+ * t5_ui_init. reserve allocates the block now, before t5_ui_init, while
+ * internal RAM is still in one piece. */
+void *t5_ui_lend_internal(size_t *len);
+void t5_ui_reclaim_internal(void *block);
+void t5_ui_reserve_internal(void);
 
 /* ---- rotation (plan 4.9) ----------------------------------------------- */
 t5_rotation_t t5_ui_rotation(void);
@@ -69,14 +79,22 @@ bool t5_ui_auto_rotate(void);
  * auto-rotate does nothing. */
 t5_err_t t5_ui_set_rotation_lock(bool locked);
 bool t5_ui_rotation_locked(void);
+/* The user's Auto-rotate setting (quick settings, Settings): the screen
+ * follows the board, auto-rotate on and no lock. Off locks the rotation;
+ * on also turns auto-rotate on. Saved at once. */
+bool t5_ui_follows_board(void);
+t5_err_t t5_ui_set_follows_board(bool on);
 /* Orientations the foreground app accepts (T5_ROT_* masks from orient.h). */
 void t5_ui_set_allowed_rotations(uint32_t mask);
 uint32_t t5_ui_allowed_rotations(void);
 /* Called on the UI task after every rotation (the app runtime's on_rotate). */
 typedef void (*t5_ui_rotate_hook_t)(t5_rotation_t r, void *arg);
 void t5_ui_set_rotate_hook(t5_ui_rotate_hook_t fn, void *arg);
-/* Map a raw touch point (panel pixels) to logical coordinates. */
-void t5_ui_touch_to_logical(int32_t px, int32_t py, int32_t *lx, int32_t *ly);
+
+/* LVGL's refresh period: one panel frame at 60 Hz, or 30 fps in low-power
+ * mode. */
+#define T5_UI_REFRESH_MS 16
+#define T5_UI_REFRESH_LOW_POWER_MS 33
 
 /* ---- performance counters (plan 4.2) ------------------------------------ */
 typedef struct {
@@ -93,52 +111,18 @@ typedef struct {
     uint32_t touch_to_flush_us; /* last touch press to the end of its refresh */
 } t5_ui_stats_t;
 void t5_ui_get_stats(t5_ui_stats_t *out);
-/* The last frames, newest last: when each started (ms since boot), how long
- * LVGL rendered, how many pixels it redrew, and the first redrawn area.
- * For finding what a frame redraws (`ui frames`). Returns the count. */
-typedef struct {
-    uint32_t start_ms, render_us, px, nareas;
-    uint32_t ppa_us, ppa_n;     /* blocked in PPA draws (translucent fills, alpha images) */
-    uint32_t wait_us;           /* frame end: waiting for the last band copy */
-    uint32_t flush_wait_us, flushes;   /* waiting for a free band; bands copied */
-    uint32_t copy_exec_us, copies;     /* PPA time on this frame's async copies */
-    int16_t x1, y1, x2, y2;
-} t5_ui_frame_rec_t;
-#define T5_UI_FRAME_LOG 32
-int t5_ui_frame_log(t5_ui_frame_rec_t *out, int max);
-/* Where LVGL's allocations land (lv_mem_t5.c): its internal pool, other
- * internal RAM, or PSRAM. Counts since the last reset; live and peak bytes
- * outside the pool. */
-typedef struct {
-    uint32_t pool_allocs, int_allocs, psram_allocs, failed;
-    uint32_t big_allocs, big_max;      /* over the pool's request limit */
-    uint32_t overflow_allocs;          /* small, but the pool was full */
-    int32_t int_live, int_peak, psram_live, psram_peak;
-    uint32_t pool_bytes, pool_free, pool_min_free;
-} t5_ui_lvmem_t;
-void t5_ui_lvmem(t5_ui_lvmem_t *out);
-void t5_ui_lvmem_reset(void);
-/* Integrity check of LVGL's pool (prints what it finds wrong). */
-bool t5_ui_lvmem_check(void);
-/* Test switch: LVGL's PPA unit takes solid fills (else software does). */
-void t5_ui_set_ppa_fills(bool on);
-bool t5_ui_ppa_fills(void);
-void t5_ui_set_ppa_images(bool on);
-void t5_ui_set_ppa_alpha(bool on);   /* faded/ARGB8888 images on the PPA (bench A/B) */
-void t5_ui_set_ppa_alpha_fills(bool on);
-/* LVGL's clock n times slower: animations in slow motion (1 = normal). */
-void t5_ui_set_slowmo(uint32_t n);
 /* Starts copying the newest frame into the framebuffers that lack it, and
  * returns true once they all have it (after a full-screen change: a few
  * vsyncs). For starting an animation after one. UI task only. */
-bool t5_ui_settled(void);   /* translucent fills (scrims) on the PPA (bench A/B) */
+bool t5_ui_settled(void);
 /* On-screen overlay with the counters (sys layer, top right). */
 void t5_ui_show_stats(bool on);
 
-/* ---- low-power mode ------------------------------------------------------ */
-/* Caps the refresh rate at 30 fps; md uses t5_ui_low_power() to drop ripples. */
-void t5_ui_set_low_power(bool on);
+/* Low-power mode (the power service's; main passes it to set, which any task
+ * may call, also before init, and which never waits for the UI): the refresh
+ * rate is capped at 30 fps from the UI task's next pass, and md drops ripples. */
 bool t5_ui_low_power(void);
+void t5_ui_set_low_power(bool on);
 
 /* ---- watchdog support (plan 5.12) ---------------------------------------- */
 /* Milliseconds since the UI task last finished an iteration (0 if idle-waiting). */

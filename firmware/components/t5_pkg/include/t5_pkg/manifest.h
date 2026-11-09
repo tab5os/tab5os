@@ -13,9 +13,12 @@
 extern "C" {
 #endif
 
+/* API level this firmware implements. An app built against level N runs on
+ * any OS whose level is >= N (sdk/abi/api_v<N>.sym never loses or changes a
+ * symbol). */
 #define T5_API_LEVEL 1
 
-typedef enum { T5_RUNTIME_NATIVE, T5_RUNTIME_MICROPYTHON } t5_runtime_t;
+typedef enum { T5_RUNTIME_NATIVE, T5_RUNTIME_MICROPYTHON, T5_RUNTIME_COUNT } t5_runtime_t;
 typedef enum { T5_ORIENT_ANY, T5_ORIENT_LANDSCAPE, T5_ORIENT_PORTRAIT } t5_orient_pref_t;
 
 enum { /* permission groups, bit flags */
@@ -34,27 +37,48 @@ enum { /* permission groups, bit flags */
 };
 #define T5_PERM_ALL 0xfffu
 
+/* One row per permission group: its [permissions] key and whether the person
+ * is asked on first use (the rest are granted by installing the app). */
+typedef struct {
+    uint32_t bit;
+    const char *name;
+    bool prompted;
+} t5_perm_info_t;
+extern const t5_perm_info_t t5_perms[];
+extern const size_t t5_perm_count;
+/* The groups that are asked for on first use. */
+uint32_t t5_perm_prompted(void);
+
+#define T5_APP_ID_LEN 64          /* reverse-DNS id, with its NUL */
+#define T5_APP_NAME_LEN 48
+#define T5_APP_VERSION_LEN 16
+#define T5_APP_PATH_MAX 192       /* an app's install or data dir, or a file in it */
+
 #define T5_MANIFEST_MAX_PORTS 8
+#define T5_MANIFEST_FILE_LEN 64       /* entry and icon: a path inside the package */
+#define T5_MANIFEST_PORT_LEN 16
+#define T5_MANIFEST_FUNC_LEN 32       /* [background] entry */
 #define T5_MANIFEST_MAX_HEAP_KB (32u * 1024u)
+#define T5_MANIFEST_BG_DEFAULT_ENTRY "on_alarm"
 #define T5_MANIFEST_BG_DEFAULT_SECONDS 30
 #define T5_MANIFEST_BG_MAX_SECONDS 300
 
 typedef struct {
-    char id[64];              /* reverse-DNS: [a-z0-9_]+(\.[a-z0-9_]+)+, max 63 */
-    char name[48];
-    char version[16];         /* MAJOR.MINOR.PATCH, optional -prerelease */
+    char id[T5_APP_ID_LEN];   /* reverse-DNS: [a-z0-9_]+(\.[a-z0-9_]+)+ */
+    char name[T5_APP_NAME_LEN];
+    char version[T5_APP_VERSION_LEN];   /* MAJOR.MINOR.PATCH, optional -prerelease */
     int api;                  /* 1..T5_API_LEVEL */
     t5_runtime_t runtime;     /* "native" | "micropython" */
-    char entry[64];           /* file inside the package, e.g. "app.elf" or "main.py" */
-    char icon[64];            /* optional, e.g. "icon.png"; "" if absent */
+    char entry[T5_MANIFEST_FILE_LEN];   /* file inside the package, e.g. "app.elf" or "main.py" */
+    char icon[T5_MANIFEST_FILE_LEN];    /* optional, e.g. "icon.png"; "" if absent */
     uint32_t min_heap_kb;     /* min_heap_mb * 1024 or min_heap_kb; 0 if absent */
     uint32_t perms;           /* T5_PERM_* bits requested */
-    char ports[T5_MANIFEST_MAX_PORTS][16];  /* [permissions] ports = ["grove"] */
+    char ports[T5_MANIFEST_MAX_PORTS][T5_MANIFEST_PORT_LEN];  /* [permissions] ports = ["grove"] */
     int nports;
     t5_orient_pref_t orientation;  /* default landscape */
     bool background;          /* [background] table present (needs background_wake = true) */
-    char bg_entry[32];        /* [background] entry, default "on_alarm" */
-    uint32_t bg_max_seconds;  /* [background] max_seconds, default 30, max 300 */
+    char bg_entry[T5_MANIFEST_FUNC_LEN];   /* [background] entry */
+    uint32_t bg_max_seconds;  /* [background] max_seconds */
 } t5_manifest_t;
 
 /* Parse and validate. On failure err holds a human-readable reason
@@ -63,6 +87,8 @@ T5_MUST_CHECK t5_err_t t5_manifest_parse(const char *text, size_t len, t5_manife
 
 const char *t5_perm_name(uint32_t perm_bit);       /* "camera", ...; NULL if not a single known bit */
 uint32_t t5_perm_from_name(const char *name);      /* 0 if unknown */
+/* "native", "micropython"; "?" for anything else. */
+const char *t5_runtime_name(t5_runtime_t rt);
 
 /* Valid reverse-DNS app id? Also used to reject path tricks in API calls. */
 bool t5_manifest_id_ok(const char *id);

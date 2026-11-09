@@ -46,3 +46,6 @@ usb      keyboard_present t5_usb_keyboard_present
 usb      serial_present   t5_usb_serial_present
 usb      midi_present     t5_usb_midi_present
 usb      device_count     t5_usb_device_count
+
+# Converters only (t5g_enum_out_<type>, t5g_enum_in_<type>), for hand-written bindings.
+enum     t5_charge_state_t

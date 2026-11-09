@@ -39,16 +39,21 @@ EXTRA_ROOTS = re.compile(
     r"^(t5_app_desc_t|t5_ev_\w+_t|t5_port_\w+_cfg_t|t5_event_handler_t|lv_image_dsc_t|lv_image_header_t|"
     r"stat|tm|timeval|dirent|addrinfo|sockaddr|sockaddr_in|sockaddr_in6|sockaddr_storage|in_addr|fd_set|msghdr|iovec)$")
 
-# Macros an app compiles in, and those that decide how the headers lay things out.
-MACROS = re.compile(
-    r"^(T5_API_LEVEL|T5_APP|T5_APP_ENTRY_SYMBOL|T5_APP_STATE_MAX|T5_FILE_PICK_\w+|T5_PERM_ALL|T5_EVENT_MAX_DATA|"
-    r"T5_CORE_ANY|T5_HTTP_\w+|T5_NET_FOREVER|T5_NET_APP_MAX|T5_NET_SSID_LEN|T5_NET_PASS_LEN|T5_TCP_\w+|T5_TLS_\w+|"
-    r"T5_UDP_\w+|T5_POLL_\w+|T5_MQTT_\w+|T5_PORT_FLAG_\w+|T5_PORT_WHY_LEN|T5_MODBUS_FN_\w+|T5_RAIL_KEEP_IN_SLEEP|"
-    r"T5_USB_MAX_DEVICES|T5_DP|T5_IGNORE|T5_RETURN_ON_ERR|T5_ROT_\w+|MD_PX_PER_DP|MD_LIST_ROW_\w+|MD_ICON_\w+|"
-    r"LV_VERSION_\w+|CONFIG_LV_USE_\w+|CONFIG_LV_COLOR_DEPTH\w*|CONFIG_LV_DRAW_BUF_\w+|CONFIG_LV_FONT_\w+|"
+# Every macro of the firmware headers the SDK headers reach is compiled into
+# apps; from the libraries, these: the LVGL configuration and FreeRTOS
+# constants an app's code uses.
+LIBRARY_MACROS = re.compile(
+    r"^(LV_VERSION_\w+|CONFIG_LV_USE_\w+|CONFIG_LV_COLOR_DEPTH\w*|CONFIG_LV_DRAW_BUF_\w+|CONFIG_LV_FONT_\w+|"
     r"CONFIG_FREERTOS_HZ|portTICK_PERIOD_MS|portMAX_DELAY|pdTRUE|pdFALSE|pdPASS|pdFAIL|tskNO_AFFINITY)$")
+FIRMWARE_INCLUDES = os.path.realpath(os.path.join(ROOT, "firmware", "components"))
+# The C library and lwIP headers behind exported functions.
+ABI_INCLUDES = os.path.join(ROOT, "firmware", "components", "t5_abi", "abi_includes.h")
 
-SYSTEM_HEADERS = ["sys/stat.h", "sys/time.h", "sys/select.h", "time.h", "dirent.h", "lwip/sockets.h", "lwip/netdb.h"]
+
+def system_headers():
+    with open(ABI_INCLUDES) as fh:
+        names = re.findall(r'^#include [<"]([^>"]+)[>"]', fh.read(), re.M)
+    return [n for n in names if "/" not in n or n.startswith(("sys/", "lwip/"))]
 
 
 def app_flags(build):
@@ -75,13 +80,13 @@ def compile_all(flags, tmp):
             bad += 1
     if bad:
         sys.exit(1)
-    src = "".join(f"#include <{h}>\n" for h in public_headers() + SYSTEM_HEADERS)
+    src = "".join(f"#include <{h}>\n" for h in public_headers() + system_headers())
     # Linked, because pyelftools can't apply RISC-V relocations to an object file.
     obj = os.path.join(tmp, "layout.so")
     subprocess.run([CC] + flags + ["-g", "-O0", "-fno-eliminate-unused-debug-types", "-w", "-fPIC", "-shared", "-nostdlib",
                                    "-Wl,--no-warn-rwx-segments", "-x", "c", "-", "-o", obj],
                    input=src, text=True, check=True, cwd=ROOT)
-    macros = subprocess.run([CC] + flags + ["-E", "-dM", "-x", "c", "-"], input=src, capture_output=True, text=True,
+    macros = subprocess.run([CC] + flags + ["-E", "-dD", "-x", "c", "-"], input=src, capture_output=True, text=True,
                             check=True, cwd=ROOT).stdout
     return obj, macros
 
@@ -228,11 +233,24 @@ def collect_types(d):
 
 
 def collect_macros(text):
-    items = {}
+    """From -dD output: the definitions in force at the end, each with the
+    file that made it (the line markers say which)."""
+    defs, where = {}, None
     for line in text.splitlines():
+        mark = re.match(r'# \d+ "([^"]+)"', line)
+        if mark:
+            where = mark.group(1)
+            continue
         m = re.match(r"#define (\w+)(\([^)]*\))? ?(.*)$", line)
-        if m and m.group(3).strip() and MACROS.match(m.group(1)):
-            items[f"macro {m.group(1)}{m.group(2) or ''}"] = " ".join(m.group(3).split())
+        if m:
+            defs[m.group(1)] = (m.group(2) or "", m.group(3), where)
+        elif line.startswith("#undef "):
+            defs.pop(line.split()[1], None)
+    items = {}
+    for name, (args, value, path) in defs.items():
+        ours = path and os.path.realpath(path).startswith(FIRMWARE_INCLUDES + os.sep)
+        if value.strip() and (ours or LIBRARY_MACROS.match(name)):
+            items[f"macro {name}{args}"] = " ".join(value.split())
     return items
 
 
@@ -291,7 +309,7 @@ def cmd_check(a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["gen", "check"])
-    p.add_argument("build", nargs="?", default=os.path.join(ROOT, "firmware", "build-rev1"), help="firmware build directory")
+    p.add_argument("build", nargs="?", default=os.path.join(ROOT, "firmware", "build"), help="firmware build directory")
     a = p.parse_args()
     {"gen": cmd_gen, "check": cmd_check}[a.cmd](a)
 

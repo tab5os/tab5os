@@ -14,11 +14,14 @@
 #include "esp_rom_gpio.h"
 #include "esp_rom_sys.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "hal/gpio_ll.h"
 #include "hal/mipi_dsi_brg_ll.h"
 #include "soc/gpio_sig_map.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
+#include "t5_display/timing.h"
 #include "t5_pins/pins.h"
 #include "display_hw.h"
 #include "priv/init_ili9881c.h"
@@ -41,6 +44,7 @@ static const char *TAG = "t5.display";
 #define BL_FULL (1u << 10)   /* duty 1024 = constantly on; 1023 still pulses */
 
 static esp_lcd_dsi_bus_handle_t s_bus;
+static SemaphoreHandle_t s_shown;
 static esp_lcd_panel_io_handle_t s_io;
 static esp_lcd_panel_handle_t s_panel;
 static esp_ldo_channel_handle_t s_ldo;
@@ -137,19 +141,16 @@ t5_err_t t5_display_hw_backlight(int percent)
     return chk(ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_LEDC_CH), "bl update");
 }
 
-/* Diagnostics: "<pclk_mhz> <vsync_front_porch>" in this file overrides the
- * ST712x DPI timing at boot (set with `disp timing`, removed with `disp timing reset`). */
-#define TIMING_OVERRIDE "/data/display_timing.txt"
-
 static void timing_override(esp_lcd_dpi_panel_config_t *dpi)
 {
-    FILE *f = fopen(TIMING_OVERRIDE, "r");
+    FILE *f = fopen(T5_DISPLAY_TIMING_FILE, "r");
     if (!f) return;
     unsigned pclk = 0, vfp = 0;
-    if (fscanf(f, "%u %u", &pclk, &vfp) == 2 && pclk >= 40 && pclk <= 90 && vfp >= 4 && vfp <= 400) {
+    if (fscanf(f, "%u %u", &pclk, &vfp) == 2 && pclk >= T5_DISPLAY_PCLK_MHZ_MIN && pclk <= T5_DISPLAY_PCLK_MHZ_MAX &&
+        vfp >= T5_DISPLAY_VFP_MIN && vfp <= T5_DISPLAY_VFP_MAX) {
         dpi->dpi_clock_freq_mhz = (float)pclk;
         dpi->video_timing.vsync_front_porch = vfp;
-        T5_LOGW(TAG, "timing override from " TIMING_OVERRIDE ": %u MHz, vfp %u", pclk, vfp);
+        T5_LOGW(TAG, "timing override from " T5_DISPLAY_TIMING_FILE ": %u MHz, vfp %u", pclk, vfp);
     }
     fclose(f);
 }
@@ -157,8 +158,14 @@ static void timing_override(esp_lcd_dpi_panel_config_t *dpi)
 static bool IRAM_ATTR on_frame(esp_lcd_panel_handle_t panel, esp_lcd_dpi_panel_event_data_t *ed, void *ctx)
 {
     (void)panel; (void)ed; (void)ctx;
-    t5_display_frame_isr();
-    return false;
+    BaseType_t woken = pdFALSE;
+    if (t5_display_frame_isr() && s_shown) xSemaphoreGiveFromISR(s_shown, &woken);
+    return woken == pdTRUE;
+}
+
+bool t5_display_hw_wait_shown(uint32_t timeout_ms)
+{
+    return s_shown && xSemaphoreTake(s_shown, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 }
 
 t5_err_t t5_display_hw_present(uint16_t *fb, bool cache_sync)
@@ -199,7 +206,7 @@ t5_err_t t5_display_hw_init(t5_panel_t panel, uint16_t *fbs[T5_DISPLAY_FBS])
         .video_timing = { .h_size = T5_DISPLAY_W, .v_size = T5_DISPLAY_H },
     };
     const esp_lcd_panel_dev_config_t dev = {
-        .reset_gpio_num = -1,          /* reset is on the expander, handled by the probe */
+        .reset_gpio_num = -1,          /* reset is on the expander, released by t5_bsp_panel_probe() */
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
     };
@@ -254,6 +261,8 @@ t5_err_t t5_display_hw_init(t5_panel_t panel, uint16_t *fbs[T5_DISPLAY_FBS])
     _Static_assert(T5_DISPLAY_FBS == 3, "get_frame_buffer call below takes three");
     T5_RETURN_ON_ERR(chk(esp_lcd_dpi_panel_get_frame_buffer(s_panel, 3, &fb[0], &fb[1], &fb[2]), "framebuffers"));
     for (int i = 0; i < T5_DISPLAY_FBS; i++) fbs[i] = fb[i];
+    if (!s_shown) s_shown = xSemaphoreCreateBinary();
+    if (!s_shown) return T5_ERR_NO_MEM;
     const esp_lcd_dpi_panel_event_callbacks_t cbs = { .on_frame_buf_complete = on_frame };
     T5_RETURN_ON_ERR(chk(esp_lcd_dpi_panel_register_event_callbacks(s_panel, &cbs, NULL), "frame callback"));
     const esp_lcd_video_timing_t *vt = &dpi.video_timing;

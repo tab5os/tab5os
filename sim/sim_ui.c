@@ -8,10 +8,11 @@
 #include "lvgl.h"
 #include "t5_ui/orient.h"
 #include "t5_ui/t5_ui.h"
+#include "ui_priv.h"
 
 static t5_rotation_t s_rot = T5_ROT_90;
 static uint32_t s_allowed = T5_ROT_ALL;
-static bool s_low_power, s_ready;
+static bool s_ready;
 static t5_ui_rotate_hook_t s_hook;
 static void *s_hook_arg;
 static t5_ui_stats_t s_stats;
@@ -44,7 +45,7 @@ static void second(lv_timer_t *t)
     s_stats.fps = s_frames_sec;
     s_stats.render_us_avg = s_frames_sec ? s_render_sum / s_frames_sec : 0;
     s_stats.render_us_max = s_render_max;
-    s_stats.refresh_period_ms = s_low_power ? 33 : 16;
+    s_stats.refresh_period_ms = T5_UI_REFRESH_MS;
     s_frames_sec = s_render_sum = s_render_max = 0;
 }
 
@@ -54,6 +55,7 @@ void sim_ui_attach(lv_display_t *d, t5_rotation_t r)
     lv_display_add_event_cb(d, render_event, LV_EVENT_RENDER_START, NULL);
     lv_display_add_event_cb(d, render_event, LV_EVENT_RENDER_READY, NULL);
     lv_timer_create(second, 1000, NULL);
+    ui_md_probes_init();
     s_ready = true;
 }
 
@@ -92,14 +94,16 @@ void t5_ui_set_auto_rotate(bool on) {}
 bool t5_ui_auto_rotate(void) { return false; }
 t5_err_t t5_ui_set_rotation_lock(bool locked) { return T5_OK; }
 bool t5_ui_rotation_locked(void) { return false; }
+bool t5_ui_follows_board(void) { return false; }
+t5_err_t t5_ui_set_follows_board(bool on) { return T5_OK; }
 void t5_ui_set_allowed_rotations(uint32_t mask) { s_allowed = mask ? mask : T5_ROT_ALL; }
 uint32_t t5_ui_allowed_rotations(void) { return s_allowed; }
 void t5_ui_set_rotate_hook(t5_ui_rotate_hook_t fn, void *arg) { s_hook = fn; s_hook_arg = arg; }
-void t5_ui_touch_to_logical(int32_t px, int32_t py, int32_t *lx, int32_t *ly) { *lx = px; *ly = py; }
 void t5_ui_get_stats(t5_ui_stats_t *out) { *out = s_stats; }
 void t5_ui_show_stats(bool on) {}
-void t5_ui_set_low_power(bool on) { s_low_power = on; }
-bool t5_ui_low_power(void) { return s_low_power; }
+bool t5_ui_low_power(void) { return false; }
+bool t5_ui_hw_keyboard(void) { return false; }
+bool t5_ui_settled(void) { return true; }     /* one framebuffer, always current */
 uint32_t t5_ui_stalled_ms(void) { return 0; }
 t5_err_t t5_ui_overlay_show(const uint16_t *img, int32_t w, int32_t h, int32_t x, int32_t y) { return T5_ERR_NOT_SUPPORTED; }
 t5_err_t t5_ui_overlay_restore(void) { return T5_OK; }

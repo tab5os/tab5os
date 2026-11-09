@@ -28,17 +28,10 @@ typedef struct {
 } ripple_t;
 
 static md_perf_probe_t s_probe;
-static uint32_t s_presses, s_fallbacks;
 
 void md_ripple_set_probe(md_perf_probe_t probe)
 {
     s_probe = probe;
-}
-
-void md_ripple_stats(uint32_t *presses, uint32_t *fallbacks)
-{
-    if (presses) *presses = s_presses;
-    if (fallbacks) *fallbacks = s_fallbacks;
 }
 
 static void set_r(void *v, int32_t r)
@@ -94,13 +87,11 @@ static void press(ripple_t *rp)
     lv_obj_t *obj = rp->obj;
     int32_t w = lv_obj_get_width(obj), h = lv_obj_get_height(obj);
     lv_anim_delete(rp, NULL);
-    s_presses++;
     rp->pressed = true;
     rp->expanded = false;
     rp->fading = false;
     rp->ink = md_scheme()->ripple_ink_opa;
     rp->fade_only = s_probe && !s_probe();
-    if (rp->fade_only) s_fallbacks++;
 
     if (is_round(obj)) {
         rp->c = (lv_point_t){ w / 2, h / 2 };

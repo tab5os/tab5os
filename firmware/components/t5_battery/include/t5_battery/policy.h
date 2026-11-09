@@ -4,6 +4,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "t5_battery/pack.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -12,10 +13,7 @@ extern "C" {
 /* ---- discharge ----------------------------------------------------------- */
 #define T5_DIS_WARN_PCT 15
 #define T5_DIS_LOW_POWER_PCT 10
-#define T5_DIS_OFF_PCT 5
-#define T5_DIS_OFF_MV 6500           /* under light load */
-#define T5_DIS_LIGHT_LOAD_MA10 5000  /* 500 mA */
-#define T5_DIS_EMERGENCY_MV 6300     /* any load */
+#define T5_DIS_OFF_PCT 5             /* or T5_PACK_EMPTY_MV under light load */
 #define T5_DIS_OFF_SAMPLES 5         /* consecutive 1 Hz samples */
 #define T5_DIS_EMERGENCY_SAMPLES 3
 #define T5_DIS_REARM_PCT 20          /* warn again after recovering past this */
@@ -58,7 +56,6 @@ const char *t5_charge_state_name(t5_charge_state_t s);
 #define T5_CHG_TEMP_RESUME_C10 470
 #define T5_CHG_LIMIT_PCT 80
 #define T5_CHG_LIMIT_RESTART_PCT 75
-#define T5_CHG_FULL_MA10 1000        /* taper below 100 mA at full voltage */
 #define T5_CHG_TEMP_UNKNOWN INT16_MIN
 
 typedef struct {

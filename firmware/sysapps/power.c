@@ -8,7 +8,6 @@
 #include <string.h>
 #include "t5/power.h"
 #include "t5/system.h"
-#include "sysapp_system.h"
 #include "sysapps_priv.h"
 
 static sa_nav_t s_nav;
@@ -35,8 +34,7 @@ static lv_obj_t *tile(lv_obj_t *parent, const char *caption, lv_obj_t **value)
 
 static void limit_changed(lv_event_t *e)
 {
-    sa_report(t5_battery_set_charge_limit(lv_obj_has_state(lv_event_get_target_obj(e), LV_STATE_CHECKED)),
-              "change the charge limit");
+    t5_battery_set_charge_limit(lv_obj_has_state(lv_event_get_target_obj(e), LV_STATE_CHECKED));
 }
 
 static void reset_clicked(lv_event_t *e)
@@ -192,7 +190,7 @@ static void on_destroy(t5_app_t *app)
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };
 
 const t5_builtin_app_t sysapp_power = {
-    .id = "com.t5.power",
+    .id = T5_APP_ID_POWER,
     .name = "Power",
     .desc = &s_desc,
     .perms = T5_PERM_SYSTEM,

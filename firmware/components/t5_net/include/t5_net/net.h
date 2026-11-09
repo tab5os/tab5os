@@ -89,9 +89,6 @@ t5_err_t t5_net_sync_time(void);
  * Runs on the service task; T5_EV_NET_C6_UPDATE reports the result. */
 t5_err_t t5_net_c6_update(bool force);
 
-/* Internal: ask the net task to start or stop BLE to match its setting. */
-void t5_net_ble_changed(void);
-
 /* Antenna (plan 3.7): RF_ANT_SEL on EXP0 P0, saved. */
 typedef enum { T5_ANT_INTERNAL, T5_ANT_EXTERNAL } t5_antenna_t;
 t5_err_t t5_radio_antenna_set(t5_antenna_t ant);

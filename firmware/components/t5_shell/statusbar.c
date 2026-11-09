@@ -10,14 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "shell_priv.h"
+#include "t5_ui/t5_ui.h"
 
 static lv_obj_t *s_bar, *s_home, *s_time, *s_mic, *s_cam, *s_usb, *s_kbd, *s_ble, *s_wifi, *s_bat, *s_pct;
 static bool s_in_app;
-
-static void set_text(lv_obj_t *l, const char *text)
-{
-    if (strcmp(lv_label_get_text(l), text)) lv_label_set_text(l, text);
-}
 
 static void set_shown(lv_obj_t *o, bool shown)
 {
@@ -118,50 +114,34 @@ void statusbar_set_in_app(bool in_app)
     if (s_home) set_shown(s_home, in_app);
 }
 
-static const char *battery_icon(const shell_status_t *st)
-{
-    if (st->charging || (st->usb_power && st->battery_pct >= 99)) return MD_ICON_BATTERY_CHARGING_FULL;
-    if (st->low_power) return MD_ICON_BATTERY_SAVER;
-    if (st->battery_pct >= 0 && st->battery_pct <= 15) return MD_ICON_BATTERY_ALERT;
-    if (st->battery_pct >= 95) return MD_ICON_BATTERY_FULL;
-    return MD_ICON_BATTERY_STD;
-}
-
 void statusbar_update(void)
 {
     if (!s_bar) return;
     const md_scheme_t *sc = md_scheme();
     shell_status_t st;
     shell_sys_status(&st);
-    struct tm tm;
-    char buf[24];
-    if (shell_sys_time(&tm)) {
-        snprintf(buf, sizeof buf, "%02d:%02d", tm.tm_hour, tm.tm_min);
-        set_text(s_time, buf);
-    } else {
-        set_text(s_time, "--:--");
-    }
+    shell_show_time(s_time, NULL);
     set_shown(s_mic, st.mic_active);
     set_shown(s_cam, st.cam_active);
     set_shown(s_usb, st.usb_devices || st.usb_storage);
-    set_shown(s_kbd, st.hw_keyboard);
-    if (st.hw_keyboard != keyboard_hw_present()) t5_shell_set_hw_keyboard(st.hw_keyboard);
+    set_shown(s_kbd, t5_ui_hw_keyboard());
     set_shown(s_ble, st.ble_on);
-    if (st.ble_on) set_text(s_ble, st.ble_connected ? MD_ICON_BLUETOOTH_CONNECTED : MD_ICON_BLUETOOTH);
+    if (st.ble_on) shell_set_text(s_ble, st.ble_connected ? MD_ICON_BLUETOOTH_CONNECTED : MD_ICON_BLUETOOTH);
     set_shown(s_wifi, st.wifi_on);
     if (st.wifi_on) {
-        set_text(s_wifi, st.wifi_connected ? MD_ICON_WIFI : MD_ICON_WIFI_OFF);
+        shell_set_text(s_wifi, st.wifi_connected ? MD_ICON_WIFI : MD_ICON_WIFI_OFF);
         lv_opa_t o = !st.wifi_connected ? sc->on_surface.disabled
                      : st.wifi_rssi > -60  ? sc->on_surface.high
                      : st.wifi_rssi > -72  ? sc->on_surface.medium
                                            : sc->on_surface.disabled;
         set_opa(s_wifi, o);
     }
-    set_text(s_bat, battery_icon(&st));
+    shell_set_text(s_bat, shell_battery_icon(&st));
     set_shown(s_pct, st.battery_pct >= 0);
     if (st.battery_pct >= 0) {
+        char buf[8];
         snprintf(buf, sizeof buf, "%d%%", st.battery_pct);
-        set_text(s_pct, buf);
+        shell_set_text(s_pct, buf);
     }
 }
 

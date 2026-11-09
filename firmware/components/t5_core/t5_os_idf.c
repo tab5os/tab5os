@@ -7,11 +7,8 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "t5_core/os.h"
-#include "sdkconfig.h"
-
-/* TLS slot for the app context. IDF's pthread layer uses slot 0. */
-#define T5_TLS_APP_CTX (CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS - 1)
-_Static_assert(CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS >= 2, "need a TLS slot for the app context");
+#include "t5_core/task_tls.h"
+#include "t5_os_priv.h"
 
 t5_mutex_t t5_mutex_create(void)
 {
@@ -38,6 +35,14 @@ void t5_mutex_unlock(t5_mutex_t m)
     xSemaphoreGiveRecursive((SemaphoreHandle_t)m);
 }
 
+void t5_mutex_release_all(t5_mutex_t m)
+{
+    if (!m) return;
+    while (xSemaphoreGetMutexHolder((SemaphoreHandle_t)m) == xTaskGetCurrentTaskHandle()) {
+        if (xSemaphoreGiveRecursive((SemaphoreHandle_t)m) != pdTRUE) break;
+    }
+}
+
 int64_t t5_time_us(void)
 {
     return esp_timer_get_time();
@@ -50,12 +55,12 @@ void t5_delay_ms(uint32_t ms)
 
 void *t5_app_ctx_get(void)
 {
-    return pvTaskGetThreadLocalStoragePointer(NULL, T5_TLS_APP_CTX);
+    return pvTaskGetThreadLocalStoragePointer(NULL, T5_TASK_TLS_APP_CTX);
 }
 
 void t5_app_ctx_set(void *ctx)
 {
-    vTaskSetThreadLocalStoragePointer(NULL, T5_TLS_APP_CTX, ctx);
+    vTaskSetThreadLocalStoragePointer(NULL, T5_TASK_TLS_APP_CTX, ctx);
 }
 
 static t5_task_hook_t s_hook, s_exit_hook;
@@ -103,6 +108,14 @@ void t5_task_guard_margin(t5_task_t task)
     }
 }
 
+bool t5_task_on_a_core(TaskHandle_t t)
+{
+    for (int c = 0; c < portNUM_PROCESSORS; c++) {
+        if (xTaskGetCurrentTaskHandleForCore(c) == t) return true;
+    }
+    return false;
+}
+
 static margin_t *margin_find(TaskHandle_t t)
 {
     for (int i = 0; i < MAX_MARGIN_TASKS; i++) {
@@ -125,13 +138,7 @@ static void margin_delete(TaskHandle_t t, margin_t *m)
     StaticTask_t *tcb = (StaticTask_t *)t;
     m->task = NULL;
     vTaskSuspend(t);
-    for (bool on_core = true; on_core;) {
-        on_core = false;
-        for (int c = 0; c < portNUM_PROCESSORS; c++) {
-            if (xTaskGetCurrentTaskHandleForCore(c) == t) on_core = true;
-        }
-        if (on_core) taskYIELD();
-    }
+    while (t5_task_on_a_core(t)) taskYIELD();
     vTaskDelete(t);              /* not current anywhere: done before it returns */
     heap_caps_free(stack);
     vPortFree(tcb);

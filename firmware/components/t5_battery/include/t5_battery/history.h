@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Charge history for the Power app (plan 6.8): one point every 5 minutes,
- * the last 24 hours, kept across reboots. Pure logic, host-tested.
+ * the last 24 hours, kept across reboots. The ring is pure logic; the
+ * service's copy (t5_battery_history) is here, not in battery.h, because
+ * reading it needs the system permission (t5/system.h).
  */
 #pragma once
 #include <stdbool.h>
@@ -38,7 +40,7 @@ void t5_bat_hist_add(t5_bat_hist_t *h, const t5_bat_hist_pt_t *p);
 int t5_bat_hist_read(const t5_bat_hist_t *h, t5_bat_hist_pt_t *out, int max);
 bool t5_bat_hist_valid(const t5_bat_hist_t *h);
 
-/* The service's copy (t5_battery). */
+/* The service's copy, oldest first. */
 int t5_battery_history(t5_bat_hist_pt_t *out, int max);
 
 #ifdef __cplusplus

@@ -9,35 +9,33 @@
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_random.h"
-#include "esp_system.h"
 #include "psa/crypto.h"
 #include "md/md.h"
 #include "t5_app/apps.h"
+#include "t5_app/registry.h"
 #include "t5_core/log.h"
 #include "t5_core/logring.h"
 #include "t5_core/os.h"
+#include "t5_dev/control.h"
 #include "t5_dev/dev.h"
-#include "t5_display/t5_display.h"
 #include "t5_pkg/manifest.h"
 #include "t5_pkg/pkg.h"
-#include "t5_power/autosave.h"
 #include "t5_power/power.h"
 #include "t5_ota/ota.h"
 #include "t5_py/py.h"
 #include "t5_shell/shell.h"
+#include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_ui/t5_ui.h"
 
 static const char *TAG = "t5.dev";
 
-#define ENABLE_FILE T5_SYS_DIR "/devmode"
-#define CLIENTS_FILE T5_SYS_DIR "/devclients.bin"
+#define ENABLE_FILE "devmode"
+#define CLIENTS_FILE "devclients.bin"
 #define CLIENTS_VERSION 1
-#define PUSH_PATH "/data/tmp/devpush.t5app"
-#define PUSH_MAX (16u * 1024u * 1024u)
+#define PUSH_PATH T5_TMP_DIR "/devpush.t5app"
 #define PAIR_TIMEOUT_MS (120 * 1000)
 #define PAIR_TRIES 3
-#define MAX_EXTRA 4
 
 typedef struct {
     char name[T5_DEV_NAME_LEN];
@@ -50,19 +48,11 @@ typedef struct {
     client_t c[T5_DEV_MAX_CLIENTS];
 } clients_db_t;
 
-typedef struct {
-    char uri[32];
-    int method;
-    t5_dev_handler_t fn;
-} extra_t;
-
 static t5_mutex_t s_lock;
 static clients_db_t s_db;
 static httpd_handle_t s_httpd;
 static bool s_enabled;
 static uint32_t s_requests, s_denied;
-static extra_t s_extra[MAX_EXTRA];
-static int s_nextra;
 
 static struct {
     bool active;
@@ -74,7 +64,6 @@ static struct {
     lv_obj_t *dialog;
 } s_pair;
 
-/* ---- clients ------------------------------------------------------------------------- */
 static void sha256(const void *data, size_t n, uint8_t out[32])
 {
     size_t len = 0;
@@ -84,8 +73,10 @@ static void sha256(const void *data, size_t n, uint8_t out[32])
 static void db_load(void)
 {
     size_t len = 0;
+    char path[96];
     memset(&s_db, 0, sizeof s_db);
-    if (t5_storage_blob_read(CLIENTS_FILE, CLIENTS_VERSION, &s_db, sizeof s_db, &len) != T5_OK || len != sizeof s_db ||
+    if (t5_sys_path(path, sizeof path, CLIENTS_FILE) != T5_OK ||
+        t5_storage_blob_read(path, CLIENTS_VERSION, &s_db, sizeof s_db, &len) != T5_OK || len != sizeof s_db ||
         s_db.n > T5_DEV_MAX_CLIENTS) {
         memset(&s_db, 0, sizeof s_db);
     }
@@ -93,7 +84,9 @@ static void db_load(void)
 
 static void db_save(void)
 {
-    if (t5_storage_blob_write(CLIENTS_FILE, CLIENTS_VERSION, &s_db, sizeof s_db) != T5_OK) {
+    char path[96];
+    if (t5_sys_path(path, sizeof path, CLIENTS_FILE) != T5_OK ||
+        t5_storage_blob_write(path, CLIENTS_VERSION, &s_db, sizeof s_db) != T5_OK) {
         T5_LOGW(TAG, "can't save paired clients");
     }
 }
@@ -172,7 +165,7 @@ t5_err_t t5_dev_forget_all(void)
     return T5_OK;
 }
 
-/* ---- pairing dialog (UI task) ----------------------------------------------------------- */
+/* The pairing dialog (UI task). */
 static void pair_answer(int button, void *ud)
 {
     (void)ud;
@@ -211,16 +204,14 @@ static void pair_close(void *arg)
     if (d) md_dialog_close(d);
 }
 
-/* ---- HTTP helpers ------------------------------------------------------------------------------ */
 typedef struct {
-    t5_dev_handler_t fn;
+    int (*fn)(httpd_req_t *req);
     bool auth;
 } route_t;
 
 /* httpd_req_recv, but a stalled client gets RECV_TIMEOUTS_MAX receive
- * timeouts (10 s each, cfg.recv_wait_timeout), not forever: the loops below
- * used to retry a timeout without a bound and hold the server
- * (docs/coding-standard.md, rule 2). */
+ * timeouts (10 s each, cfg.recv_wait_timeout), not forever, so it can't
+ * hold the server (docs/coding-standard.md, rule 2). */
 #define RECV_TIMEOUTS_MAX 3
 static int recv_some(httpd_req_t *req, char *buf, size_t n)
 {
@@ -289,7 +280,6 @@ static esp_err_t dispatch(httpd_req_t *req)
     return rc == 0 ? ESP_OK : ESP_FAIL;
 }
 
-/* ---- routes --------------------------------------------------------------------------------------- */
 static int h_info(httpd_req_t *req)
 {
     const esp_app_desc_t *d = esp_app_get_description();
@@ -382,9 +372,9 @@ static int h_pair_confirm(httpd_req_t *req)
 
 static int h_apps(httpd_req_t *req)
 {
-    t5_app_entry_t *list = calloc(48, sizeof *list);
+    t5_app_entry_t *list = calloc(T5_APPS_MAX, sizeof *list);
     if (!list) return send_err(req, "500 Internal Server Error", "no memory") == ESP_OK ? 0 : -1;
-    int n = t5_apps_list(list, 48);
+    int n = t5_apps_list(list, T5_APPS_MAX);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr_chunk(req, "[");
     char buf[256];
@@ -401,11 +391,9 @@ static int h_apps(httpd_req_t *req)
     return 0;
 }
 
-/* Receive the body into a file. */
 static t5_err_t recv_to_file(httpd_req_t *req, const char *path, size_t max)
 {
     if (req->content_len == 0 || req->content_len > max) return T5_ERR_INVALID_ARG;
-    mkdir("/data/tmp", 0755);
     FILE *f = fopen(path, "wb");
     if (!f) return T5_ERR_IO;
     char *buf = malloc(8192);
@@ -430,25 +418,14 @@ static int h_install(httpd_req_t *req)
 {
     char dest[8] = "auto";
     query(req, "dest", dest, sizeof dest);
-    int d = !strcmp(dest, "sd") ? 1 : !strcmp(dest, "data") ? 2 : 0;
-    t5_err_t e = recv_to_file(req, PUSH_PATH, PUSH_MAX);
+    t5_err_t e = recv_to_file(req, PUSH_PATH, T5_DEV_PUSH_MAX);
     if (e != T5_OK) {
         return send_err(req, "400 Bad Request", e == T5_ERR_INVALID_ARG ? "empty or too big" : "upload failed") ==
                        ESP_OK ? 0 : -1;
     }
-    /* A running copy of the same app goes first. */
-    t5_manifest_t *man = malloc(sizeof *man);
+    t5_manifest_t *man = calloc(1, sizeof *man);
     char err[200] = "";
-    if (man && t5_pkg_inspect(PUSH_PATH, man, err, sizeof err) == T5_OK) {
-        char cur[64];
-        t5_apps_current(cur, sizeof cur);
-        if (!strcmp(cur, man->id)) {
-            e = t5_apps_exit_wait(3000);
-            if (e != T5_OK) snprintf(err, sizeof err, "the running copy didn't stop (%s)", t5_err_str(e));
-        }
-    }
-    /* Never install over a copy that's still running. */
-    if (e == T5_OK) e = t5_apps_install(PUSH_PATH, d, err, sizeof err);
+    e = man ? t5_apps_install(PUSH_PATH, t5_apps_dest_parse(dest), man, err, sizeof err) : T5_ERR_NO_MEM;
     remove(PUSH_PATH);
     char buf[320];
     if (e != T5_OK) {
@@ -459,7 +436,7 @@ static int h_install(httpd_req_t *req)
         free(man);
         return send_json(req, "422 Unprocessable Entity", buf) == ESP_OK ? 0 : -1;
     }
-    snprintf(buf, sizeof buf, "{\"id\":\"%s\",\"version\":\"%s\"}", man ? man->id : "", man ? man->version : "");
+    snprintf(buf, sizeof buf, "{\"id\":\"%s\",\"version\":\"%s\"}", man->id, man->version);
     free(man);
     return send_json(req, NULL, buf) == ESP_OK ? 0 : -1;
 }
@@ -498,7 +475,7 @@ static int h_logs(httpd_req_t *req)
     char v[24];
     uint64_t pos = query(req, "pos", v, sizeof v) ? strtoull(v, NULL, 10) : t5_log_head();
     uint32_t wait = query(req, "wait", v, sizeof v) ? (uint32_t)strtoul(v, NULL, 10) : 0;
-    if (wait > 5000) wait = 5000;      /* the server has one task: keep it free */
+    if (wait > T5_DEV_LOG_WAIT_MAX_MS) wait = T5_DEV_LOG_WAIT_MAX_MS;
     uint32_t t0 = t5_time_ms();
     while (t5_log_head() <= pos && t5_time_ms() - t0 < wait) t5_delay_ms(50);
     char *buf = malloc(T5_LOG_RING_BYTES);
@@ -518,24 +495,20 @@ static int h_screenshot(httpd_req_t *req)
     char v[8];
     int div = query(req, "div", v, sizeof v) ? atoi(v) : 2;
     if (div < 1 || div > 8) div = 2;
-    int i = t5_display_scanout();
-    const uint16_t *fb = i >= 0 ? t5_display_fb_n(i) : NULL;
-    if (!fb) return send_err(req, "503 Service Unavailable", "no framebuffer") == ESP_OK ? 0 : -1;
-    int w = T5_DISPLAY_W / div, h = T5_DISPLAY_H / div;
-    uint16_t *out = heap_caps_malloc((size_t)w * h * 2, MALLOC_CAP_SPIRAM);
-    if (!out) return send_err(req, "500 Internal Server Error", "no memory") == ESP_OK ? 0 : -1;
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) out[y * w + x] = fb[(size_t)(y * div) * T5_DISPLAY_W + x * div];
+    t5_dev_shot_t shot;
+    t5_err_t e = t5_dev_shot(div, &shot);
+    if (e == T5_ERR_STATE) return send_err(req, "503 Service Unavailable", "no framebuffer") == ESP_OK ? 0 : -1;
+    if (e != T5_OK) return send_err(req, "500 Internal Server Error", "no memory") == ESP_OK ? 0 : -1;
     char hw[8], hh[8], hr[8];
-    snprintf(hw, sizeof hw, "%d", w);
-    snprintf(hh, sizeof hh, "%d", h);
-    snprintf(hr, sizeof hr, "%d", (int)t5_ui_rotation() * 90);
+    snprintf(hw, sizeof hw, "%d", shot.w);
+    snprintf(hh, sizeof hh, "%d", shot.h);
+    snprintf(hr, sizeof hr, "%d", shot.rotation);
     httpd_resp_set_type(req, "application/octet-stream");
     httpd_resp_set_hdr(req, "X-Width", hw);
     httpd_resp_set_hdr(req, "X-Height", hh);
     httpd_resp_set_hdr(req, "X-Rotation", hr);
-    esp_err_t r = httpd_resp_send(req, (const char *)out, (ssize_t)w * h * 2);
-    heap_caps_free(out);
+    esp_err_t r = httpd_resp_send(req, (const char *)shot.px, (ssize_t)shot.w * shot.h * 2);
+    t5_dev_shot_free(&shot);
     return r == ESP_OK ? 0 : -1;
 }
 
@@ -568,54 +541,39 @@ static int h_py(httpd_req_t *req)
     }
     src[got] = 0;
     t5_py_state_t st = t5_py_exec_capture(src, out, PY_OUT_MAX, 30000);
-    static const char *const names[] = { "running", "done", "exception", "stopped" };
     httpd_resp_set_type(req, "text/plain");
-    httpd_resp_set_hdr(req, "X-Py-State", names[st]);
+    httpd_resp_set_hdr(req, "X-Py-State", t5_py_state_name(st));
     esp_err_t r = httpd_resp_sendstr(req, out);
     free(src);
     heap_caps_free(out);
     return r == ESP_OK ? 0 : -1;
 }
 
-#define CHUNK 8192
-/* ---- POST /api/ota (body: a .t5os; plan 9.1) ------------------------------------------------- */
+/* POST /api/ota, body: a .t5os (plan 9.1). */
+typedef struct {
+    httpd_req_t *req;
+    size_t left;
+} body_src_t;
+
+static int body_read(void *ctx, void *buf, size_t n)
+{
+    body_src_t *b = ctx;
+    if (!b->left) return 0;
+    int r = recv_some(b->req, buf, n < b->left ? n : b->left);
+    if (r <= 0) return T5_ERR_IO;
+    b->left -= (size_t)r;
+    return r;
+}
+
 static int h_ota(httpd_req_t *req)
 {
     char err[128] = "";
     char q[32] = "", v[4] = "";
     bool reboot = httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
                   httpd_query_key_value(q, "reboot", v, sizeof v) == ESP_OK && v[0] == '1';
-    t5_ota_hdr_t hdr;
-    size_t got = 0;
-    t5_err_t e = T5_OK;
-    if (req->content_len < sizeof hdr) e = T5_ERR_INVALID_ARG;
-    while (e == T5_OK && got < sizeof hdr) {
-        int r = recv_some(req, (char *)&hdr + got, sizeof hdr - got);
-        if (r <= 0) e = T5_ERR_IO;
-        else got += (size_t)r;
-    }
-    t5_ota_t *o = NULL;
-    /* A paired computer may push unsigned developer images. */
-    if (e == T5_OK) e = t5_ota_begin(&hdr, true, &o, err, sizeof err);
-    char *buf = e == T5_OK ? malloc(CHUNK) : NULL;
-    size_t left = req->content_len - sizeof hdr;
-    while (e == T5_OK && left > 0) {
-        int r = recv_some(req, buf, left < CHUNK ? left : CHUNK);
-        if (r <= 0) {
-            e = T5_ERR_IO;
-            snprintf(err, sizeof err, "upload interrupted");
-            break;
-        }
-        e = t5_ota_write(o, buf, (size_t)r);
-        if (e != T5_OK) {
-            snprintf(err, sizeof err, "%s", e == T5_ERR_NOT_SUPPORTED ? "built for another chip revision"
-                                            : e == T5_ERR_INVALID_ARG ? "not a Tab5 OS image" : "write failed");
-        }
-        left -= (size_t)r;
-    }
-    free(buf);
-    if (e == T5_OK) e = t5_ota_finish(o, err, sizeof err);
-    else t5_ota_abort(o);
+    t5_ota_hdr_t hdr = { 0 };
+    body_src_t src = { .req = req, .left = req->content_len };
+    t5_err_t e = t5_ota_install_stream(body_read, &src, T5_OTA_FROM_DEV, true, &hdr, err, sizeof err);
     char resp[200];
     if (e != T5_OK) {
         if (!err[0]) snprintf(err, sizeof err, "%s", t5_err_str(e));
@@ -627,16 +585,10 @@ static int h_ota(httpd_req_t *req)
     }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
-    if (e == T5_OK && reboot) {
-        T5_LOG_ON_ERR(TAG, t5_autosave_now());
-        t5_delay_ms(500);
-        esp_restart();
-    }
+    if (e == T5_OK && reboot) t5_power_restart();
     return e == T5_OK ? 0 : -1;
 }
 
-
-/* ---- server ----------------------------------------------------------------------------------- */
 typedef struct {
     const char *uri;
     httpd_method_t method;
@@ -657,15 +609,6 @@ static const def_t s_routes[] = {
     { "/api/py", HTTP_POST, { h_py, true } },
     { "/api/ota", HTTP_POST, { h_ota, true } },
 };
-static route_t s_extra_routes[MAX_EXTRA];
-
-static void register_extra(int i)
-{
-    s_extra_routes[i] = (route_t){ s_extra[i].fn, true };
-    httpd_uri_t u = { .uri = s_extra[i].uri, .method = (httpd_method_t)s_extra[i].method, .handler = dispatch,
-                      .user_ctx = &s_extra_routes[i] };
-    httpd_register_uri_handler(s_httpd, &u);
-}
 
 static t5_err_t server_start(void)
 {
@@ -673,7 +616,7 @@ static t5_err_t server_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = T5_DEV_PORT;
     cfg.ctrl_port = 32770;
-    cfg.max_uri_handlers = (uint16_t)(sizeof s_routes / sizeof s_routes[0] + MAX_EXTRA);
+    cfg.max_uri_handlers = (uint16_t)(sizeof s_routes / sizeof s_routes[0]);
     cfg.stack_size = 12288;
     cfg.lru_purge_enable = true;
     cfg.max_open_sockets = 4;
@@ -689,7 +632,6 @@ static t5_err_t server_start(void)
                           .user_ctx = (void *)&s_routes[i].route };
         httpd_register_uri_handler(s_httpd, &u);
     }
-    for (int i = 0; i < s_nextra; i++) register_extra(i);
     T5_LOGI(TAG, "developer mode: listening on port %d, %u paired", T5_DEV_PORT, (unsigned)s_db.n);
     return T5_OK;
 }
@@ -702,26 +644,15 @@ static void server_stop(void)
     T5_LOGI(TAG, "developer mode: stopped listening");
 }
 
-t5_err_t t5_dev_add_handler(const char *uri, int method, t5_dev_handler_t fn)
-{
-    if (!uri || !fn || s_nextra >= MAX_EXTRA) return T5_ERR_INVALID_ARG;
-    snprintf(s_extra[s_nextra].uri, sizeof s_extra[s_nextra].uri, "%s", uri);
-    s_extra[s_nextra].method = method;
-    s_extra[s_nextra].fn = fn;
-    s_nextra++;
-    if (s_httpd) register_extra(s_nextra - 1);
-    return T5_OK;
-}
-
-/* ---- public -------------------------------------------------------------------------------------- */
 t5_err_t t5_dev_init(void)
 {
     if (!s_lock) s_lock = t5_mutex_create();
     if (!s_lock) return T5_ERR_NO_MEM;
     psa_crypto_init();
     db_load();
+    char path[96];
     struct stat st;
-    s_enabled = stat(ENABLE_FILE, &st) == 0;
+    s_enabled = t5_sys_path(path, sizeof path, ENABLE_FILE) == T5_OK && stat(path, &st) == 0;
     return s_enabled ? server_start() : T5_OK;
 }
 
@@ -733,7 +664,9 @@ bool t5_dev_enabled(void)
 t5_err_t t5_dev_set_enabled(bool on)
 {
     if (!s_lock) return T5_ERR_STATE;
-    t5_err_t e = on ? t5_storage_write_atomic(ENABLE_FILE, "1", 1) : (remove(ENABLE_FILE), T5_OK);
+    char path[96];
+    t5_err_t e = t5_sys_path(path, sizeof path, ENABLE_FILE);
+    if (e == T5_OK) e = on ? t5_storage_write_atomic(path, "1", 1) : (remove(path), T5_OK);
     s_enabled = on;
     if (on) return server_start() != T5_OK ? T5_ERR_FAIL : e;
     server_stop();

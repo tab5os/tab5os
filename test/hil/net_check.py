@@ -8,17 +8,15 @@
 2. Reconnect after a C6 reset: `net reset` N times. Pass: each one is back
    to "connected" within 5 s.
 
-    ~/.espressif/python_env/idf6.1_py3.15_env/bin/python test/hil/net_check.py
+    tools/t5/t5 hil net_check
 """
 import argparse
-import os
 import re
-import socket
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools", "t5"))
-from t5link import Tab5  # noqa: E402
+import _net as hn
+from t5link import connect
 
 PORT = 7777
 
@@ -29,18 +27,20 @@ def main():
     ap.add_argument("--resets", type=int, default=5)
     a = ap.parse_args()
     ok = True
-    with Tab5(timeout=40) as t:
+    with connect(cmd_timeout=40) as t:
         st = t.cmd("net")
         m = re.search(r"^ip (\d+\.\d+\.\d+\.\d+)", st, re.M)
         if not m:
             print("not connected:\n" + st)
             return 1
         ip = m.group(1)
-        t.cmd(f"net echo {PORT}")
-        time.sleep(1)
-        s = socket.create_connection((ip, PORT), timeout=5)
+        if "listening" not in t.cmd(f"net echo {PORT}"):
+            print("the echo server didn't start")
+            return 1
+        s = hn.connect_retry(ip, PORT)
         t.cmd("power sleep")
-        time.sleep(3)
+        if not t.poll("power", r"^state sleep,", 10, every=0.2):
+            print("the Tab5 didn't go to Sleep")
         worst, asleep = 0.0, 0
         for i in range(a.packets):
             t0 = time.time()

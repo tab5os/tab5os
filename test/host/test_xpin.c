@@ -1,29 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "unity.h"
 #include "t5_bsp/xpin.h"
+#include "t5_bsp/xpin_test.h"
 #include "t5_i2c/t5_i2c.h"
 #include "t5_mocks.h"
 
 static mock_i2c_dev_t *e0, *e1;
 
-static void power_on(mock_i2c_dev_t *e)
-{
-    /* PI4IOE5V6408 reset state: all inputs, outputs hi-z, pull-down enabled. */
-    for (int i = 0; i < 256; i++) e->regs[i] = 0;
-    e->regs[0x01] = 0xA2;   /* ID 0b101, reset flag set */
-    e->regs[0x07] = 0xFF;
-    e->regs[0x0B] = 0xFF;
-    e->wlog_n = 0;
-}
-
 void setUp(void)
 {
     mock_reset_all();
     t5_xpin_reset_for_test();
-    e0 = mock_i2c_add(0x43, false);
-    e1 = mock_i2c_add(0x44, false);
-    power_on(e0);
-    power_on(e1);
+    e0 = mock_expander_add(T5_I2C_ADDR_EXP0);
+    e1 = mock_expander_add(T5_I2C_ADDR_EXP1);
 }
 void tearDown(void) {}
 
@@ -99,7 +88,7 @@ static void test_reapply_after_chip_reset(void)
     t5_xpin_init();
     t5_xpin_apply_boot_defaults();
     uint8_t want_dir = e1->regs[0x03], want_out = e1->regs[0x05];
-    power_on(e1);   /* the chip lost power: registers back to defaults */
+    mock_expander_power_on(e1);   /* the chip lost power: registers back to defaults */
     TEST_ASSERT_EQUAL(T5_OK, t5_i2c_recover());   /* recovery callback re-applies the shadow */
     TEST_ASSERT_EQUAL_HEX8(want_dir, e1->regs[0x03]);
     TEST_ASSERT_EQUAL_HEX8(want_out, e1->regs[0x05]);

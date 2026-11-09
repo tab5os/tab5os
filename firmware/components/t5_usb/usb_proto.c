@@ -41,8 +41,7 @@ bool usb_midi_pack(const uint8_t *msg, size_t len, uint8_t pkt[4])
     return true;
 }
 
-/* ---- HID usage to LVGL key ---- */
-uint32_t usb_hid_to_lv_key(uint8_t u, bool shift)
+uint32_t usb_hid_key(uint8_t u, bool shift)
 {
     static const char num[] = "1234567890";
     static const char num_sh[] = "!@#$%^&*()";
@@ -57,17 +56,17 @@ uint32_t usb_hid_to_lv_key(uint8_t u, bool shift)
         if (sym[i].u == u) return (uint32_t)(shift ? sym[i].s : sym[i].c);
     }
     switch (u) {
-    case 0x28: case 0x58: return T5_KEY_ENTER;
-    case 0x29: return T5_KEY_ESC;
-    case 0x2A: return T5_KEY_BACKSPACE;
-    case 0x2B: return shift ? T5_KEY_PREV : T5_KEY_NEXT;
-    case 0x4C: return T5_KEY_DEL;
-    case 0x4A: return T5_KEY_HOME;
-    case 0x4D: return T5_KEY_END;
-    case 0x4F: return T5_KEY_RIGHT;
-    case 0x50: return T5_KEY_LEFT;
-    case 0x51: return T5_KEY_DOWN;
-    case 0x52: return T5_KEY_UP;
+    case 0x28: case 0x58: return T5_HID_KEY_ENTER;
+    case 0x29: return T5_HID_KEY_ESC;
+    case 0x2A: return T5_HID_KEY_BACKSPACE;
+    case 0x2B: return shift ? T5_HID_KEY_BACKTAB : T5_HID_KEY_TAB;
+    case 0x4C: return T5_HID_KEY_DEL;
+    case 0x4A: return T5_HID_KEY_HOME;
+    case 0x4D: return T5_HID_KEY_END;
+    case 0x4F: return T5_HID_KEY_RIGHT;
+    case 0x50: return T5_HID_KEY_LEFT;
+    case 0x51: return T5_HID_KEY_DOWN;
+    case 0x52: return T5_HID_KEY_UP;
     default: return 0;
     }
 }

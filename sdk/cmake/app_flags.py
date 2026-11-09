@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """Print the compile flags an app needs, one per line: the -I/-D/-m flags the
-firmware used for its ABI table (t5_app/abi_table.c), which includes every
+firmware used for its ABI table (t5_abi/abi_table.c), which includes every
 header behind the exported API. Same headers, same LVGL configuration, same
 ABI."""
 import json
@@ -15,7 +15,7 @@ except OSError:
     sys.exit(f"no {build}/compile_commands.json: build the firmware first (t5 build)")
 cmd = next((e for e in db if e["file"].endswith("abi_table.c")), None)
 if not cmd:
-    sys.exit(f"{build} has no t5_app/abi_table.c: is it a Tab5 OS firmware build?")
+    sys.exit(f"{build} has no t5_abi/abi_table.c: is it a Tab5 OS firmware build?")
 args = cmd.get("arguments") or shlex.split(cmd["command"])
 keep = []
 i = 0

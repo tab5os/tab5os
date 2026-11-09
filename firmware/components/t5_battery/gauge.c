@@ -2,14 +2,14 @@
 #include <string.h>
 #include "t5_battery/gauge.h"
 
-/* Pack open-circuit voltage (2 cells) against state of charge. A generic
- * Li-ion shape with 0% at 6.5 V (the design's floor, 3.25 V/cell) and 100%
- * at 8.4 V. Tune against measured discharge traces. */
+/* Pack open-circuit voltage against state of charge: a generic Li-ion
+ * shape between the pack's empty and full voltages. Tune against measured
+ * discharge traces. */
 static const struct { uint16_t mv; int16_t permille; } k_ocv[] = {
-    { 6500, 0 },   { 6800, 20 },  { 7000, 40 },  { 7220, 70 },  { 7380, 110 }, { 7420, 150 },
+    { T5_PACK_EMPTY_MV, 0 },   { 6800, 20 },  { 7000, 40 },  { 7220, 70 },  { 7380, 110 }, { 7420, 150 },
     { 7460, 200 }, { 7500, 250 }, { 7540, 300 }, { 7580, 350 }, { 7600, 400 }, { 7640, 450 },
     { 7680, 500 }, { 7700, 540 }, { 7740, 590 }, { 7820, 650 }, { 7900, 710 }, { 7960, 760 },
-    { 8040, 820 }, { 8160, 900 }, { 8220, 930 }, { 8300, 970 }, { 8400, 1000 },
+    { 8040, 820 }, { 8160, 900 }, { 8220, 930 }, { 8300, 970 }, { T5_PACK_FULL_MV, 1000 },
 };
 #define N_OCV (sizeof k_ocv / sizeof k_ocv[0])
 
@@ -30,7 +30,7 @@ int32_t t5_gauge_ocv_to_permille(uint16_t mv)
 uint16_t t5_gauge_compensate(uint16_t mv, int32_t ma10)
 {
     /* Discharge pulls the terminal voltage down by I*R; charging pushes it up. */
-    int32_t v = (int32_t)mv + ma10 * T5_GAUGE_RINT_MOHM / 10000;
+    int32_t v = (int32_t)mv + ma10 * T5_PACK_RINT_MOHM / 10000;
     if (v < 0) v = 0;
     if (v > 0xFFFF) v = 0xFFFF;
     return (uint16_t)v;
@@ -38,7 +38,7 @@ uint16_t t5_gauge_compensate(uint16_t mv, int32_t ma10)
 
 bool t5_gauge_sample_plausible(uint16_t mv)
 {
-    return mv >= 5000 && mv <= 9000;
+    return mv >= T5_PACK_MIN_MV && mv <= T5_PACK_MAX_MV;
 }
 
 static int32_t clamp_cap(int32_t mah)
@@ -68,8 +68,8 @@ void t5_gauge_boot(t5_gauge_t *g, const t5_gauge_saved_t *saved, int64_t elapsed
 {
     memset(g, 0, sizeof *g);
     bool have = saved && saved->magic == T5_GAUGE_SAVED_MAGIC;
-    g->capacity_mah = have ? clamp_cap(saved->capacity_mah) : T5_GAUGE_NOMINAL_MAH;
-    g->standby_ma10 = have && saved->standby_ma10 ? saved->standby_ma10 : T5_GAUGE_STANDBY_MA10_DEFAULT;
+    g->capacity_mah = have ? clamp_cap(saved->capacity_mah) : T5_PACK_NOMINAL_MAH;
+    g->standby_ma10 = have && saved->standby_ma10 ? saved->standby_ma10 : T5_PACK_STANDBY_MA10;
     g->cycles = have ? saved->cycles : 0;
     g->avg_ma10 = ma10;
 
@@ -128,16 +128,16 @@ void t5_gauge_update(t5_gauge_t *g, uint16_t mv, int32_t ma10, uint32_t dt_ms, b
     g->avg_ma10 += (ma10 - g->avg_ma10) * (int32_t)(dt_ms > 60000 ? 60000 : dt_ms) / 60000;
 
     /* Full: on USB, at full voltage, and the charge current has tapered off. */
-    if (usb && mv >= T5_GAUGE_FULL_MV && ma10 <= 0 && -ma10 < 1000) {
+    if (usb && mv >= T5_PACK_CHARGED_MV && ma10 <= 0 && -ma10 < T5_PACK_TAPER_MA10) {
         g->charge_uah = (int64_t)g->capacity_mah * 1000;
         g->full_anchor = true;
         g->discharged_uah = 0;
-    } else if (ma10 < -300) {
+    } else if (ma10 < -T5_GAUGE_REST_MA10) {
         g->full_anchor = false;   /* any real charging breaks a learning run */
     }
 
     /* Empty: learn capacity if this discharge started from full. */
-    if (!usb && mv <= T5_GAUGE_EMPTY_MV + 100 && ma10 > 0 && ma10 < 5000) {
+    if (!usb && mv <= T5_PACK_EMPTY_MV + 100 && ma10 > 0 && ma10 < T5_PACK_LIGHT_LOAD_MA10) {
         if (g->full_anchor && g->discharged_uah > (int64_t)T5_GAUGE_MIN_MAH * 1000 / 2) {
             int32_t measured = clamp_cap((int32_t)(g->discharged_uah / 1000));
             g->capacity_mah = clamp_cap((g->capacity_mah * 7 + measured * 3) / 10);

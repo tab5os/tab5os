@@ -1,34 +1,38 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include <string.h>
+#include "t5_bsp/panel.h"
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_i2c/t5_i2c.h"
 #include "t5_input/t5_touch.h"
+#include "t5_input/t5_touch_test.h"
 #include "t5_pins/pins.h"
 #include "touch_hw.h"
 
 static const char *TAG = "t5.touch";
 
 /* ST712x registers (16-bit addresses) */
-#define ST_FW_VERSION 0x0000
 #define ST_MAX_X_H    0x0005
 #define ST_ADV_INFO   0x0010
 #define ST_REPORTS    0x0014
 #define ST_REPORT_LEN 7
 #define ST_ADV_WITH_COORD 0x08
+#define ST_MAX_REPORTS 10
 /* GT911 */
 #define GT_PRODUCT_ID 0x8140
 #define GT_STATUS     0x814E
 #define GT_POINTS     0x814F
 #define GT_POINT_LEN  8
+#define GT_RESOLUTION 0x8048   /* x max lo/hi, y max lo/hi */
 
 #define ACTIVE_POLL_MS 10   /* while a finger is down */
 #define IDLE_POLL_MS 16     /* polling-only controllers */
+#define FAILED_AFTER_ERRORS 100   /* T5_EV_TOUCH_FAILED once, at this many read errors */
 
 static t5_i2c_dev_t *s_dev;
 static t5_panel_t s_kind;
-static uint8_t s_max_reports = 10;
+static uint8_t s_max_reports = ST_MAX_REPORTS;
 static t5_touch_state_t s_state;
 static t5_touch_info_t s_info;
 static t5_mutex_t s_lock;
@@ -72,26 +76,18 @@ int t5_touch_parse_gt911(uint8_t status, const uint8_t *p, t5_touch_point_t *out
 
 void t5_touch_scale(t5_touch_point_t *p, uint16_t max_x, uint16_t max_y)
 {
+    const uint32_t w = T5_PANEL_NATIVE_W, h = T5_PANEL_NATIVE_H;
     uint32_t x = p->x, y = p->y;
-    if (max_x && max_x != T5_DISPLAY_W) x = x * T5_DISPLAY_W / max_x;
-    if (max_y && max_y != T5_DISPLAY_H) y = y * T5_DISPLAY_H / max_y;
-    p->x = (uint16_t)(x >= T5_DISPLAY_W ? T5_DISPLAY_W - 1 : x);
-    p->y = (uint16_t)(y >= T5_DISPLAY_H ? T5_DISPLAY_H - 1 : y);
+    if (max_x && max_x != w) x = x * w / max_x;
+    if (max_y && max_y != h) y = y * h / max_y;
+    p->x = (uint16_t)(x >= w ? w - 1 : x);
+    p->y = (uint16_t)(y >= h ? h - 1 : y);
 }
 
 void t5_touch_mirror(t5_touch_point_t *p, bool mirror_x, bool mirror_y)
 {
-    if (mirror_x) p->x = (uint16_t)(T5_DISPLAY_W - 1 - p->x);
-    if (mirror_y) p->y = (uint16_t)(T5_DISPLAY_H - 1 - p->y);
-}
-
-void t5_touch_panel_mirror(t5_panel_t panel, bool *mirror_x, bool *mirror_y)
-{
-    /* Only the ST7123 init table sends MADCTL 0x03; ST7121 and ILI9881C keep the
-     * default scan, so their touch should already line up (unverified). */
-    bool flip = panel == T5_PANEL_ST7123;
-    *mirror_x = flip;
-    *mirror_y = flip;
+    if (mirror_x) p->x = (uint16_t)(T5_PANEL_NATIVE_W - 1 - p->x);
+    if (mirror_y) p->y = (uint16_t)(T5_PANEL_NATIVE_H - 1 - p->y);
 }
 
 t5_err_t t5_touch_sample(t5_touch_state_t *out)
@@ -102,7 +98,7 @@ t5_err_t t5_touch_sample(t5_touch_state_t *out)
         uint8_t adv;
         T5_RETURN_ON_ERR(t5_i2c_read16(s_dev, ST_ADV_INFO, &adv, 1));
         if (adv & ST_ADV_WITH_COORD) {
-            uint8_t r[10 * ST_REPORT_LEN];
+            uint8_t r[ST_MAX_REPORTS * ST_REPORT_LEN];
             T5_RETURN_ON_ERR(t5_i2c_read16(s_dev, ST_REPORTS, r, (size_t)s_max_reports * ST_REPORT_LEN));
             n = t5_touch_parse_st712x(r, s_max_reports, pts, T5_TOUCH_MAX_POINTS);
         }
@@ -158,7 +154,7 @@ static void touch_task(void *arg)
         t5_touch_state_t st;
         if (t5_touch_sample(&st) != T5_OK) {
             s_info.errors++;
-            if (s_info.errors == 100) {
+            if (s_info.errors == FAILED_AFTER_ERRORS) {
                 t5_event_post(T5_EV_TOUCH_FAILED, NULL, 0);
             }
             down = false;
@@ -173,13 +169,11 @@ static void touch_task(void *arg)
 
 static t5_err_t init_st712x(void)
 {
-    uint8_t v = 0, info[5] = {0};
-    T5_RETURN_ON_ERR(t5_i2c_read16(s_dev, ST_FW_VERSION, &v, 1));
+    uint8_t info[5] = {0};
     T5_RETURN_ON_ERR(t5_i2c_read16(s_dev, ST_MAX_X_H, info, sizeof info));
-    s_info.fw_version = v;
     s_info.max_x = (uint16_t)((info[0] << 8) | info[1]);
     s_info.max_y = (uint16_t)((info[2] << 8) | info[3]);
-    s_max_reports = info[4] >= 1 && info[4] <= 10 ? info[4] : 10;
+    s_max_reports = info[4] >= 1 && info[4] <= ST_MAX_REPORTS ? info[4] : ST_MAX_REPORTS;
     return T5_OK;
 }
 
@@ -188,7 +182,7 @@ static t5_err_t init_gt911(void)
     uint8_t id[4] = {0};
     T5_RETURN_ON_ERR(t5_i2c_read16(s_dev, GT_PRODUCT_ID, id, 4));
     uint8_t res[4];
-    T5_RETURN_ON_ERR(t5_i2c_read16(s_dev, 0x8048, res, 4));   /* x max lo/hi, y max lo/hi */
+    T5_RETURN_ON_ERR(t5_i2c_read16(s_dev, GT_RESOLUTION, res, 4));
     s_info.max_x = (uint16_t)(res[0] | (res[1] << 8));
     s_info.max_y = (uint16_t)(res[2] | (res[3] << 8));
     T5_LOGI(TAG, "GT911 product %.4s", (const char *)id);
@@ -200,25 +194,21 @@ t5_err_t t5_touch_init(void)
     if (s_dev) {
         return T5_OK;
     }
-    T5_RETURN_ON_ERR(t5_display_probe(&s_kind));
-    t5_touch_panel_mirror(s_kind, &s_mirror_x, &s_mirror_y);
+    T5_RETURN_ON_ERR(t5_bsp_panel_probe());
+    const t5_panel_info_t *pi = t5_bsp_panel();
+    s_kind = pi->panel;
+    s_mirror_x = pi->touch_mirror_x;
+    s_mirror_y = pi->touch_mirror_y;
+    s_info.fw_version = pi->touch_fw;
     if (!s_lock) s_lock = t5_mutex_create();
-    t5_err_t err;
-    if (s_kind == T5_PANEL_ST7123 || s_kind == T5_PANEL_ST7121) {
-        T5_RETURN_ON_ERR(t5_i2c_open(T5_I2C_ADDR_ST712X, 400000, "touch", &s_dev));
-        err = init_st712x();
-        s_info.polling = false;
-    } else {
-        uint8_t addr = t5_i2c_probe(T5_I2C_ADDR_GT911) == T5_OK ? T5_I2C_ADDR_GT911 : T5_I2C_ADDR_GT911_ALT;
-        T5_RETURN_ON_ERR(t5_i2c_open(addr, 400000, "touch", &s_dev));
-        err = init_gt911();
-        s_info.polling = true;
-    }
+    T5_RETURN_ON_ERR(t5_i2c_open(pi->touch_addr, T5_SYS_I2C_HZ, "touch", &s_dev));
+    s_info.polling = s_kind == T5_PANEL_ILI9881C_GT911;
+    t5_err_t err = s_info.polling ? init_gt911() : init_st712x();
     if (err != T5_OK) {
         T5_LOGE(TAG, "touch controller init failed: %s", t5_err_str(err));
         return err;
     }
-    T5_LOGI(TAG, "%s: fw %u, %ux%u, %s", t5_display_panel_name(s_kind), s_info.fw_version,
+    T5_LOGI(TAG, "%s: fw %u, %ux%u, %s", t5_bsp_panel_name(s_kind), s_info.fw_version,
             s_info.max_x, s_info.max_y, s_info.polling ? "polling" : "interrupt on G23");
     T5_RETURN_ON_ERR(t5_touch_hw_init(!s_info.polling));
     /* Core 1 with the UI: touch latency matters more than anything on core 0. */
@@ -253,13 +243,14 @@ void t5_touch_set_activity_hook(t5_touch_cb_t cb, void *arg)
     s_activity = cb;
 }
 
-/* Host tests: set up the parser state without a task. */
-void t5_touch_setup_for_test(t5_i2c_dev_t *dev, t5_panel_t kind, uint16_t max_x, uint16_t max_y, uint8_t reports)
+void t5_touch_setup_for_test(t5_i2c_dev_t *dev, const t5_panel_info_t *panel, uint16_t max_x, uint16_t max_y,
+                             uint8_t reports)
 {
     s_dev = dev;
-    s_kind = kind;
+    s_kind = panel->panel;
+    s_mirror_x = panel->touch_mirror_x;
+    s_mirror_y = panel->touch_mirror_y;
     s_info.max_x = max_x;
     s_info.max_y = max_y;
     s_max_reports = reports;
-    t5_touch_panel_mirror(kind, &s_mirror_x, &s_mirror_y);
 }

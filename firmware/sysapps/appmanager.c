@@ -8,13 +8,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
-#include "t5/shell.h"
 #include "t5/system.h"
-#include "sysapp_system.h"
 #include "t5_pkg/manifest.h"
+#include "t5_storage/paths.h"
 #include "sysapps_priv.h"
 
-#define MAX_APPS 48
 
 static sa_nav_t s_nav;
 static void open_app(const char *id);
@@ -74,7 +72,7 @@ static void remove_clicked(lv_event_t *e)
     r->keep = true;
     char title[96];
     snprintf(title, sizeof title, "Remove %s?", p->info.entry.name);
-    md_dialog_show(title, "Its data in /data/appdata stays, so a reinstall picks up where it left off.", "Remove",
+    md_dialog_show(title, "Its data in " T5_APPDATA_DIR " stays, so a reinstall picks up where it left off.", "Remove",
                    "Cancel", remove_answer, r);
 }
 
@@ -119,15 +117,10 @@ static void open_app(const char *id)
     md_section_create(body, "Permissions");
     uint32_t perms = in->entry.perms;
     if (!perms) sa_note(body, "None.");
-    for (uint32_t bit = 1; bit && bit <= T5_PERM_ALL_FILES; bit <<= 1) {
+    for (uint32_t bit = 1; bit & T5_PERM_ALL; bit <<= 1) {
         if (!(perms & bit)) continue;
-        const char *name = bit == T5_PERM_SHARED_READ    ? "See shared files"
-                           : bit == T5_PERM_SHARED_WRITE ? "Change shared files"
-                           : bit == T5_PERM_ALL_FILES    ? "Manage all files"
-                                                         : t5_perm_name(bit);
-        bool asked = bit == T5_PERM_CAMERA || bit == T5_PERM_MIC || bit == T5_PERM_SHARED_READ ||
-                     bit == T5_PERM_SHARED_WRITE || bit == T5_PERM_ALL_FILES;
-        if (asked && !in->entry.builtin) {
+        const char *name = t5_perm_label(bit);
+        if ((bit & t5_perm_prompted()) && !in->entry.builtin) {
             const char *state = (in->granted & bit) ? "Allowed" : (in->denied & bit) ? "Not allowed" : "Asks first";
             lv_obj_t *r = md_row_create(body, bit == T5_PERM_CAMERA ? MD_ICON_CAMERA_ALT : bit == T5_PERM_MIC ? MD_ICON_MIC : MD_ICON_FOLDER,
                                        name, state);
@@ -209,7 +202,7 @@ static void open_crashes(lv_event_t *e)
 
 /* ---- list ------------------------------------------------------------------------------------ */
 typedef struct {
-    t5_app_entry_t e[MAX_APPS];
+    t5_app_entry_t e[T5_APPS_MAX];
     int n;
     lv_obj_t *list;
     int shown;
@@ -224,7 +217,7 @@ static void list_refresh(sa_nav_t *nav, void *arg)
 {
     (void)nav;
     list_t *l = arg;
-    l->n = t5_apps_list(l->e, MAX_APPS);
+    l->n = t5_apps_list(l->e, T5_APPS_MAX);
     int h = l->n;
     for (int i = 0; i < l->n; i++) h = h * 31 + l->e[i].crashes + (l->e[i].id[0] << 3);
     if (h == l->shown) return;
@@ -275,7 +268,7 @@ static void on_destroy(t5_app_t *app)
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };
 
 const t5_builtin_app_t sysapp_appmanager = {
-    .id = "com.t5.appmanager",
+    .id = T5_APP_ID_MANAGER,
     .name = "App Manager",
     .desc = &s_desc,
     .perms = T5_PERM_STORAGE | T5_PERM_SYSTEM,

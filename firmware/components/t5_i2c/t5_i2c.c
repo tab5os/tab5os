@@ -9,11 +9,12 @@
 #include "t5_core/os.h"
 #include "t5_i2c/t5_i2c.h"
 #include "t5_i2c_hw.h"
+#include "t5_i2c/t5_i2c_test.h"
 #include "t5_pins/pins.h"
+#include "t5_pins/table.h"
 
 static const char *TAG = "t5.i2c";
 
-#define LOCK_TIMEOUT_MS 1000
 #define MAX_RECOVER_CBS 8
 #define STACK_TX 64
 
@@ -49,20 +50,10 @@ static bool s_trace_on;
 static t5_i2c_trace_t s_trace[T5_I2C_TRACE_LEN];
 static uint32_t s_trace_head;   /* total entries ever written */
 
-static const uint8_t k_reserved[] = {
-    T5_I2C_ADDR_ES8388, T5_I2C_ADDR_GT911, T5_I2C_ADDR_UNKNOWN28, T5_I2C_ADDR_RX8130,
-    T5_I2C_ADDR_SC2356, T5_I2C_ADDR_ES7210, T5_I2C_ADDR_INA226, T5_I2C_ADDR_EXP0,
-    T5_I2C_ADDR_EXP1, T5_I2C_ADDR_ST712X, T5_I2C_ADDR_GT911_ALT, T5_I2C_ADDR_BMI270,
-};
-
 bool t5_i2c_addr_reserved(uint8_t addr)
 {
-    for (size_t i = 0; i < sizeof k_reserved; i++) {
-        if (k_reserved[i] == addr) {
-            return true;
-        }
-    }
-    return false;
+    const t5_pins_chip_t *c = t5_pins_chip(addr);
+    return c && c->reserved;
 }
 
 t5_err_t t5_i2c_init(void)
@@ -81,18 +72,18 @@ t5_err_t t5_i2c_init(void)
     return T5_OK;
 }
 
-t5_err_t t5_i2c_lock(uint32_t timeout_ms)
+t5_err_t t5_i2c_lock(void)
 {
     if (!s_ready) {
         return T5_ERR_STATE;
     }
     t5_task_t me = t5_task_self();
-    if (s_owner == me) {        /* recursive: only the owner ever sees itself here */
+    if (s_owner == me) {        /* only the owner ever sees itself here */
         s_depth++;
         return T5_OK;
     }
     __atomic_add_fetch(&s_waiting, 1, __ATOMIC_SEQ_CST);
-    bool ok = t5_mutex_lock_timeout(s_bus, timeout_ms);
+    bool ok = t5_mutex_lock_timeout(s_bus, T5_I2C_LOCK_TIMEOUT_MS);
     __atomic_sub_fetch(&s_waiting, 1, __ATOMIC_SEQ_CST);
     if (!ok) {
         s_stats.lock_timeouts++;
@@ -105,7 +96,6 @@ t5_err_t t5_i2c_lock(uint32_t timeout_ms)
 
 void t5_i2c_unlock(void)
 {
-    /* Unbalanced or foreign unlocks would corrupt the depth count. */
     T5_ASSERT(s_owner == t5_task_self() && s_depth > 0);
     if (--s_depth > 0) {
         return;
@@ -129,14 +119,14 @@ t5_err_t t5_i2c_open(uint8_t addr, uint32_t hz, const char *name, t5_i2c_dev_t *
     if (!out || addr < 0x08 || addr > 0x77) {
         return T5_ERR_INVALID_ARG;
     }
-    T5_RETURN_ON_ERR(t5_i2c_lock(LOCK_TIMEOUT_MS));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     t5_err_t err = T5_ERR_NO_MEM;
     for (int i = 0; i < T5_I2C_MAX_DEVICES; i++) {
         if (s_devs[i].used) {
             continue;
         }
         t5_i2c_hw_dev_t hw;
-        err = t5_i2c_hw_add(addr, hz ? hz : 400000, &hw);
+        err = t5_i2c_hw_add(addr, hz ? hz : T5_SYS_I2C_HZ, &hw);
         if (err == T5_OK) {
             s_devs[i] = (struct t5_i2c_dev){ .used = true, .addr = addr, .name = name ? name : "?", .hw = hw };
             *out = &s_devs[i];
@@ -149,17 +139,17 @@ t5_err_t t5_i2c_open(uint8_t addr, uint32_t hz, const char *name, t5_i2c_dev_t *
 
 void t5_i2c_close(t5_i2c_dev_t *dev)
 {
-    if (!dev || t5_i2c_lock(LOCK_TIMEOUT_MS) != T5_OK) {
+    if (!dev || !dev->used) {
         return;
     }
+    /* Removed even if the bus stays busy past the timeout: IDF's remove takes
+     * its own bus lock, and keeping the handle would leak the slot. */
+    bool locked = t5_i2c_lock() == T5_OK;
     t5_i2c_hw_remove(dev->hw);
     dev->used = false;
-    t5_i2c_unlock();
-}
-
-uint8_t t5_i2c_addr(const t5_i2c_dev_t *dev)
-{
-    return dev ? dev->addr : 0;
+    if (locked) {
+        t5_i2c_unlock();
+    }
 }
 
 t5_err_t t5_i2c_on_recover(t5_i2c_recover_cb_t cb, void *arg)
@@ -174,7 +164,6 @@ t5_err_t t5_i2c_on_recover(t5_i2c_recover_cb_t cb, void *arg)
     return T5_ERR_NO_MEM;
 }
 
-/* Bus lock held. */
 static t5_err_t recover_locked(void)
 {
     if (s_in_recovery) {
@@ -201,7 +190,7 @@ static t5_err_t recover_locked(void)
 
 t5_err_t t5_i2c_recover(void)
 {
-    T5_RETURN_ON_ERR(t5_i2c_lock(LOCK_TIMEOUT_MS));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     t5_err_t err = recover_locked();
     t5_i2c_unlock();
     return err;
@@ -256,7 +245,7 @@ t5_err_t t5_i2c_xfer(t5_i2c_dev_t *dev, const uint8_t *tx, size_t txlen, uint8_t
     if (!dev || !dev->used || (txlen && !tx) || (rxlen && !rx) || (!txlen && !rxlen)) {
         return T5_ERR_INVALID_ARG;
     }
-    T5_RETURN_ON_ERR(t5_i2c_lock(LOCK_TIMEOUT_MS));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     uint32_t now = t5_time_ms();
     if (dev->faulted && now - dev->last_attempt_ms < T5_I2C_FAULT_RETRY_MS) {
         t5_i2c_unlock();
@@ -315,7 +304,7 @@ t5_err_t t5_i2c_write_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t val)
 
 t5_err_t t5_i2c_update_u8(t5_i2c_dev_t *dev, uint8_t reg, uint8_t mask, uint8_t val)
 {
-    T5_RETURN_ON_ERR(t5_i2c_lock(LOCK_TIMEOUT_MS));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     uint8_t v;
     t5_err_t err = t5_i2c_read_u8(dev, reg, &v);
     if (err == T5_OK) {
@@ -339,7 +328,7 @@ t5_err_t t5_i2c_write16(t5_i2c_dev_t *dev, uint16_t reg, const uint8_t *buf, siz
 
 t5_err_t t5_i2c_probe(uint8_t addr)
 {
-    T5_RETURN_ON_ERR(t5_i2c_lock(LOCK_TIMEOUT_MS));
+    T5_RETURN_ON_ERR(t5_i2c_lock());
     t5_err_t err = t5_i2c_hw_probe(addr, T5_I2C_TIMEOUT_MS);
     if (err == T5_ERR_TIMEOUT && !s_in_recovery) {
         recover_locked();
@@ -376,14 +365,6 @@ int t5_i2c_dev_stats(t5_i2c_dev_stats_t *out, int max)
     return n;
 }
 
-void t5_i2c_clear_fault(t5_i2c_dev_t *dev)
-{
-    if (dev) {
-        dev->faulted = false;
-        dev->consecutive = 0;
-    }
-}
-
 void t5_i2c_trace_enable(bool on)
 {
     s_trace_on = on;
@@ -400,7 +381,6 @@ int t5_i2c_trace_read(t5_i2c_trace_t *out, int max)
     return (int)n;
 }
 
-/* Host tests only: forget all state. */
 void t5_i2c_reset_for_test(void)
 {
     memset(s_devs, 0, sizeof s_devs);

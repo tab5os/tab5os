@@ -17,6 +17,7 @@
  */
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
 
@@ -40,6 +41,26 @@ struct _lv_obj_t;
 t5_err_t t5_camera_init(void);
 bool t5_camera_active(void);
 
+/* What the camera needs from the UI, installed by the composition root
+ * (main), so the service doesn't depend on t5_ui. Any member may be NULL.
+ *   rotation_deg  the screen's rotation, clockwise: 0, 90, 180 or 270
+ *   on_ui_task    photo and recording wait on capture (recording also on
+ *                 the UI task, to lend): they refuse there (T5_ERR_STATE)
+ *   lend_ram      before the H.264 encoder starts: the UI's internal RAM
+ *                 block (and its size) for the reference buffer, or NULL
+ *   reclaim_ram   after it stops: the block back (NULL if the encoder
+ *                 kept it)
+ *   ui_call       run fn where LVGL is safe (the UI task, or under its
+ *                 lock) and return once it ran */
+typedef struct {
+    int (*rotation_deg)(void);
+    bool (*on_ui_task)(void);
+    void *(*lend_ram)(size_t *len);
+    void (*reclaim_ram)(void *block);
+    void (*ui_call)(void (*fn)(void *arg), void *arg);
+} t5_camera_host_t;
+void t5_camera_set_host(const t5_camera_host_t *host);
+
 t5_err_t t5_camera_open(t5_camera_t **out);
 /* The photo mode (system apps; not in the app ABI). */
 t5_err_t t5_camera_open_photo(t5_camera_t **out);
@@ -51,7 +72,8 @@ struct _lv_obj_t *t5_camera_preview_create(t5_camera_t *cam, struct _lv_obj_t *p
 void t5_camera_set_mirror(t5_camera_t *cam, bool mirror);
 
 /* A JPEG still (quality 1..100, 0 = 85). Blocks until written (any task
- * but the UI task). */
+ * but the UI task). Photos and recordings go only where the calling app
+ * may write (T5_ERR_DENIED). */
 t5_err_t t5_camera_photo(t5_camera_t *cam, const char *path, int quality);
 
 /* H.264 (Annex B elementary stream) to path; kbps 0 = 4000, lowered while

@@ -9,9 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
-
-#define SHELL_ID_LEN 64
-#define SHELL_NAME_LEN 48
+#include "t5_app/registry.h"
 
 typedef struct {
     int battery_pct;          /* -1 unknown */
@@ -29,13 +27,13 @@ typedef struct {
     int brightness;           /* 1..100 */
     int volume;               /* 0..100 */
     bool muted, headphones;
-    bool hw_keyboard;         /* a USB keyboard is attached */
 } shell_status_t;
 
+/* One entry of the app registry (t5_app_entry_t on the device). */
 typedef struct {
-    char id[SHELL_ID_LEN];
-    char name[SHELL_NAME_LEN];
-    char icon[8];             /* MD_ICON_* glyph, "" = generic */
+    char id[T5_APP_ID_LEN];
+    char name[T5_APP_NAME_LEN];
+    char icon[T5_APP_ICON_LEN];   /* MD_ICON_* glyph, "" = generic */
     bool builtin, blocked, running;
 } shell_app_t;
 
@@ -43,7 +41,13 @@ void shell_sys_status(shell_status_t *out);
 /* Local time; false if the clock isn't set. */
 bool shell_sys_time(struct tm *out);
 
+/* Up to max (T5_APPS_MAX lists them all). */
 int shell_sys_apps(shell_app_t *out, int max);
+/* The runtime's side of t5_apps_home_t (t5_app/apps.h), in its order:
+ * launching creates the app's screen, calls shell_prepare(screen, id) and
+ * shell_changed(id), then loads the screen; going home loads
+ * shell_home_screen(), calls shell_changed("") and then deletes the app's
+ * screen. An unknown id launches nothing. */
 void shell_sys_launch(const char *id, const char *arg);
 void shell_sys_home(void);
 bool shell_sys_dismiss_modal(void);    /* true if a system modal was open */
@@ -52,8 +56,9 @@ bool shell_sys_safe_mode(char *why, size_t n);
 /* Restart normally (leaves safe mode). */
 void shell_sys_restart(void);
 void shell_sys_current(char *id, size_t n);
-bool shell_sys_can_remove(const char *id);
 void shell_sys_remove(const char *id);
+/* Where an app's data lives (kept when it is removed). */
+void shell_sys_data_dir(const char *id, char *out, size_t n);
 
 void shell_sys_set_wifi(bool on);
 void shell_sys_set_ble(bool on);
@@ -71,9 +76,3 @@ void shell_sys_apply_prefs(void);
  * the system, not the app (t5_sys_enter/leave on the device). */
 void *shell_sys_enter(void);
 void shell_sys_leave(void *saved);
-
-/* System app ids the shell links to. */
-#define SHELL_APP_SETTINGS "com.t5.settings"
-#define SHELL_APP_MANAGER "com.t5.appmanager"
-#define SHELL_APP_FILES "com.t5.files"
-#define SHELL_APP_POWER "com.t5.power"

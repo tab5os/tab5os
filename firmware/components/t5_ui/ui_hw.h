@@ -5,13 +5,9 @@
 #include "t5_core/err.h"
 #include "t5_ui/rotation.h"
 
-/* Whether LVGL's PPA unit takes solid fills (ui.c, "PPA fills"). Software
- * fills into the internal bands are faster: the PPA's row cache maintenance
- * and blocking round trip cost more than the fill (2026-11-06). */
-#define T5_UI_PPA_FILLS false
+#include "lvgl.h"
 
 /* ppa_img_t5.c: may this image (faded, or with alpha) go to the PPA? */
-#include "lvgl.h"
 bool t5_ui_ppa_img_alpha_ok(const lv_draw_image_dsc_t *dsc);
 bool t5_ui_ppa_fill_alpha_ok(const lv_draw_task_t *t);
 /* Time spent blocked in the PPA draw paths (fills, alpha images), for the

@@ -16,10 +16,15 @@
  *   GET  apps                      installed apps
  *   POST install?dest=auto|sd|data body: a .t5app; replaces a running copy
  *   POST launch?id=ID[&arg=A]      POST exit       POST remove?id=ID[&keep=1]
- *   GET  logs?pos=N&wait=MS        log bytes after N (long poll); X-Log-Pos: next N
+ *   GET  logs?pos=N&wait=MS        log bytes after N (long poll, up to T5_DEV_LOG_WAIT_MAX_MS);
+ *                                  X-Log-Pos: next N
  *   GET  screenshot?div=N          RGB565, native portrait; X-Width, X-Height, X-Rotation
- *   POST py                        body: Python source; runs headless, returns its output
- *   POST ota                       body: a signed OS image (plan 9.1), see t5_ota
+ *   POST py                        body: Python source; runs headless, returns its output;
+ *                                  X-Py-State: t5_py_state_name()
+ *   POST ota[?reboot=1]            body: an OS image (plan 9.1); unsigned developer images
+ *                                  are taken too, the computer being paired
+ *
+ * The operations themselves are shared with the USB console (control.h).
  */
 #pragma once
 #include <stdbool.h>
@@ -33,6 +38,8 @@ extern "C" {
 #define T5_DEV_PORT 8350
 #define T5_DEV_MAX_CLIENTS 8
 #define T5_DEV_NAME_LEN 32
+/* The server has one task: a log long poll holds it at most this long. */
+#define T5_DEV_LOG_WAIT_MAX_MS 5000
 
 /* Read the setting and start the server if developer mode is on. */
 T5_MUST_CHECK t5_err_t t5_dev_init(void);
@@ -51,12 +58,6 @@ void t5_dev_status(t5_dev_status_t *out);
 /* Paired computers' names; returns the count. */
 int t5_dev_clients(char (*names)[T5_DEV_NAME_LEN], int max);
 T5_MUST_CHECK t5_err_t t5_dev_forget_all(void);
-
-/* Handlers other components add (t5_ota adds /api/ota). Called before or
- * after the server starts; the token check is done before fn runs. */
-struct httpd_req;
-typedef int (*t5_dev_handler_t)(struct httpd_req *req);
-T5_MUST_CHECK t5_err_t t5_dev_add_handler(const char *uri, int method, t5_dev_handler_t fn);
 
 #ifdef __cplusplus
 }

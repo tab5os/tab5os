@@ -163,10 +163,6 @@ uint32_t t5_net_handle_id(void *h);
 /* Open handles, for diagnostics: one line each into buf. Returns the count. */
 int t5_net_handles_dump(char *buf, size_t n);
 
-/* How many handles are open. While any is, the stack holds a NET wake lock
- * ("net.io"), so Sleep keeps Wi-Fi connected. Not in the ABI. */
-int t5_net_handles_open(void);
-
 #ifdef __cplusplus
 }
 #endif

@@ -3,16 +3,20 @@
  *
  * An update is a .t5os file: a 160-byte header (t5_ota_hdr_t) followed by
  * the OS image (tab5os.bin). `t5 ota-pack` makes one from a firmware build
- * and signs it. Installing streams the image into the inactive A/B slot
- * while hashing it, then checks, before anything changes what boots:
+ * and signs it. Installing streams the image into the update slot while
+ * hashing it, then checks, before anything changes what boots:
  *   - the image's SHA-256 against the header,
  *   - the ECDSA P-256 signature against the keys built into this OS
- *     (the .pem files in firmware/ota_keys); unsigned or unknown-key images only with
- *     allow_unsigned (developer mode),
+ *     (the .pem files in firmware/ota_keys); an image no built-in key
+ *     signed only as t5_ota_source_t allows,
  *   - that it is a Tab5 OS image for this chip's revision (the image
- *     header's min/max chip revision, which is how rev1 and rev3 builds
- *     differ),
+ *     header's min/max chip revision),
  * and only then makes the new slot the boot slot.
+ *
+ * The update slot: running from an A/B slot, the other one. Running from
+ * the recovery image, the slot the device is failing to boot (the current
+ * boot slot), so the other one, which may hold the last OS that worked,
+ * stays as it is.
  *
  * The new image boots "on trial" (ESP-IDF app rollback). t5_ota_boot_ok()
  * marks it valid once the services are up, the shell has drawn, and it has
@@ -27,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_bootfmt/bootctl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +40,9 @@ extern "C" {
 #define T5_OTA_MAGIC "T5OS"
 #define T5_OTA_HDR_SIZE 160
 #define T5_OTA_HDR_VERSION 1
+#define T5_OTA_SIG_LEN 64
+/* The image's project name (esp_app_desc_t): anything else isn't Tab5 OS. */
+#define T5_OTA_PROJECT "tab5os"
 
 typedef struct __attribute__((packed)) {
     char magic[4];              /* "T5OS" */
@@ -66,25 +74,44 @@ typedef struct {
     char signer[17];            /* the key's id, first 16 hex digits */
 } t5_ota_status_t;
 
-/* Streaming install, for the HTTP endpoint and anything else that gets an
- * update in pieces. hdr is the first 160 bytes. */
-typedef struct t5_ota t5_ota_t;
-T5_MUST_CHECK t5_err_t t5_ota_begin(const t5_ota_hdr_t *hdr, bool allow_unsigned, t5_ota_t **out, char *err, size_t errlen);
-T5_MUST_CHECK t5_err_t t5_ota_write(t5_ota_t *o, const void *data, size_t len);
-/* Verify and switch the boot slot. Frees o either way. */
-T5_MUST_CHECK t5_err_t t5_ota_finish(t5_ota_t *o, char *err, size_t errlen);
-void t5_ota_abort(t5_ota_t *o);
+/* "idle", "receiving", "verifying", "ready (restart)", "failed". */
+const char *t5_ota_state_name(t5_ota_state_t s);
 
-/* Install a .t5os from a file (/sd/...) or a URL (http:// or https://). */
-T5_MUST_CHECK t5_err_t t5_ota_install_file(const char *path, bool allow_unsigned, char *err, size_t errlen);
-T5_MUST_CHECK t5_err_t t5_ota_install_url(const char *url, bool allow_unsigned, char *err, size_t errlen);
+/* Who asks for an install. It decides whether an image that no built-in key
+ * signed (unsigned, or signed by another key) may go in; consent is the
+ * source's own say-so where it has one. */
+typedef enum {
+    T5_OTA_FROM_SETTINGS,     /* Settings > Updates: consent = developer mode is on */
+    T5_OTA_FROM_CONSOLE,      /* the `ota` command: consent = it said `unsigned` */
+    T5_OTA_FROM_DEV,          /* the developer server, which runs only in developer mode: always */
+    T5_OTA_FROM_RECOVERY,     /* the recovery image, which asks the person first: unsigned
+                               * images, never one signed by an unknown key */
+} t5_ota_source_t;
+
+/* A .t5os arriving in pieces: up to n bytes into buf, returning the count,
+ * 0 at the end, or a negative t5_err_t. */
+typedef int (*t5_ota_read_fn)(void *ctx, void *buf, size_t n);
+/* The whole install from a source: header, image, verify, switch the boot
+ * slot. hdr (may be NULL) gets the header once it has arrived. */
+T5_MUST_CHECK t5_err_t t5_ota_install_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t from, bool consent,
+                                             t5_ota_hdr_t *hdr, char *err, size_t errlen);
+
+/* Install a .t5os from a file (/sd/...). URLs: t5_ota_net/ota_url.h. */
+T5_MUST_CHECK t5_err_t t5_ota_install_file(const char *path, t5_ota_source_t from, bool consent, char *err,
+                                           size_t errlen);
+/* Read a .t5os file's header and apply the source's rule, installing
+ * nothing: T5_OK when the header is one the install would take. trusted:
+ * a built-in key signed it (the signature itself is checked on install). */
+T5_MUST_CHECK t5_err_t t5_ota_peek(const char *path, t5_ota_source_t from, bool consent, t5_ota_hdr_t *hdr,
+                                   bool *trusted, char *err, size_t errlen);
 void t5_ota_status(t5_ota_status_t *out);
-/* .t5os files in /sd and /sd/update, newest first. Returns the count. */
+/* .t5os files in the SD card's top folder and /update, newest first (by
+ * modification time). Returns the count. */
 int t5_ota_find_on_sd(char (*paths)[128], int max);
 
 /* ---- boot health -------------------------------------------------------------- */
-/* Early in app_main: read the boot counter and the request word, decide on
- * safe mode, note whether this image is on trial. */
+/* Early in app_main (the OS's or recovery's): read the boot counter and the
+ * request word, decide on safe mode, note whether this image is on trial. */
 void t5_ota_boot_check(void);
 /* The boot reached a usable state (services up, shell drawn): clear the
  * counter, and start the 60 s trial timer for a new image. */
@@ -93,6 +120,8 @@ void t5_ota_boot_ok(void);
 bool t5_ota_on_trial(void);
 /* Unconfirmed boots before this one (from the boot counter). */
 int t5_ota_failed_boots(void);
+/* The request this boot found (t5_ota_boot_check). */
+t5_boot_req_t t5_ota_boot_request(void);
 /* Ask the next boot to start the recovery image, or the OS in safe mode;
  * then restart. */
 T5_MUST_CHECK t5_err_t t5_ota_reboot_to_recovery(void);
@@ -102,12 +131,13 @@ T5_MUST_CHECK t5_err_t t5_ota_reboot_safe_mode(void);
 bool t5_safe_mode(void);
 
 /* Test the update path without moving a file: stream the running image
- * through t5_ota_begin/write/finish into the other slot. sig/key_id (may be
+ * through the install core into the update slot. sig/key_id (may be
  * NULL) are what `t5ota.py pack --sign` would put in the header for this
  * exact image, so the signed path can be tested too. */
 T5_MUST_CHECK t5_err_t t5_ota_selftest(const uint8_t *sig64, const uint8_t *key_id32, char *err, size_t errlen);
 
-/* Called before the restarts above (the OS saves its state). */
+/* How the restarts above restart: the OS's own restart, which saves its
+ * state first (t5_power_restart). Without one, a plain restart. */
 void t5_ota_set_restart_hook(void (*fn)(void));
 /* A recovery flag file on the SD card (RECOVERY, recovery.txt or
  * tab5/recovery in its top folder): renamed to *.done, then restart into

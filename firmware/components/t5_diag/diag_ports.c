@@ -9,6 +9,7 @@
 #include "t5_ports/modbus.h"
 #include "t5_ports/ports.h"
 #include "t5_ports/profiles.h"
+#include "t5_storage/paths.h"
 #include "diag_priv.h"
 
 #define MAX_OPEN 8
@@ -326,7 +327,7 @@ static int cmd_port(int argc, char **argv)
             for (int a = 0; a < p->naddrs; a++) printf(" 0x%02x", p->addrs[a]);
             printf("%s\n", p->builtin ? "  (built-in)" : "");
         }
-        printf("%d loaded from /data/profiles and /sd/profiles\n", added);
+        printf("%d loaded from " T5_PROFILES_DATA_DIR " and " T5_PROFILES_SD_DIR "\n", added);
         rc = 0;
     } else if (!strcmp(c, "modbus")) {
         rc = do_modbus(argc, argv);

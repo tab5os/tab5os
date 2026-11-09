@@ -15,19 +15,16 @@
 #include "t5/audio.h"
 #include "t5/power.h"
 #include "t5/shell.h"
+#include "t5_shell/accent.h"
 #include "t5/storage.h"
 #include "t5/sys.h"
 #include "t5/system.h"
 #include "sysapp_system.h"
 #include "t5/usb.h"
-#include "t5_power/power.h"
 #include "t5_dev/dev.h"
 #include "t5_ota/ota.h"
-#include "t5_power/autosave.h"
-#include "esp_system.h"
 #include "sysapps_priv.h"
 
-#define ACCENT_FILE T5_DATA_PATH "/sys/accent"
 
 static sa_nav_t s_nav;
 
@@ -360,7 +357,7 @@ static void bright_changed(lv_event_t *e)
 
 static void autorot_toggle(bool on)
 {
-    t5_ui_set_rotation_lock(!on);
+    sa_report(t5_ui_set_follows_board(on), "change auto-rotate");
 }
 
 static void stats_toggle(bool on)
@@ -370,10 +367,7 @@ static void stats_toggle(bool on)
 
 static void accent_clicked(lv_event_t *e)
 {
-    md_accent_t a = (md_accent_t)(intptr_t)lv_event_get_user_data(e);
-    md_set_accent(a, MD_ACCENT_TEAL);
-    uint8_t v = (uint8_t)a;
-    t5_storage_write_atomic(ACCENT_FILE, &v, 1);
+    t5_shell_accent_set((md_accent_t)(intptr_t)lv_event_get_user_data(e));
 }
 
 static void rot_clicked(lv_event_t *e)
@@ -391,10 +385,10 @@ static void page_display(void)
 {
     lv_obj_t *body = sa_push(&s_nav, "Display");
     md_section_create(body, "Brightness");
-    slider_row(body, MD_ICON_BRIGHTNESS_6, 1, 100, t5_display_brightness(), bright_changed);
+    slider_row(body, MD_ICON_BRIGHTNESS_6, T5_DISPLAY_BRIGHTNESS_MIN, 100, t5_display_brightness(), bright_changed);
     md_section_create(body, "Rotation");
     switch_row(body, MD_ICON_SCREEN_ROTATION, "Auto-rotate", "Off keeps the current orientation, across reboots",
-               !t5_ui_rotation_locked(), autorot_toggle);
+               t5_ui_follows_board(), autorot_toggle);
     lv_obj_t *c = chips(body);
     static const char *names[] = { "Portrait", "Landscape", "Portrait (flipped)", "Landscape (flipped)" };
     for (int i = 0; i < 4; i++) {
@@ -522,18 +516,18 @@ static void saver_toggle(bool on)
 
 static void limit_toggle(bool on)
 {
-    sa_report(t5_battery_set_charge_limit(on), "change the charge limit");
+    t5_battery_set_charge_limit(on);
 }
 
 static void fast_toggle(bool on)
 {
-    sa_report(t5_battery_set_fast_charge(on), "change fast charging");
+    t5_battery_set_fast_charge(on);
 }
 
 static void open_power(lv_event_t *e)
 {
     (void)e;
-    sa_report(t5_apps_launch("com.t5.power"), "open Power");
+    sa_report(t5_apps_launch(T5_APP_ID_POWER), "open Power");
 }
 
 static void power_refresh(sa_nav_t *nav, void *arg)
@@ -794,7 +788,7 @@ static void upd_task(void *arg)
 {
     (void)arg;
     char err[128] = "";
-    t5_err_t e = t5_ota_install_file(s_upd_path, t5_dev_enabled(), err, sizeof err);
+    t5_err_t e = t5_ota_install_file(s_upd_path, T5_OTA_FROM_SETTINGS, t5_dev_enabled(), err, sizeof err);
     char msg[160];
     if (e == T5_OK) snprintf(msg, sizeof msg, "Installed. Restart to run it.");
     else snprintf(msg, sizeof msg, "Not installed: %s", err);
@@ -845,8 +839,7 @@ static void safemode_clicked(lv_event_t *e)
 static void restart_now(lv_event_t *e)
 {
     (void)e;
-    T5_IGNORE(t5_autosave_now());   /* restarting either way; a failed saver logged itself */
-    esp_restart();
+    t5_power_restart();
 }
 
 static void upd_refresh(sa_nav_t *nav, void *arg)
@@ -989,8 +982,11 @@ static void page_developer(void)
     lv_obj_t *row = sa_button_row(body);
     lv_obj_t *b = md_button_create(row, "Forget all", MD_BUTTON_TEXT);
     lv_obj_add_event_cb(b, forget_clicked, LV_EVENT_CLICKED, NULL);
-    sa_note(body, "Developer mode listens on port 8350 only while it is on, and every request but pairing needs a "
-                  "token from a computer you paired here. The USB-C console is separate and always on.");
+    char note[224];
+    snprintf(note, sizeof note,
+             "Developer mode listens on port %d only while it is on, and every request but pairing needs a "
+             "token from a computer you paired here. The USB-C console is separate and always on.", T5_DEV_PORT);
+    sa_note(body, note);
     switch_row(body, MD_ICON_DASHBOARD, "Frame counters", "Frame rate and render time on screen", false, stats_toggle);
     sa_set_refresh(&s_nav, dev_refresh, p, free);
 }
@@ -1000,11 +996,13 @@ static void page_licences(lv_event_t *e)
 {
     (void)e;
     lv_obj_t *body = sa_push(&s_nav, "Licences");
+#define STR_(x) #x
+#define STR(x) STR_(x)
     static const struct { const char *what, *lic; } l[] = {
         { "Tab5 OS", "Apache License 2.0" },
         { "Roboto (fonts)", "Apache License 2.0, Google" },
         { "Material Icons", "Apache License 2.0, Google" },
-        { "LVGL 9.6", "MIT" },
+        { "LVGL " STR(LVGL_VERSION_MAJOR) "." STR(LVGL_VERSION_MINOR), "MIT" },
         { "ESP-IDF and Espressif components", "Apache License 2.0, Espressif" },
         { "FreeRTOS", "MIT" },
         { "LittleFS", "BSD-3-Clause" },
@@ -1033,7 +1031,8 @@ static void page_about(void)
     snprintf(buf, sizeof buf, "ESP32-P4 v%d.%d, %d cores · %u MB PSRAM · %u MB flash", ci.revision / 100,
              ci.revision % 100, ci.cores, (unsigned)(esp_psram_get_size() >> 20), (unsigned)(flash >> 20));
     md_row_create(body, MD_ICON_MEMORY, "Chip", buf);
-    snprintf(buf, sizeof buf, "%s, 720 x 1280 at 2 px per dp", t5_display_panel_name(t5_display_panel()));
+    snprintf(buf, sizeof buf, "%s, %d x %d at %d px per dp", t5_bsp_panel_name(t5_bsp_panel()->panel), T5_PANEL_NATIVE_W,
+             T5_PANEL_NATIVE_H, MD_PX_PER_DP);
     md_row_create(body, MD_ICON_IMAGE, "Display", buf);
     lv_obj_t *r = md_row_create(body, MD_ICON_INFO, "Licences", "Open-source components in this image");
     md_row_set_clickable(r, page_licences, NULL);
@@ -1046,16 +1045,16 @@ typedef struct {
 } section_t;
 
 static const section_t s_sections[] = {
-    { "wifi", MD_ICON_WIFI, "Wi-Fi", "Networks and connection", page_wifi },
-    { "ble", MD_ICON_BLUETOOTH, "Bluetooth", "Bluetooth LE devices", page_ble },
-    { "display", MD_ICON_BRIGHTNESS_6, "Display", "Brightness, rotation, accent, timeout", page_display },
-    { "sound", MD_ICON_VOLUME_UP, "Sound", "Volume, system sounds, microphones", page_sound },
-    { "power", MD_ICON_BATTERY_FULL, "Power", "Battery saver, charging", page_power },
-    { "time", MD_ICON_ACCESS_TIME, "Date and time", "Time zone, network time", page_time },
-    { "usb", MD_ICON_USB, "USB", "USB-A devices, USB-C mode", page_usb },
-    { "updates", MD_ICON_SYSTEM_UPDATE, "Updates", "System updates, safe mode, recovery", page_updates },
-    { "developer", MD_ICON_CODE, "Developer mode", "Push and run apps from a computer", page_developer },
-    { "about", MD_ICON_INFO, "About", "Device, versions, licences", page_about },
+    { T5_SETTINGS_PAGE_WIFI, MD_ICON_WIFI, "Wi-Fi", "Networks and connection", page_wifi },
+    { T5_SETTINGS_PAGE_BLE, MD_ICON_BLUETOOTH, "Bluetooth", "Bluetooth LE devices", page_ble },
+    { T5_SETTINGS_PAGE_DISPLAY, MD_ICON_BRIGHTNESS_6, "Display", "Brightness, rotation, accent, timeout", page_display },
+    { T5_SETTINGS_PAGE_SOUND, MD_ICON_VOLUME_UP, "Sound", "Volume, system sounds, microphones", page_sound },
+    { T5_SETTINGS_PAGE_POWER, MD_ICON_BATTERY_FULL, "Power", "Battery saver, charging", page_power },
+    { T5_SETTINGS_PAGE_TIME, MD_ICON_ACCESS_TIME, "Date and time", "Time zone, network time", page_time },
+    { T5_SETTINGS_PAGE_USB, MD_ICON_USB, "USB", "USB-A devices, USB-C mode", page_usb },
+    { T5_SETTINGS_PAGE_UPDATES, MD_ICON_SYSTEM_UPDATE, "Updates", "System updates, safe mode, recovery", page_updates },
+    { T5_SETTINGS_PAGE_DEVELOPER, MD_ICON_CODE, "Developer mode", "Push and run apps from a computer", page_developer },
+    { T5_SETTINGS_PAGE_ABOUT, MD_ICON_INFO, "About", "Device, versions, licences", page_about },
 };
 
 static void section_clicked(lv_event_t *e)
@@ -1088,7 +1087,7 @@ static void on_destroy(t5_app_t *app)
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };
 
 const t5_builtin_app_t sysapp_settings = {
-    .id = "com.t5.settings",
+    .id = T5_APP_ID_SETTINGS,
     .name = "Settings",
     .desc = &s_desc,
     .perms = T5_PERM_NET | T5_PERM_BLE | T5_PERM_USB | T5_PERM_STORAGE | T5_PERM_SYSTEM,

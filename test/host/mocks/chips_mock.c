@@ -3,20 +3,37 @@
  */
 #include <string.h>
 #include "t5_mocks.h"
+#include "t5_battery/ina226.h"
 #include "t5_bsp/xpin.h"
+#include "t5_bsp/xpin_test.h"
+#include "t5_pins/pins.h"
 #include "t5_time/rtc.h"
+#include "t5_time/t5_time_test.h"
+
+void mock_expander_power_on(mock_i2c_dev_t *e)
+{
+    memset(e->regs, 0, 256);
+    e->regs[0x01] = 0xA2;   /* ID 0b101, reset flag */
+    e->regs[0x07] = 0xFF;   /* outputs hi-z */
+    e->regs[0x0B] = 0xFF;   /* pulls on (down) */
+    e->wlog_n = 0;
+}
+
+mock_i2c_dev_t *mock_expander_add(uint8_t addr)
+{
+    mock_i2c_dev_t *e = mock_i2c_add(addr, false);
+    mock_expander_power_on(e);
+    return e;
+}
 
 void mock_expanders_start(void)
 {
-    mock_i2c_dev_t *a = mock_i2c_add(0x43, false);
-    mock_i2c_dev_t *b = mock_i2c_add(0x44, false);
-    a->regs[0x01] = 0xA0;
-    b->regs[0x01] = 0xA0;
+    mock_expander_add(T5_I2C_ADDR_EXP0);
+    mock_expander_add(T5_I2C_ADDR_EXP1);
     t5_xpin_reset_for_test();
-    t5_xpin_init();
+    T5_IGNORE(t5_xpin_init());   /* the tests check what they need */
 }
 
-/* 0x1D is write-0-to-clear. */
 static bool rtc_write(mock_i2c_dev_t *d, uint32_t reg, const uint8_t *data, size_t len)
 {
     for (size_t i = 0; i < len; i++) {
@@ -27,10 +44,16 @@ static bool rtc_write(mock_i2c_dev_t *d, uint32_t reg, const uint8_t *data, size
     return true;
 }
 
+mock_i2c_dev_t *mock_rtc_add(void)
+{
+    mock_i2c_dev_t *r = mock_i2c_add(T5_I2C_ADDR_RX8130, false);
+    r->on_write = rtc_write;
+    return r;
+}
+
 mock_i2c_dev_t *mock_rtc_start(uint8_t boot_flags)
 {
-    mock_i2c_dev_t *r = mock_i2c_add(0x32, false);
-    r->on_write = rtc_write;
+    mock_i2c_dev_t *r = mock_rtc_add();
     r->regs[0x1D] = boot_flags;
     struct tm t = { .tm_year = 126, .tm_mon = 10, .tm_mday = 5, .tm_hour = 12, .tm_wday = 4 };
     t5_rtc_encode(&t, &r->regs[0x10]);
@@ -39,9 +62,16 @@ mock_i2c_dev_t *mock_rtc_start(uint8_t boot_flags)
     return r;
 }
 
+mock_i2c_dev_t *mock_st712x_add(uint8_t fw)
+{
+    mock_i2c_dev_t *d = mock_i2c_add(T5_I2C_ADDR_ST712X, true);
+    d->regs[0x0000] = fw;   /* firmware version register */
+    return d;
+}
+
 mock_i2c_dev_t *mock_ina226_add(void)
 {
-    mock_i2c_dev_t *d = mock_i2c_add(0x41, false);
+    mock_i2c_dev_t *d = mock_i2c_add(T5_I2C_ADDR_INA226, false);
     /* 16-bit big-endian registers laid out as two bytes per register index. */
     return d;
 }
@@ -53,8 +83,8 @@ static bool ina_read(mock_i2c_dev_t *d, uint32_t reg, uint8_t *out, size_t len)
     case 0x00: v = (uint16_t)(d->regs[0x100] << 8 | d->regs[0x101]); break;
     case 0x01: v = (uint16_t)(d->regs[0x102] << 8 | d->regs[0x103]); break;
     case 0x02: v = (uint16_t)(d->regs[0x104] << 8 | d->regs[0x105]); break;
-    case 0xFE: v = 0x5449; break;
-    case 0xFF: v = 0x2260; break;
+    case 0xFE: v = T5_INA226_MANUF_ID; break;
+    case 0xFF: v = T5_INA226_DIE_ID; break;
     default: break;
     }
     if (len >= 1) out[0] = (uint8_t)(v >> 8);

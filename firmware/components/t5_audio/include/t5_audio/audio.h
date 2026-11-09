@@ -26,7 +26,6 @@ extern "C" {
 #endif
 
 t5_err_t t5_audio_init(void);
-bool t5_audio_ready(void);              /* both codecs answered */
 
 /* ---- output ---------------------------------------------------------------- */
 int t5_audio_volume(void);              /* 0..100, persisted */

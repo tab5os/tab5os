@@ -12,17 +12,19 @@
 
 #define NONE2 { -1, -1 }
 #define NONE3 { -1, -1, -1 }
+/* General-purpose pins: GPIO and PWM, and ADC on the ones with a channel
+ * (ports_modes). */
 #define GPWM (PM(T5_MODE_GPIO) | PM(T5_MODE_PWM))
 
-#define SINGLE(n, pin, extra)                                                                     \
+#define SINGLE(n, pin)                                                                            \
     { .name = n, .desc = "M5-Bus GPIO", .npins = 1, .gpio = { pin }, .label = { "IO" },          \
-      .modes = GPWM | (extra), .i2c = NONE2, .uart = NONE3, .spi = NONE3 }
+      .modes = GPWM, .i2c = NONE2, .uart = NONE3, .spi = NONE3 }
 
 static const port_def_t s_ports[] = {
     {
         .name = "grove", .desc = "Grove HY2.0-4P, switched 5V",
         .npins = 2, .gpio = { T5_PIN_GROVE_A, T5_PIN_GROVE_B }, .label = { "SDA/TX", "SCL/RX" },
-        .modes = PM(T5_MODE_I2C) | PM(T5_MODE_UART) | GPWM | PM(T5_MODE_ADC),
+        .modes = PM(T5_MODE_I2C) | PM(T5_MODE_UART) | GPWM,
         .i2c = { 0, 1 }, .uart = { 0, 1, -1 }, .spi = NONE3,
     },
     {
@@ -46,26 +48,26 @@ static const port_def_t s_ports[] = {
         .npins = 2, .gpio = { T5_PIN_SYS_I2C_SDA, T5_PIN_SYS_I2C_SCL }, .label = { "SDA", "SCL" },
         .modes = PM(T5_MODE_I2C), .i2c = { 0, 1 }, .uart = NONE3, .spi = NONE3, .shared = true,
     },
-    SINGLE("mbus.g2", T5_PIN_MBUS_G2, 0),
-    SINGLE("mbus.g3", T5_PIN_MBUS_G3, 0),
-    SINGLE("mbus.g4", T5_PIN_MBUS_G4, 0),
-    SINGLE("mbus.g16", T5_PIN_MBUS_G16, PM(T5_MODE_ADC)),
-    SINGLE("mbus.g17", T5_PIN_MBUS_G17, PM(T5_MODE_ADC)),
+    SINGLE("mbus.g2", T5_PIN_MBUS_G2),
+    SINGLE("mbus.g3", T5_PIN_MBUS_G3),
+    SINGLE("mbus.g4", T5_PIN_MBUS_G4),
+    SINGLE("mbus.g16", T5_PIN_MBUS_G16),
+    SINGLE("mbus.g17", T5_PIN_MBUS_G17),
     {
         .name = "mbus.g35", .desc = "M5-Bus G35 = power key, input only",
         .npins = 1, .gpio = { T5_PIN_MBUS_G35 }, .label = { "PWR" },
         .modes = PM(T5_MODE_GPIO), .i2c = NONE2, .uart = NONE3, .spi = NONE3,
     },
-    SINGLE("mbus.g45", T5_PIN_MBUS_G45, 0),
-    SINGLE("mbus.g47", T5_PIN_MBUS_G47, 0),
-    SINGLE("mbus.g48", T5_PIN_MBUS_G48, 0),
-    SINGLE("mbus.g51", T5_PIN_MBUS_G51, PM(T5_MODE_ADC)),
-    SINGLE("mbus.g52", T5_PIN_MBUS_G52, PM(T5_MODE_ADC)),
+    SINGLE("mbus.g45", T5_PIN_MBUS_G45),
+    SINGLE("mbus.g47", T5_PIN_MBUS_G47),
+    SINGLE("mbus.g48", T5_PIN_MBUS_G48),
+    SINGLE("mbus.g51", T5_PIN_MBUS_G51),
+    SINGLE("mbus.g52", T5_PIN_MBUS_G52),
     {
         .name = "ext", .desc = "ext 2.54 mm 10-pin",
         .npins = 4, .gpio = { T5_PIN_EXT_G0, T5_PIN_EXT_G1, T5_PIN_EXT_G49, T5_PIN_EXT_G50 },
         .label = { "TX", "RX", "SDA", "SCL" },
-        .modes = PM(T5_MODE_I2C) | PM(T5_MODE_UART) | GPWM | PM(T5_MODE_ADC),
+        .modes = PM(T5_MODE_I2C) | PM(T5_MODE_UART) | GPWM,
         .i2c = { 2, 3 }, .uart = { 0, 1, -1 }, .spi = NONE3,
     },
     {
@@ -110,19 +112,50 @@ const port_def_t *ports_table_find(const char *name)
     return NULL;
 }
 
+uint32_t ports_modes(const port_def_t *d)
+{
+    uint32_t m = d->modes;
+    if ((m & GPWM) == GPWM) {
+        for (int i = 0; i < d->npins; i++) {
+            if (ports_pin_adc(d->gpio[i], NULL, NULL)) m |= PM(T5_MODE_ADC);
+        }
+    }
+    return m;
+}
+
+/* Pins with another job on the board. hands_off: the power key line (also
+ * the sleep wake line) is input only, and its pad config is left exactly as
+ * the board set it: never configured, never reset. */
+static const struct {
+    uint8_t gpio;
+    const char *risk;
+    bool hands_off;
+} s_pin_rules[] = {
+    { T5_PIN_PWR_KEY, "the power key and a boot strap", true },
+    { T5_PIN_MBUS_UART_TX, "a boot strapping pin", false },
+    { T5_PIN_MBUS_UART_RX, "a boot strapping pin", false },
+};
+#define N_RULES (sizeof s_pin_rules / sizeof s_pin_rules[0])
+
 const char *ports_pin_risk(uint8_t gpio)
 {
-    switch (gpio) {
-    case T5_PIN_PWR_KEY: return "the power key and a boot strap";
-    case T5_PIN_MBUS_UART_TX:
-    case T5_PIN_MBUS_UART_RX: return "a boot strapping pin";
-    default: return NULL;
+    for (size_t i = 0; i < N_RULES; i++) {
+        if (s_pin_rules[i].gpio == gpio) return s_pin_rules[i].risk;
     }
+    return NULL;
 }
 
 bool ports_pin_risky(uint8_t gpio)
 {
     return ports_pin_risk(gpio) != NULL;
+}
+
+bool ports_pin_hands_off(uint8_t gpio)
+{
+    for (size_t i = 0; i < N_RULES; i++) {
+        if (s_pin_rules[i].gpio == gpio) return s_pin_rules[i].hands_off;
+    }
+    return false;
 }
 
 /* ESP32-P4 (soc/esp32p4/include/soc/adc_channel.h): ADC1 = GPIO16..23 ch0..7,

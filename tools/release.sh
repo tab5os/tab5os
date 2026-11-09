@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a Tab5 OS release into dist/tab5os-<version>/ (plan 9.7).
 #
-#   tools/release.sh [--sign KEY.pem] [--rev rev1]
+#   tools/release.sh [--sign KEY.pem]
 #
 # Makes, from a clean build of the current tree:
 #   firmware/   bootloader, partition table, OS image, OTA data, recovery
@@ -16,45 +16,43 @@
 # and attach dist/tab5os-<version>/ to the release.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REV=rev1
 KEY=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --sign) KEY="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
-        --rev) REV="$2"; shift 2 ;;
-        *) echo "usage: $0 [--sign KEY.pem] [--rev rev1]" >&2; exit 1 ;;
+        *) echo "usage: $0 [--sign KEY.pem]" >&2; exit 1 ;;
     esac
 done
 command -v idf.py >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
+T5="$ROOT/tools/t5/t5"
 VER="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 OUT="$ROOT/dist/tab5os-$VER"
-FW="$ROOT/firmware/build-$REV"
+FW="$ROOT/firmware/build"
 rm -rf "$OUT"
 mkdir -p "$OUT/firmware" "$OUT/apps"
 
-echo "== firmware ($REV)"
+echo "== firmware"
 git -C "$ROOT" submodule update --init third_party/micropython >/dev/null
-(cd "$ROOT/firmware" && idf.py -B "build-$REV" -D T5_REV="$REV" build >/dev/null)
-size=$(stat -f %z "$FW/tab5os.bin" 2>/dev/null || stat -c %s "$FW/tab5os.bin")
-[ "$size" -le $((4 * 1024 * 1024 * 9 / 10)) ] || { echo "tab5os.bin is over 90% of its slot" >&2; exit 1; }
+"$T5" build >/dev/null
+"$T5" size-check
 cp "$FW/bootloader/bootloader.bin" "$FW/partition_table/partition-table.bin" "$FW/ota_data_initial.bin" \
    "$FW/tab5os.bin" "$OUT/firmware/"
 
 echo "== recovery"
-(cd "$ROOT/recovery" && { [ -f sdkconfig ] || idf.py -B build set-target esp32p4 >/dev/null; } && idf.py -B build build >/dev/null)
+"$T5" recovery-build | tail -1
 cp "$ROOT/recovery/build/tab5recovery.bin" "$OUT/firmware/"
 
-cat > "$OUT/firmware/flash_all.sh" <<'FLASH'
+# Offsets: the build's flasher_args.json, and the recovery partition from partitions.csv.
+FLASH_ARGS="$(python3 "$ROOT/tools/t5/t5const.py" flash-args "$FW")"
+FLASH_ARGS="$FLASH_ARGS $(python3 "$ROOT/tools/t5/t5const.py" partition recovery offset) tab5recovery.bin"
+cat > "$OUT/firmware/flash_all.sh" <<FLASH
 #!/bin/sh
 # Flash a Tab5 from scratch: bootloader, partition table, OS (slot ota_0) and
 # the recovery image. Settings and files in /data are kept. Needs esptool
-# (pip install esptool). PORT defaults to the first USB serial port.
+# (pip install esptool). Set PORT to pick the serial port; esptool finds it otherwise.
 set -e
-cd "$(dirname "$0")"
-PORT="${PORT:-$(ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null | head -1)}"
-esptool --chip esp32p4 --port "$PORT" -b 460800 write-flash --flash-mode dio --flash-size 16MB \
-    0x2000 bootloader.bin 0x10000 partition-table.bin 0x40000 ota_data_initial.bin \
-    0x1d0000 tab5os.bin 0x50000 tab5recovery.bin
+cd "\$(dirname "\$0")"
+esptool --chip esp32p4 \${PORT:+--port "\$PORT"} -b 460800 write-flash $FLASH_ARGS
 FLASH
 chmod +x "$OUT/firmware/flash_all.sh"
 
@@ -68,8 +66,7 @@ if [ -f "$ROOT/c6/build/tab5os_c6.bin" ]; then
 fi
 
 echo "== example apps"
-cmake -S "$ROOT/apps/examples" -B "$ROOT/apps/examples/build" -G Ninja -DT5_FIRMWARE_BUILD="$FW" >/dev/null
-cmake --build "$ROOT/apps/examples/build" >/dev/null
+"$T5" examples >/dev/null
 for f in "$ROOT"/apps/examples/build/*.t5app; do
     if [ -n "$KEY" ]; then
         name=$(basename "$f" .t5app)
@@ -84,16 +81,26 @@ SDK="$OUT/tab5os-sdk-$VER"
 mkdir -p "$SDK/tools"
 cp -R "$ROOT/sdk" "$SDK/"
 cp -R "$ROOT/tools/t5" "$ROOT/tools/abi" "$ROOT/tools/ota" "$ROOT/tools/env.sh" "$SDK/tools/"
-rm -rf "$SDK"/tools/*/__pycache__
+rm -rf "$SDK"/tools/*/__pycache__ "$SDK"/tools/*/test_*.py
+# The tools read device constants from the firmware's headers and partition
+# table (tools/t5/t5const.py): ship those.
+mkdir -p "$SDK/firmware/components"
+cp "$ROOT/firmware/partitions.csv" "$ROOT/firmware/idf_version.txt" "$SDK/firmware/"
+for inc in "$ROOT"/firmware/components/*/include; do
+    c="$(basename "$(dirname "$inc")")"
+    mkdir -p "$SDK/firmware/components/$c"
+    cp -R "$inc" "$SDK/firmware/components/$c/"
+done
+cp "$ROOT/firmware/components/t5_pkg/manifest.c" "$SDK/firmware/components/t5_pkg/"   # the manifest's tables
 mkdir -p "$SDK/docs"
 cp "$ROOT"/docs/sdk.md "$ROOT"/docs/python.md "$ROOT"/docs/api-reference.md "$ROOT"/docs/flashing.md \
    "$ROOT"/docs/security.md "$SDK/docs/"
 cp "$ROOT/LICENSE" "$SDK/"
 # Native apps compile against a firmware build's headers and config: ship
-# the compile database and generated config with the SDK.
-mkdir -p "$SDK/firmware-build"
-cp "$FW/compile_commands.json" "$SDK/firmware-build/"
-cp -R "$FW/config" "$SDK/firmware-build/"
+# the compile database and generated config where t5 and t5_app.cmake look.
+mkdir -p "$SDK/firmware/build"
+cp "$FW/compile_commands.json" "$SDK/firmware/build/"
+cp -R "$FW/config" "$SDK/firmware/build/"
 tar -C "$OUT" -czf "$OUT/tab5os-sdk-$VER.tar.gz" "tab5os-sdk-$VER"
 rm -rf "$SDK"
 

@@ -38,7 +38,7 @@ set(T5_PY_SHARED
     ${MICROPY_DIR}/shared/readline/readline.c
     ${MICROPY_DIR}/shared/timeutils/timeutils.c
 )
-set(T5_PY_PORT vm.c fs.c console.c runtime.c mod_t5.c mod_port.c mod_ui.c mod_net.c mod_socket.c frozen.c)
+set(T5_PY_PORT vm.c fs.c console.c runtime.c mod_t5.c mod_port.c mod_ui.c pynet.c mod_net.c mod_socket.c frozen.c)
 set(T5_PY_PORT_ABS)
 foreach(f ${T5_PY_PORT})
     list(APPEND T5_PY_PORT_ABS "${CMAKE_CURRENT_LIST_DIR}/${f}")
@@ -73,7 +73,9 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
     file(GLOB_RECURSE T5_FROZEN_PY "${FROZEN_DIR}/*.py" "${MICROPY_DIR}/extmod/asyncio/*.py")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${T5_ROOT}/tools/py/freeze_str.py" ${T5_FROZEN_PY})
+    # genbind.py reads the permission table through abi.py and t5const.py.
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${GENBIND} "${T5_ROOT}/tools/abi/abi.py"
+                 "${T5_ROOT}/tools/t5/t5const.py" "${T5_ROOT}/firmware/components/t5_pkg/manifest.c"
                  "${T5_ROOT}/sdk/abi/api_v1.sym" "${CMAKE_CURRENT_LIST_DIR}/bindings.txt" ${T5_SDK_HEADERS})
 endif()
 
@@ -83,8 +85,8 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "." "${MICROPY_DIR}" "${BIND_DIR}" "${CMAKE_BINARY_DIR}"
     REQUIRES t5_core lvgl__lvgl
-    PRIV_REQUIRES t5_camera t5_usb t5_app t5_pkg t5_ui md t5_ports t5_power t5_battery t5_time t5_audio t5_imu t5_usb t5_net t5_shell
-                  esp_http_client mbedtls esp_timer esp_hw_support heap esp_app_format esp_rom freertos log
+    PRIV_REQUIRES t5_app t5_pkg t5_ui md t5_ports t5_power t5_battery t5_time t5_audio t5_imu t5_usb t5_net t5_shell
+                  t5_storage esp_timer esp_hw_support heap esp_app_format esp_rom freertos log
 )
 
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
@@ -110,8 +112,10 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     add_custom_command(
         OUTPUT ${MODCHECK}
         COMMAND ${python} "${T5_ROOT}/tools/py/check_modules.py" ${MICROPY_MODULEDEFS}
-                "${CMAKE_CURRENT_LIST_DIR}/modules_allowed.txt" ${MODCHECK}
+                "${CMAKE_CURRENT_LIST_DIR}/modules_allowed.txt" "${CMAKE_CURRENT_LIST_DIR}/include/t5_py/containment.h"
+                ${MODCHECK}
         DEPENDS ${MICROPY_MODULEDEFS} "${CMAKE_CURRENT_LIST_DIR}/modules_allowed.txt" "${T5_ROOT}/tools/py/check_modules.py"
+                "${CMAKE_CURRENT_LIST_DIR}/include/t5_py/containment.h"
         VERBATIM)
     add_custom_target(t5_py_modcheck DEPENDS ${MODCHECK})
     add_dependencies(${COMPONENT_LIB} t5_py_modcheck)

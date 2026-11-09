@@ -16,11 +16,11 @@ typedef enum { TILE_WIFI, TILE_BLE, TILE_ROTATE, TILE_SAVER, TILE_MUTE, TILE_COU
 static const struct {
     const char *icon_on, *icon_off, *label, *page;
 } s_tile_def[TILE_COUNT] = {
-    [TILE_WIFI] = { MD_ICON_WIFI, MD_ICON_WIFI_OFF, "Wi-Fi", "wifi" },
-    [TILE_BLE] = { MD_ICON_BLUETOOTH, MD_ICON_BLUETOOTH_DISABLED, "Bluetooth", "ble" },
-    [TILE_ROTATE] = { MD_ICON_SCREEN_ROTATION, MD_ICON_SCREEN_LOCK_ROTATION, "Auto-rotate", "display" },
-    [TILE_SAVER] = { MD_ICON_BATTERY_SAVER, MD_ICON_BATTERY_SAVER, "Battery saver", "power" },
-    [TILE_MUTE] = { MD_ICON_VOLUME_OFF, MD_ICON_VOLUME_UP, "Mute", "sound" },
+    [TILE_WIFI] = { MD_ICON_WIFI, MD_ICON_WIFI_OFF, "Wi-Fi", T5_SETTINGS_PAGE_WIFI },
+    [TILE_BLE] = { MD_ICON_BLUETOOTH, MD_ICON_BLUETOOTH_DISABLED, "Bluetooth", T5_SETTINGS_PAGE_BLE },
+    [TILE_ROTATE] = { MD_ICON_SCREEN_ROTATION, MD_ICON_SCREEN_LOCK_ROTATION, "Auto-rotate", T5_SETTINGS_PAGE_DISPLAY },
+    [TILE_SAVER] = { MD_ICON_BATTERY_SAVER, MD_ICON_BATTERY_SAVER, "Battery saver", T5_SETTINGS_PAGE_POWER },
+    [TILE_MUTE] = { MD_ICON_VOLUME_OFF, MD_ICON_VOLUME_UP, "Mute", T5_SETTINGS_PAGE_SOUND },
 };
 
 static struct {
@@ -38,11 +38,6 @@ bool qs_is_open(void)
     return s.catcher && !s.closing;
 }
 
-static void set_text(lv_obj_t *l, const char *t)
-{
-    if (strcmp(lv_label_get_text(l), t)) lv_label_set_text(l, t);
-}
-
 static void tile_paint(int i, bool on)
 {
     const md_scheme_t *sc = md_scheme();
@@ -52,7 +47,7 @@ static void tile_paint(int i, bool on)
     lv_obj_set_style_bg_color(circle, md_color(on ? sc->c.primary : sc->c.on_surface), 0);
     lv_obj_set_style_bg_opa(circle, on ? LV_OPA_COVER : LV_OPA_10 + 2, 0);
     lv_obj_set_style_text_color(circle, md_color(on ? sc->c.on_primary : sc->c.on_surface), 0);
-    set_text(c, on ? s_tile_def[i].icon_on : s_tile_def[i].icon_off);
+    shell_set_text(c, on ? s_tile_def[i].icon_on : s_tile_def[i].icon_off);
 }
 
 static void update(void)
@@ -60,20 +55,8 @@ static void update(void)
     if (!s.catcher) return;
     shell_status_t st;
     shell_sys_status(&st);
-    struct tm tm;
+    shell_show_time(s.time, s.date);
     char buf[64];
-    static const char *days[] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
-    static const char *months[] = { "January", "February", "March", "April", "May", "June", "July",
-                                    "August", "September", "October", "November", "December" };
-    if (shell_sys_time(&tm)) {
-        snprintf(buf, sizeof buf, "%02d:%02d", tm.tm_hour, tm.tm_min);
-        set_text(s.time, buf);
-        snprintf(buf, sizeof buf, "%s, %d %s", days[tm.tm_wday % 7], tm.tm_mday, months[tm.tm_mon % 12]);
-        set_text(s.date, buf);
-    } else {
-        set_text(s.time, "--:--");
-        set_text(s.date, "Time not set");
-    }
     if (st.battery_pct < 0) {
         snprintf(buf, sizeof buf, "Battery: measuring");
     } else if (st.charging) {
@@ -86,9 +69,9 @@ static void update(void)
     } else {
         snprintf(buf, sizeof buf, "%d%%", st.battery_pct);
     }
-    set_text(s.battery, buf);
+    shell_set_text(s.battery, buf);
     tile_paint(TILE_WIFI, st.wifi_on);
-    set_text(s.tile_label[TILE_WIFI], st.wifi_connected && st.ssid[0] ? st.ssid : "Wi-Fi");
+    shell_set_text(s.tile_label[TILE_WIFI], st.wifi_connected && st.ssid[0] ? st.ssid : "Wi-Fi");
     tile_paint(TILE_BLE, st.ble_on);
     tile_paint(TILE_ROTATE, !st.rotation_locked);
     tile_paint(TILE_SAVER, st.low_power);
@@ -101,11 +84,6 @@ static void timer_cb(lv_timer_t *t)
 {
     (void)t;
     update();
-}
-
-static void set_y_anim(void *o, int32_t v)
-{
-    lv_obj_set_y(o, v);
 }
 
 static void set_bg_opa_anim(void *o, int32_t v)
@@ -133,7 +111,7 @@ void qs_close(void)
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s.panel);
-    lv_anim_set_exec_cb(&a, set_y_anim);
+    lv_anim_set_exec_cb(&a, shell_anim_y);
     lv_anim_set_values(&a, lv_obj_get_y(s.panel), -h);
     lv_anim_set_duration(&a, MD_DUR_DRAWER_OUT_MS);
     md_anim_set_curve(&a, MD_CURVE_SHARP);
@@ -179,14 +157,14 @@ static void tile_long(lv_event_t *e)
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     lv_indev_wait_release(lv_indev_active());
     qs_close();
-    shell_sys_launch(SHELL_APP_SETTINGS, s_tile_def[i].page);
+    shell_sys_launch(T5_APP_ID_SETTINGS, s_tile_def[i].page);
 }
 
 static void settings_clicked(lv_event_t *e)
 {
     (void)e;
     qs_close();
-    shell_sys_launch(SHELL_APP_SETTINGS, NULL);
+    shell_sys_launch(T5_APP_ID_SETTINGS, NULL);
 }
 
 static void bright_changed(lv_event_t *e)
@@ -205,7 +183,7 @@ static void volume_released(lv_event_t *e)
     shell_sys_click();            /* hear the new level */
 }
 
-static lv_obj_t *slider_row(lv_obj_t *parent, const char *icon, lv_obj_t **slider, lv_event_cb_t cb)
+static void slider_row(lv_obj_t *parent, const char *icon, lv_obj_t **slider, lv_event_cb_t cb)
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
@@ -220,7 +198,6 @@ static lv_obj_t *slider_row(lv_obj_t *parent, const char *icon, lv_obj_t **slide
     *slider = md_slider_create(row, 0, 100, 50);
     lv_obj_set_flex_grow(*slider, 1);
     lv_obj_add_event_cb(*slider, cb, LV_EVENT_VALUE_CHANGED, NULL);
-    return row;
 }
 
 void qs_open(void)
@@ -272,8 +249,7 @@ void qs_open(void)
     s.date = md_label_create(col, "", MD_TYPE_BODY2);
     s.battery = md_label_create(col, "", MD_TYPE_CAPTION);
     lv_obj_set_style_text_opa(s.battery, sc->on_surface.medium, 0);
-    lv_obj_t *gear = md_appbar_add_action(hdr, MD_ICON_SETTINGS, settings_clicked, NULL);
-    (void)gear;
+    md_appbar_add_action(hdr, MD_ICON_SETTINGS, settings_clicked, NULL);
 
     /* Tiles. */
     lv_obj_t *tiles = lv_obj_create(p);
@@ -310,8 +286,7 @@ void qs_open(void)
     }
 
     slider_row(p, MD_ICON_BRIGHTNESS_6, &s.bright, bright_changed);
-    lv_obj_t *vrow = slider_row(p, MD_ICON_VOLUME_UP, &s.volume, volume_changed);
-    (void)vrow;
+    slider_row(p, MD_ICON_VOLUME_UP, &s.volume, volume_changed);
     lv_obj_add_event_cb(s.volume, volume_released, LV_EVENT_RELEASED, NULL);
 
     /* A drag handle hint at the bottom. */
@@ -338,7 +313,7 @@ void qs_open(void)
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, p);
-    lv_anim_set_exec_cb(&a, set_y_anim);
+    lv_anim_set_exec_cb(&a, shell_anim_y);
     lv_anim_set_values(&a, -h, 0);
     lv_anim_set_duration(&a, MD_DUR_DRAWER_IN_MS);
     md_anim_set_curve(&a, MD_CURVE_DECELERATION);

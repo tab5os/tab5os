@@ -20,7 +20,7 @@ Updates never need a cable once Tab5 OS is installed, and a failed one never lea
 - **From the SD card:** copy `tab5os-<version>.t5os` to the card's top folder (or `/update`), then Settings > Updates and tap it.
 - **From a computer in developer mode:** `t5 ota tab5os-<version>.t5os`.
 
-The update is written to the other system slot and checked (signature, contents, chip revision) before the Tab5 will start it. After the restart it runs on trial: if it crashes or is reset in its first minute, the Tab5 goes back to the previous version by itself. Updates signed by a key the installed system doesn't trust, and unsigned ones, install only in developer mode.
+The update is written to the other system slot and checked (signature, contents, chip revision) before the Tab5 will start it. After the restart it runs on trial: if it crashes or is reset in its first minute, the Tab5 goes back to the previous version by itself. Updates signed by a key the installed system doesn't trust, and unsigned ones, install only in developer mode (from Settings, or pushed from a paired computer) or from the USB-C console with `ota file PATH unsigned`. The recovery image installs unsigned updates after asking, never ones signed by a key it doesn't trust.
 
 ## When it doesn't start
 

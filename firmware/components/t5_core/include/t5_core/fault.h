@@ -101,14 +101,6 @@ T5_MUST_CHECK t5_err_t t5_fault_interrupt_task(t5_task_t task, uint32_t timeout_
 /* Faults survived since boot. */
 uint32_t t5_fault_recovered(void);
 
-/* The calling task's app context (t5_app_ctx_get) for any task. */
-void *t5_app_ctx_of(t5_task_t task);
-
-/* Release a recursive mutex as many times as the calling task holds it. */
-void t5_mutex_release_all(t5_mutex_t m);
-/* True if the calling task holds m. */
-bool t5_mutex_held(t5_mutex_t m);
-
 #ifdef __cplusplus
 }
 #endif

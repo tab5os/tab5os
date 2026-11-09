@@ -11,7 +11,6 @@
 #include "t5_battery/ina226.h"
 #include "t5_bsp/xpin.h"
 #include "t5_core/event.h"
-#include "t5_i2c/t5_i2c.h"
 #include "t5_net/net.h"
 #include "t5_pins/pins.h"
 #include "t5_power/power.h"
@@ -19,18 +18,10 @@
 #include "t5_time/rtc.h"
 #include "t5_time/t5_time.h"
 
-static void bus_up(void)
-{
-    t5_event_init();
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_init());
-    TEST_ASSERT_EQUAL(T5_OK, t5_xpin_init());
-}
-
 TEST_CASE("ina226 reads a plausible pack or the USB node", "[battery]")
 {
-    bus_up();
     TEST_ASSERT_EQUAL(T5_OK, t5_ina226_init());
-    vTaskDelay(pdMS_TO_TICKS(80));
+    vTaskDelay(pdMS_TO_TICKS(T5_INA226_FIRST_SAMPLE_MS));
     t5_ina226_sample_t s;
     int plausible = 0;
     for (int i = 0; i < 10; i++) {
@@ -47,7 +38,6 @@ TEST_CASE("ina226 reads a plausible pack or the USB node", "[battery]")
 
 TEST_CASE("rail holds switch the expander pin", "[power]")
 {
-    bus_up();
     t5_rail_hold_t *a, *b;
     TEST_ASSERT_EQUAL(T5_OK, t5_rail_acquire(T5_RAIL_USB5V, "test-a", 0, &a));
     TEST_ASSERT_EQUAL(T5_OK, t5_rail_acquire(T5_RAIL_USB5V, "test-b", 0, &b));
@@ -64,7 +54,6 @@ TEST_CASE("rail holds switch the expander pin", "[power]")
 
 TEST_CASE("rtc user ram survives a write and read", "[power]")
 {
-    bus_up();
     TEST_ASSERT_EQUAL(T5_OK, t5_rtc_init());
     uint8_t old[4], w[4] = { 0x12, 0x34, 0x56, 0x78 }, r[4];
     TEST_ASSERT_EQUAL(T5_OK, t5_rtc_ram_read(old));
@@ -76,7 +65,6 @@ TEST_CASE("rtc user ram survives a write and read", "[power]")
 
 TEST_CASE("wake reason is read without error", "[power]")
 {
-    bus_up();
     TEST_ASSERT_EQUAL(T5_OK, t5_rtc_init());
     t5_power_read_wake_reason();
     t5_wake_reason_t w = t5_power_wake_reason();
@@ -94,7 +82,6 @@ static void on_net(t5_event_id_t id, const void *d, size_t l, void *a)
 
 TEST_CASE("c6 link comes up and scans", "[net]")
 {
-    bus_up();
     TEST_ASSERT_EQUAL(T5_OK, t5_time_init());
     s_up = s_scanned = false;
     t5_event_subscribe(T5_EV_ANY, on_net, NULL);

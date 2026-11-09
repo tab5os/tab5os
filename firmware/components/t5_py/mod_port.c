@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
  * t5.port (plan 8.3): the named external ports, the same broker native
- * apps use. Needs the ports permission and the port listed in the app's
- * manifest (t5_app_port_open_ex enforces that, like the native ABI).
+ * apps use. Needs the ports permission, as t5_port_open_ex does in the
+ * native ABI, and the port listed in the app's manifest (the broker's
+ * access check, for both).
  *
  *   p = t5.port.open("grove", mode="i2c", hz=400_000)
  *   p.read_reg(0x44, 0x00, 2)
@@ -17,10 +18,9 @@
 #include "py/objstr.h"
 #include "py/runtime.h"
 #include "t5_app/app.h"
-#include "t5_app/wrappers.h"
-#include "t5_pkg/manifest.h"
 #include "t5_ports/ports.h"
 #include "t5_power/rail.h"
+#include "bind_perm.h"
 #include "py_priv.h"
 
 typedef struct {
@@ -28,10 +28,6 @@ typedef struct {
     t5_port_t *p;
     t5_port_mode_t mode;
 } py_port_t;
-
-void py_port_reset(void)
-{
-}
 
 static py_port_t *self_open(mp_obj_t o, t5_port_mode_t need)
 {
@@ -69,7 +65,6 @@ static void port_print(const mp_print_t *print, mp_obj_t o, mp_print_kind_t kind
     else mp_printf(print, "<Port %s %s>", t5_port_name(self->p), t5_port_mode_name(self->mode));
 }
 
-/* ---- I2C ------------------------------------------------------------------------------- */
 static uint8_t addr_arg(mp_obj_t a)
 {
     mp_int_t v = mp_obj_get_int(a);
@@ -157,7 +152,6 @@ static mp_obj_t port_scan(mp_obj_t o)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(port_scan_obj, port_scan);
 
-/* ---- UART / RS-485 ------------------------------------------------------------------------ */
 static mp_obj_t port_write(mp_obj_t o, mp_obj_t data)
 {
     py_port_t *self = self_open(o, T5_MODE_UART);
@@ -213,7 +207,6 @@ static mp_obj_t port_wait_tx(size_t n, const mp_obj_t *args)
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(port_wait_tx_obj, 1, 2, port_wait_tx);
 
-/* ---- SPI ------------------------------------------------------------------------------------ */
 static mp_obj_t port_transfer(mp_obj_t o, mp_obj_t data)
 {
     py_port_t *self = self_open(o, T5_MODE_SPI);
@@ -237,7 +230,6 @@ static mp_obj_t port_transfer(mp_obj_t o, mp_obj_t data)
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(port_transfer_obj, port_transfer);
 
-/* ---- GPIO, PWM, ADC --------------------------------------------------------------------------- */
 static mp_obj_t port_value(size_t n, const mp_obj_t *args)
 {
     py_port_t *self = self_open(args[0], T5_MODE_GPIO);
@@ -315,7 +307,7 @@ static mp_obj_t port_open(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     };
     mp_arg_val_t a[MP_ARRAY_SIZE(allowed)];
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, a);
-    py_need_perm(T5_PERM_PORTS);
+    py_need_perm(T5G_PERM_t5_port_open_ex);
     const char *name = mp_obj_str_get_str(a[A_name].u_obj);
     t5_port_mode_t mode = t5_port_mode_parse(mp_obj_str_get_str(a[A_mode].u_obj));
     if (mode == T5_MODE_COUNT) mp_raise_ValueError(MP_ERROR_TEXT("mode is i2c, uart, rs485, spi, gpio, pwm or adc"));
@@ -363,12 +355,10 @@ static mp_obj_t port_open(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     o->mode = mode;
     char why[T5_PORT_WHY_LEN] = "";
     uint32_t flags = a[A_risky].u_bool ? T5_PORT_FLAG_RISKY : 0;
-    t5_err_t e = py_vm && py_vm->app ? t5_app_port_open_ex(name, mode, &cfg, flags, &o->p, why, sizeof why)
-                                     : t5_port_open_ex(name, mode, &cfg, flags, &o->p, why, sizeof why);
+    t5_err_t e = t5_port_open_ex(name, mode, &cfg, flags, &o->p, why, sizeof why);
     if (e != T5_OK) {
         if (why[0]) {
-            mp_obj_t args[2] = { MP_OBJ_NEW_SMALL_INT(e == T5_ERR_BUSY ? MP_EBUSY : e == T5_ERR_DENIED ? MP_EACCES : MP_EIO),
-                                 mp_obj_new_str_from_cstr(why) };
+            mp_obj_t args[2] = { MP_OBJ_NEW_SMALL_INT(py_errno(e, PY_ERRNO_GENERIC)), mp_obj_new_str_from_cstr(why) };
             nlr_raise(mp_obj_exception_make_new(&mp_type_OSError, 2, 0, args));
         }
         py_raise_t5(e);
@@ -388,7 +378,7 @@ static mp_obj_t port_names(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(port_names_obj, port_names);
 
-/* ---- switched rails: t5.port.rail("ext5v") ------------------------------------------------- */
+/* Switched rails: t5.port.rail("ext5v"). */
 typedef struct {
     mp_obj_base_t base;
     t5_rail_hold_t *hold;
@@ -421,13 +411,14 @@ static MP_DEFINE_CONST_OBJ_TYPE(py_type_rail, MP_QSTR_Rail, MP_TYPE_FLAG_NONE, l
 
 static mp_obj_t port_rail(mp_obj_t name)
 {
-    py_need_perm(T5_PERM_PORTS);
+    py_need_perm(T5G_PERM_t5_rail_acquire);
     const char *n = mp_obj_str_get_str(name);
     int rail = -1;
     for (int i = 0; i < T5_RAIL_COUNT; i++) {
         if (!strcmp(n, t5_rail_name((t5_rail_t)i))) rail = i;
     }
-    /* Apps may switch the external 5 V only. */
+    /* Containment (docs/python.md): Python apps may switch the external 5 V
+     * only; native apps reach every rail through t5_rail_acquire. */
     if (rail != T5_RAIL_EXT5V) mp_raise_ValueError(MP_ERROR_TEXT("apps can hold the ext5v rail only"));
     py_rail_t *o = mp_obj_malloc_with_finaliser(py_rail_t, &py_type_rail);
     o->hold = NULL;

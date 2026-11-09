@@ -9,6 +9,7 @@
 #include "esp_console.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "t5_net/ble.h"
 #include "t5_net/net.h"
@@ -45,6 +46,8 @@ static const char *auth_str(uint8_t a)
 /* A tiny TCP echo server for the Phase 3 exit test: the P4 sleeps with the
  * connection open and answers a packet. Holds a net lock while it runs. */
 static int s_echo_port;
+static SemaphoreHandle_t s_echo_up;     /* given once the server listens, or failed to */
+static StaticSemaphore_t s_echo_up_buf;
 
 static void echo_task(void *arg)
 {
@@ -56,9 +59,11 @@ static void echo_task(void *arg)
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     if (ls < 0 || bind(ls, (struct sockaddr *)&a, sizeof a) < 0 || listen(ls, 1) < 0) {
         printf("echo: can't listen on %d\n", port);
+        xSemaphoreGive(s_echo_up);
         goto out;
     }
     printf("echo: listening on %d\n", port);
+    xSemaphoreGive(s_echo_up);
     while (s_echo_port == port) {
         int c = accept(ls, NULL, NULL);
         if (c < 0) continue;
@@ -144,7 +149,11 @@ static int cmd_net(int argc, char **argv)
         if (!strcmp(argv[2], "stop")) { s_echo_port = 0; return 0; }
         if (!diag_parse_u32(argv[2], 1, 65535, &port)) goto usage;
         s_echo_port = (int)port;
-        xTaskCreatePinnedToCore(echo_task, "echo", 4096, (void *)(intptr_t)port, 5, NULL, 0);
+        if (!s_echo_up) s_echo_up = xSemaphoreCreateBinaryStatic(&s_echo_up_buf);
+        xSemaphoreTake(s_echo_up, 0);
+        if (xTaskCreatePinnedToCore(echo_task, "echo", 4096, (void *)(intptr_t)port, 5, NULL, 0) != pdPASS) return 1;
+        /* Its "listening" line is part of this command's reply. */
+        xSemaphoreTake(s_echo_up, pdMS_TO_TICKS(5000));
         return 0;
     }
 usage:

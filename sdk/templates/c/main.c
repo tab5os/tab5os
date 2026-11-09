@@ -26,7 +26,7 @@ static void on_create(t5_app_t *app)
     t5_app_set_user(app, s);
     lv_obj_t *scr = t5_app_screen(app);
     lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
-    md_appbar_create(scr, "Hello", MD_ICON_ARROW_BACK, back, NULL);
+    md_appbar_create(scr, "@APP_NAME@", MD_ICON_ARROW_BACK, back, NULL);
     s->label = md_label_create(scr, "Hello, Tab5", MD_TYPE_HEADLINE5);
     lv_obj_set_style_pad_all(s->label, T5_DP(16), 0);
     lv_obj_t *b = md_button_create(scr, "Tap me", MD_BUTTON_CONTAINED);

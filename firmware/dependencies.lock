@@ -427,6 +427,6 @@ direct_dependencies:
 - espressif/usb_host_uvc
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: 8775fdb0ffd6db852a6761310249c6434f43e6c9921f4e7413d566e65b234ed1
+manifest_hash: 7d09eb529f24e47748d5dbf980555b007799a195a11cfbab8623f372a9a8c982
 target: esp32p4
 version: 3.0.0

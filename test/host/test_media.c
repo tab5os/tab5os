@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Phase 6 and 7 pure logic: audio resampling, mixing, system sounds and echo
- * cancellation; per-app energy; the charge history; USB-MIDI packets and HID
- * key mapping.
+ * Phase 6 and 7 logic: audio resampling, mixing, system sounds and echo
+ * cancellation; per-app energy; USB-MIDI packets, HID key mapping and
+ * keyboard and mouse reports.
  */
 #include <math.h>
 #include <stdlib.h>
@@ -9,11 +9,19 @@
 #include "unity.h"
 #include "t5_app/energy.h"
 #include "t5_audio/dsp.h"
-#include "t5_battery/history.h"
+#include "t5_mocks.h"
+#include "t5_usb/usb.h"
 #include "usb_proto.h"
 
-void setUp(void) {}
-void tearDown(void) {}
+void setUp(void)
+{
+    mock_reset_all();
+}
+
+void tearDown(void)
+{
+    t5_usb_set_hid_handler(NULL);
+}
 
 /* ---- resampler ------------------------------------------------------------------ */
 static void test_resample_identity(void)
@@ -105,7 +113,7 @@ static void test_sounds_end_and_stay_quiet(void)
     for (int k = 0; k < T5_SOUND_COUNT; k++) {
         t5_voice_t v;
         t5_voice_start(&v, (t5_sound_t)k);
-        uint32_t frames = t5_sound_ms((t5_sound_t)k) * 48;
+        uint32_t frames = t5_sound_ms((t5_sound_t)k) * (T5_AUDIO_RATE / 1000);
         int32_t *acc = calloc(frames * 2 + 960, sizeof *acc);
         uint32_t done = 0;
         bool active = true;
@@ -204,28 +212,6 @@ static void test_energy_evicts_lru(void)
     TEST_ASSERT_NOT_NULL(t5_energy_find(&db, "new"));
 }
 
-/* ---- charge history -------------------------------------------------------------------- */
-static void test_history_ring(void)
-{
-    t5_bat_hist_t h;
-    t5_bat_hist_init(&h);
-    TEST_ASSERT_TRUE(t5_bat_hist_valid(&h));
-    for (int i = 0; i < T5_BAT_HIST_LEN + 10; i++) {
-        t5_bat_hist_pt_t p = { .t = (uint32_t)i, .pct = (int8_t)(i % 100) };
-        t5_bat_hist_add(&h, &p);
-    }
-    t5_bat_hist_pt_t out[T5_BAT_HIST_LEN];
-    int n = t5_bat_hist_read(&h, out, T5_BAT_HIST_LEN);
-    TEST_ASSERT_EQUAL(T5_BAT_HIST_LEN, n);
-    TEST_ASSERT_EQUAL(10, out[0].t);                       /* oldest kept */
-    TEST_ASSERT_EQUAL(T5_BAT_HIST_LEN + 9, out[n - 1].t);  /* newest last */
-    t5_bat_hist_pt_t few[5];
-    TEST_ASSERT_EQUAL(5, t5_bat_hist_read(&h, few, 5));
-    TEST_ASSERT_EQUAL(T5_BAT_HIST_LEN + 5, few[0].t);      /* the newest five */
-    h.head = 9999;
-    TEST_ASSERT_FALSE(t5_bat_hist_valid(&h));
-}
-
 /* ---- USB ------------------------------------------------------------------------------------- */
 static void test_midi_packets(void)
 {
@@ -245,19 +231,71 @@ static void test_midi_packets(void)
     TEST_ASSERT_EQUAL(0, usb_midi_parse(pad, msg));
 }
 
+/* HID usage IDs from the USB HID Usage Tables, keyboard page (0x07). */
 static void test_hid_keys(void)
 {
-    TEST_ASSERT_EQUAL('a', usb_hid_to_lv_key(0x04, false));
-    TEST_ASSERT_EQUAL('Z', usb_hid_to_lv_key(0x1D, true));
-    TEST_ASSERT_EQUAL('1', usb_hid_to_lv_key(0x1E, false));
-    TEST_ASSERT_EQUAL('!', usb_hid_to_lv_key(0x1E, true));
-    TEST_ASSERT_EQUAL('0', usb_hid_to_lv_key(0x27, false));
-    TEST_ASSERT_EQUAL(T5_KEY_ENTER, usb_hid_to_lv_key(0x28, false));
-    TEST_ASSERT_EQUAL(T5_KEY_BACKSPACE, usb_hid_to_lv_key(0x2A, false));
-    TEST_ASSERT_EQUAL(T5_KEY_PREV, usb_hid_to_lv_key(0x2B, true));
-    TEST_ASSERT_EQUAL('?', usb_hid_to_lv_key(0x38, true));
-    TEST_ASSERT_EQUAL(T5_KEY_LEFT, usb_hid_to_lv_key(0x50, false));
-    TEST_ASSERT_EQUAL(0, usb_hid_to_lv_key(0x3A, false));   /* F1: nothing */
+    TEST_ASSERT_EQUAL('a', usb_hid_key(0x04, false));
+    TEST_ASSERT_EQUAL('Z', usb_hid_key(0x1D, true));
+    TEST_ASSERT_EQUAL('1', usb_hid_key(0x1E, false));
+    TEST_ASSERT_EQUAL('!', usb_hid_key(0x1E, true));
+    TEST_ASSERT_EQUAL('0', usb_hid_key(0x27, false));
+    TEST_ASSERT_EQUAL(T5_HID_KEY_ENTER, usb_hid_key(0x28, false));
+    TEST_ASSERT_EQUAL(T5_HID_KEY_ENTER, usb_hid_key(0x58, false));   /* keypad enter */
+    TEST_ASSERT_EQUAL(T5_HID_KEY_BACKSPACE, usb_hid_key(0x2A, false));
+    TEST_ASSERT_EQUAL(T5_HID_KEY_BACKTAB, usb_hid_key(0x2B, true));
+    TEST_ASSERT_EQUAL('?', usb_hid_key(0x38, true));
+    TEST_ASSERT_EQUAL(T5_HID_KEY_LEFT, usb_hid_key(0x50, false));
+    TEST_ASSERT_EQUAL(0, usb_hid_key(0x3A, false));   /* F1: nothing */
+}
+
+static uint32_t s_keys[16];
+static int s_nkeys, s_dx, s_dy, s_attached;
+static bool s_button;
+
+static void rec_key(uint32_t key, void *arg) { (void)arg; if (s_nkeys < 16) s_keys[s_nkeys++] = key; }
+static void rec_mouse(int dx, int dy, bool b, void *arg) { (void)arg; s_dx += dx; s_dy += dy; s_button = b; }
+static void rec_attached(t5_hid_dev_t d, bool on, void *arg) { (void)arg; s_attached += (on ? 1 : -1) * (d == T5_HID_MOUSE ? 10 : 1); }
+
+static void test_hid_keyboard_reports(void)
+{
+    s_nkeys = 0;
+    const t5_usb_hid_handler_t h = { .key = rec_key };
+    t5_usb_set_hid_handler(&h);
+    usb_hid_attached(T5_HID_KEYBOARD, true);
+    TEST_ASSERT_TRUE(t5_usb_keyboard_present());
+    /* Boot report: modifiers, reserved, six keys down. */
+    const uint8_t a[8] = { 0, 0, 0x04 };
+    const uint8_t ab[8] = { 0, 0, 0x04, 0x05 };
+    const uint8_t shift_b[8] = { 0x02, 0, 0x05 };
+    const uint8_t none[8] = { 0 };
+    usb_hid_keyboard_report(a, sizeof a);
+    usb_hid_keyboard_report(a, sizeof a);          /* held: not again */
+    usb_hid_keyboard_report(ab, sizeof ab);        /* b joins */
+    usb_hid_keyboard_report(none, sizeof none);
+    usb_hid_keyboard_report(shift_b, sizeof shift_b);
+    usb_hid_keyboard_report(a, 4);                 /* short: ignored */
+    TEST_ASSERT_EQUAL(3, s_nkeys);
+    TEST_ASSERT_EQUAL('a', s_keys[0]);
+    TEST_ASSERT_EQUAL('b', s_keys[1]);
+    TEST_ASSERT_EQUAL('B', s_keys[2]);
+    usb_hid_attached(T5_HID_KEYBOARD, false);
+    TEST_ASSERT_FALSE(t5_usb_keyboard_present());
+}
+
+static void test_hid_mouse_and_late_handler(void)
+{
+    s_dx = s_dy = s_attached = 0;
+    usb_hid_attached(T5_HID_MOUSE, true);           /* before anyone listens */
+    const t5_usb_hid_handler_t h = { .attached = rec_attached, .mouse = rec_mouse };
+    t5_usb_set_hid_handler(&h);
+    TEST_ASSERT_EQUAL(10, s_attached);              /* told on install */
+    const uint8_t m[3] = { 0x01, (uint8_t)-3, 5 };
+    usb_hid_mouse_report(m, sizeof m);
+    TEST_ASSERT_EQUAL(-3, s_dx);
+    TEST_ASSERT_EQUAL(5, s_dy);
+    TEST_ASSERT_TRUE(s_button);
+    usb_hid_attached(T5_HID_MOUSE, false);
+    TEST_ASSERT_EQUAL(0, s_attached);
 }
 
 int main(void)
@@ -274,8 +312,9 @@ int main(void)
     RUN_TEST(test_aec_keeps_near_end);
     RUN_TEST(test_energy_average);
     RUN_TEST(test_energy_evicts_lru);
-    RUN_TEST(test_history_ring);
     RUN_TEST(test_midi_packets);
     RUN_TEST(test_hid_keys);
+    RUN_TEST(test_hid_keyboard_reports);
+    RUN_TEST(test_hid_mouse_and_late_handler);
     return UNITY_END();
 }

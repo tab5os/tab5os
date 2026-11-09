@@ -15,6 +15,10 @@
  *               on the standby rail. Wakes by button, RTC alarm or IMU.
  *   Charge mode soft off requested with USB attached (t5_battery handles it).
  *
+ * The service only publishes state: T5_EV_POWER_STATE, and the outputs below
+ * (backlight, standby, low-power mode) that the composition root wires to the
+ * drivers.
+ *
  * Locks:
  *   SCREEN  keeps Active (no dim, no screen off)
  *   CPU     allows Screen off, blocks Sleep
@@ -82,14 +86,14 @@ void t5_power_profile_timeouts(t5_power_profile_t p, t5_power_timeouts_t *out);
 
 /* ---- service ------------------------------------------------------------ */
 /* Read the wake reason, load settings, start the state task. Needs storage,
- * time (RTC) and the expanders; call after them and after the display. */
+ * time (RTC) and the expanders; call after them, with the outputs installed. */
 T5_MUST_CHECK t5_err_t t5_power_init(void);
 t5_power_state_t t5_power_state(void);
 const char *t5_power_state_name(t5_power_state_t s);
 const char *t5_power_cause_name(t5_power_cause_t c);
 
-/* Input happened (touch calls this through its activity hook). Wakes from
- * Dim, Screen off and Sleep. Cheap; safe from any task. */
+/* Input happened (touch, keyboard, mouse). Wakes from Dim, Screen off and
+ * Sleep. Cheap; safe from any task. */
 void t5_power_user_activity(void);
 /* Something other than input needs the CPU for ms (C6 traffic, a timer):
  * leaves Sleep for Screen off without lighting the screen. */
@@ -97,7 +101,6 @@ void t5_power_wake(t5_power_cause_t cause, uint32_t ms);
 
 /* Power menu actions. */
 void t5_power_request_screen_off(void);
-void t5_power_request_active(void);
 /* Screen off and straight into Sleep (locks still apply). */
 void t5_power_request_sleep(void);
 
@@ -108,7 +111,7 @@ T5_MUST_CHECK t5_err_t t5_power_set_timeouts(const t5_power_timeouts_t *t);
 void t5_power_get_timeouts(t5_power_timeouts_t *out);
 
 /* Low-power mode (battery 10%, or the user): shorter dim, capped
- * brightness. Services read t5_power_low_power() to cap frame rate etc. */
+ * brightness; the low_power output caps the UI's frame rate. */
 void t5_power_set_low_power(bool on);
 bool t5_power_low_power(void);
 
@@ -124,6 +127,9 @@ typedef struct t5_wakelock t5_wakelock_t;
 t5_wakelock_t *t5_wakelock_acquire(t5_lock_type_t type, const char *owner);
 /* Released by the service after timeout_ms unless released earlier. */
 t5_wakelock_t *t5_wakelock_acquire_timeout(t5_lock_type_t type, const char *owner, uint32_t timeout_ms);
+/* Held by the system, not the calling app: it stays when the app exits. For
+ * a service that takes a lock on its own account inside an app's call. */
+t5_wakelock_t *t5_wakelock_acquire_system(t5_lock_type_t type, const char *owner);
 void t5_wakelock_release(t5_wakelock_t *lock);
 int t5_wakelock_count(t5_lock_type_t type);
 const char *t5_lock_type_name(t5_lock_type_t t);
@@ -145,7 +151,6 @@ int t5_wakelock_list(t5_wakelock_info_t *out, int max);
 #define T5_SUSPEND_PRIO_APPS     100   /* on_suspend, 500 ms budget */
 #define T5_SUSPEND_PRIO_STORAGE  200   /* sync /data and /sd */
 #define T5_SUSPEND_PRIO_MEDIA    300   /* camera, codecs, speaker amp */
-#define T5_SUSPEND_PRIO_DISPLAY  400
 #define T5_SUSPEND_PRIO_NET      500   /* C6 power save or off */
 #define T5_SUSPEND_PRIO_RAILS    600   /* USB 5V, ext 5V */
 /* Hooks below this priority are app callbacks, skipped by an emergency off. */
@@ -184,12 +189,11 @@ typedef enum {
     T5_OFF_BATTERY,           /* 5% or 6.5 V */
     T5_OFF_BATTERY_CRITICAL,  /* 6.3 V: emergency, no app callbacks */
     T5_OFF_CHARGE_UNPLUG,     /* charge mode saw USB go away */
-    T5_OFF_TEST,
 } t5_off_reason_t;
 
 /* Does not return on success. Runs the suspend hooks (system ones only when
  * emergency), autosaves, records the reason in RTC RAM, arms the RTC alarm
- * for a scheduled wake, puts the panel to sleep and pulses PWROFF_PLUSE.
+ * for a scheduled wake, calls the standby output and pulses PWROFF_PLUSE.
  * Shutdown handlers (charge mode) get a chance first unless emergency.
  * Returns an error only if power could not be cut. */
 T5_MUST_CHECK t5_err_t t5_power_soft_off(t5_off_reason_t reason, bool emergency);
@@ -199,6 +203,23 @@ const char *t5_off_reason_name(t5_off_reason_t r);
  * (charge mode). It may return false to let soft off continue. */
 typedef bool (*t5_shutdown_handler_t)(t5_off_reason_t reason, void *arg);
 void t5_power_set_shutdown_handler(t5_shutdown_handler_t fn, void *arg);
+
+/* What the state machine drives outside the service. The composition root
+ * (main) installs them before t5_power_init(); they run on the power task
+ * (standby: on the task that asked for soft off). Any member may be NULL.
+ *   screen   backlight lit, capped at cap_percent (-1: the user's level), or
+ *            dark with the panel and its video still running, so touch wakes
+ *   standby  enter: main power is about to be cut (panel to sleep, arm the
+ *            IMU's motion wake if motion is set); !enter: the cut failed and
+ *            the device carries on (undo it).
+ *   low_power  low-power mode changed (on the task that changed it). */
+typedef struct {
+    void (*screen)(bool lit, int cap_percent, void *arg);
+    void (*standby)(bool enter, bool motion, void *arg);
+    void (*low_power)(bool on, void *arg);
+    void *arg;
+} t5_power_outputs_t;
+void t5_power_set_outputs(const t5_power_outputs_t *out);
 
 /* Charge mode (t5_battery): mark the RTC record and deep sleep the P4 for ms.
  * The expanders keep CHG_EN. Does not return on the device. */
@@ -210,12 +231,15 @@ void t5_power_charge_mode_end(void);
  * rounded up); while running or asleep it wakes the CPU. flags: */
 #define T5_WAKE_FLAG_BACKGROUND 0x01   /* don't restore the session on that boot */
 T5_MUST_CHECK t5_err_t t5_power_schedule_wake(time_t utc, uint32_t flags);
-/* Arm a latched, active-low any-motion interrupt on the way into soft off,
- * so picking the device up turns it on (bench 0.7). Off by default; saved. */
+/* Wake from soft off when the device is picked up (the standby output arms
+ * the IMU). Off by default; saved. */
 void t5_power_set_motion_wake(bool on);
 bool t5_power_motion_wake(void);
 void t5_power_cancel_wake(void);
 time_t t5_power_next_wake(uint32_t *flags);
+
+/* Restart the OS: every autosave saver runs first. Doesn't return. */
+__attribute__((noreturn)) void t5_power_restart(void);
 
 /* ---- wake reason (plan 2.6, 2.11) --------------------------------------- */
 typedef enum {

@@ -32,13 +32,11 @@
 #include "t5_net/net.h"
 #include "t5_net/sock.h"
 #include "t5_net/ws.h"
-#include "t5_pkg/manifest.h"
-#include "py_priv.h"
+#include "bind_perm.h"
+#include "py_net.h"
 
-#define SLICE_MS 100
 #define COMPAT_BODY_MAX (512 * 1024)
 #define MAX_HEADERS 32
-#define DEFAULT_CONNECT_MS 10000
 
 typedef struct {
     mp_obj_base_t base;
@@ -59,7 +57,6 @@ void py_net_reset(void)
     if (py_vm) t5_net_cancel_flag(&py_vm->stop);
 }
 
-/* ---- helpers --------------------------------------------------------------------------- */
 static py_net_t *new_obj(const mp_obj_type_t *type)
 {
     py_net_t *o = mp_obj_malloc_with_finaliser(py_net_t, type);
@@ -80,7 +77,7 @@ static void adopt(py_net_t *o, void *h)
 
 static bool alive(const py_net_t *o)
 {
-    return o->h && o->id && t5_net_handle_id(o->h) == o->id;
+    return py_net_alive(o->h, o->id);
 }
 
 static py_net_t *live(mp_obj_t self)
@@ -90,11 +87,9 @@ static py_net_t *live(mp_obj_t self)
     return o;
 }
 
-/* Raise for a failed call; a pending Stop or Ctrl-C wins over the error. */
 static MP_NORETURN void fail(int e)
 {
-    mp_event_handle_nowait();
-    py_raise_t5((t5_err_t)e);
+    py_net_fail(e, PY_ERRNO_GENERIC);
 }
 
 static int32_t timeout_arg(mp_obj_t a, int32_t dflt)
@@ -102,54 +97,6 @@ static int32_t timeout_arg(mp_obj_t a, int32_t dflt)
     if (a == mp_const_none || a == MP_OBJ_NULL) return dflt;
     mp_int_t v = mp_obj_get_int(a);
     return v < 0 ? -1 : (int32_t)v;
-}
-
-typedef int (*step_fn_t)(py_net_t *o, void *ctx, uint32_t ms);
-
-/* Call step in slices until it returns something other than a timeout or
- * timeout_ms (-1: none) passes. Callbacks, Ctrl-C and Stop run in between. */
-static int sliced(py_net_t *o, step_fn_t step, void *ctx, int32_t timeout_ms)
-{
-    uint32_t t0 = mp_hal_ticks_ms();
-    for (;;) {
-        uint32_t ms = SLICE_MS;
-        if (timeout_ms >= 0) {
-            uint32_t el = mp_hal_ticks_ms() - t0;
-            uint32_t left = el >= (uint32_t)timeout_ms ? 0 : (uint32_t)timeout_ms - el;
-            if (left < ms) ms = left;
-        }
-        int r = step(o, ctx, ms);
-        if (r != T5_ERR_TIMEOUT) return r;
-        if (timeout_ms >= 0 && mp_hal_ticks_ms() - t0 >= (uint32_t)timeout_ms) return T5_ERR_TIMEOUT;
-        mp_event_handle_nowait();
-    }
-}
-
-static mp_obj_t addr_tuple(const t5_net_addr_t *a)
-{
-    char ip[48];
-    if (t5_net_addr_str(a, ip, sizeof ip) < 0) ip[0] = 0;
-    mp_obj_t t[2] = { mp_obj_new_str_from_cstr(ip), MP_OBJ_NEW_SMALL_INT(a->port) };
-    return mp_obj_new_tuple(2, t);
-}
-
-static uint16_t port_arg(mp_obj_t p)
-{
-    mp_int_t v = mp_obj_get_int(p);
-    if (v < 0 || v > 65535) mp_raise_ValueError(MP_ERROR_TEXT("port is 0-65535"));
-    return (uint16_t)v;
-}
-
-/* (host, port) -> address, resolving names. */
-static void addr_arg(mp_obj_t t, t5_net_addr_t *out)
-{
-    size_t n;
-    mp_obj_t *items;
-    mp_obj_get_array(t, &n, &items);
-    if (n != 2) mp_raise_TypeError(MP_ERROR_TEXT("address is (host, port)"));
-    t5_err_t e = t5_net_resolve(mp_obj_str_get_str(items[0]), out, DEFAULT_CONNECT_MS);
-    if (e != T5_OK) fail(e);
-    out->port = port_arg(items[1]);
 }
 
 static mp_obj_t close_common(mp_obj_t self, t5_err_t (*fn)(void *))
@@ -210,8 +157,8 @@ static MP_DEFINE_CONST_FUN_OBJ_0(net_connected_obj, net_connected);
 
 static mp_obj_t net_resolve(size_t n, const mp_obj_t *args)
 {
-    py_need_perm(T5_PERM_NET);
-    int32_t to = n > 1 ? timeout_arg(args[1], DEFAULT_CONNECT_MS) : DEFAULT_CONNECT_MS;
+    py_need_perm(T5G_PERM_t5_net_resolve);
+    int32_t to = n > 1 ? timeout_arg(args[1], PY_NET_CONNECT_MS) : PY_NET_CONNECT_MS;
     t5_net_addr_t a;
     t5_err_t e = t5_net_resolve(mp_obj_str_get_str(args[0]), &a, to < 0 ? T5_NET_FOREVER : (uint32_t)to);
     if (e != T5_OK) fail(e);
@@ -227,10 +174,10 @@ typedef struct {
     size_t n, done;
 } send_ctx_t;
 
-static int step_send(py_net_t *o, void *c, uint32_t ms)
+static int step_send(void *h, void *c, uint32_t ms)
 {
     send_ctx_t *s = c;
-    int r = t5_sock_send(o->h, s->p + s->done, s->n - s->done, ms);
+    int r = t5_sock_send(h, s->p + s->done, s->n - s->done, ms);
     if (r > 0) s->done += (size_t)r;
     if (r >= 0 && s->done < s->n) return T5_ERR_TIMEOUT;   /* more to go */
     return r < 0 ? r : (int)s->done;
@@ -242,7 +189,7 @@ static mp_obj_t sock_send(size_t n, const mp_obj_t *args)
     mp_buffer_info_t b;
     mp_get_buffer_raise(args[1], &b, MP_BUFFER_READ);
     send_ctx_t c = { b.buf, b.len, 0 };
-    int r = b.len ? sliced(o, step_send, &c, timeout_arg(n > 2 ? args[2] : MP_OBJ_NULL, o->timeout)) : 0;
+    int r = b.len ? py_net_sliced(o->h, step_send, &c, timeout_arg(n > 2 ? args[2] : MP_OBJ_NULL, o->timeout)) : 0;
     if (r == T5_ERR_TIMEOUT && c.done) r = (int)c.done;
     if (r < 0) fail(r);
     return MP_OBJ_NEW_SMALL_INT(r);
@@ -254,10 +201,10 @@ typedef struct {
     size_t n;
 } recv_ctx_t;
 
-static int step_recv(py_net_t *o, void *c, uint32_t ms)
+static int step_recv(void *h, void *c, uint32_t ms)
 {
     recv_ctx_t *r = c;
-    return t5_sock_recv(o->h, r->buf, r->n, ms);
+    return t5_sock_recv(h, r->buf, r->n, ms);
 }
 
 static mp_obj_t sock_recv(size_t n, const mp_obj_t *args)
@@ -268,7 +215,7 @@ static mp_obj_t sock_recv(size_t n, const mp_obj_t *args)
     vstr_t v;
     vstr_init_len(&v, (size_t)want);
     recv_ctx_t c = { (uint8_t *)v.buf, (size_t)want };
-    int r = sliced(o, step_recv, &c, timeout_arg(n > 2 ? args[2] : MP_OBJ_NULL, o->timeout));
+    int r = py_net_sliced(o->h, step_recv, &c, timeout_arg(n > 2 ? args[2] : MP_OBJ_NULL, o->timeout));
     if (r == T5_ERR_TIMEOUT) {
         vstr_clear(&v);
         return mp_const_none;
@@ -308,7 +255,7 @@ static mp_obj_t sock_addr(mp_obj_t self, bool peer)
     t5_net_addr_t a;
     t5_err_t e = peer ? t5_sock_peer_addr(live(self)->h, &a) : t5_sock_local_addr(live(self)->h, &a);
     if (e != T5_OK) fail(e);
-    return addr_tuple(&a);
+    return py_net_addr_tuple(&a);
 }
 
 static mp_obj_t sock_peer(mp_obj_t self)
@@ -365,20 +312,20 @@ static mp_obj_t net_tcp(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
         { MP_QSTR_verify, MP_ARG_KW_ONLY | MP_ARG_BOOL, { .u_bool = true } },
         { MP_QSTR_ca, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
         { MP_QSTR_server_hostname, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = DEFAULT_CONNECT_MS } },
+        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = PY_NET_CONNECT_MS } },
         { MP_QSTR_nodelay, MP_ARG_KW_ONLY | MP_ARG_BOOL, { .u_bool = true } },
     };
     mp_arg_val_t a[MP_ARRAY_SIZE(allowed)];
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, a);
-    py_need_perm(T5_PERM_NET);
-    t5_tcp_cfg_t cfg = { .timeout_ms = a[A_timeout].u_int > 0 ? (uint32_t)a[A_timeout].u_int : DEFAULT_CONNECT_MS };
+    py_need_perm(T5G_PERM_t5_tcp_connect);
+    t5_tcp_cfg_t cfg = { .timeout_ms = a[A_timeout].u_int > 0 ? (uint32_t)a[A_timeout].u_int : PY_NET_CONNECT_MS };
     if (a[A_tls].u_bool) cfg.flags |= a[A_verify].u_bool ? T5_TCP_TLS : T5_TCP_TLS_NO_VERIFY;
     if (a[A_nodelay].u_bool) cfg.flags |= T5_TCP_NODELAY;
     if (a[A_ca].u_obj != mp_const_none) cfg.ca_pem = mp_obj_str_get_str(a[A_ca].u_obj);
     if (a[A_sni].u_obj != mp_const_none) cfg.sni = mp_obj_str_get_str(a[A_sni].u_obj);
     py_net_t *o = new_obj(&py_type_socket);
     t5_sock_t *s;
-    t5_err_t e = t5_tcp_connect(mp_obj_str_get_str(a[A_host].u_obj), port_arg(MP_OBJ_NEW_SMALL_INT(a[A_port].u_int)),
+    t5_err_t e = t5_tcp_connect(mp_obj_str_get_str(a[A_host].u_obj), py_net_port_arg(MP_OBJ_NEW_SMALL_INT(a[A_port].u_int)),
                                 &cfg, &s);
     if (e != T5_OK) fail(e);
     adopt(o, s);
@@ -391,9 +338,9 @@ typedef struct {
     t5_sock_t *got;
 } accept_ctx_t;
 
-static int step_accept(py_net_t *o, void *c, uint32_t ms)
+static int step_accept(void *h, void *c, uint32_t ms)
 {
-    return t5_tcp_accept(o->h, ms, &((accept_ctx_t *)c)->got);
+    return t5_tcp_accept(h, ms, &((accept_ctx_t *)c)->got);
 }
 
 static mp_obj_t server_accept(size_t n, const mp_obj_t *args)
@@ -401,12 +348,12 @@ static mp_obj_t server_accept(size_t n, const mp_obj_t *args)
     py_net_t *o = live(args[0]);
     py_net_t *client = new_obj(&py_type_socket);     /* first, so a Stop can't leak the socket */
     accept_ctx_t c = { NULL };
-    int r = sliced(o, step_accept, &c, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
+    int r = py_net_sliced(o->h, step_accept, &c, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
     if (r == T5_ERR_TIMEOUT) return mp_const_none;
     if (r < 0) fail(r);
     adopt(client, c.got);
     t5_net_addr_t peer;
-    mp_obj_t addr = t5_sock_peer_addr(c.got, &peer) == T5_OK ? addr_tuple(&peer) : mp_const_none;
+    mp_obj_t addr = t5_sock_peer_addr(c.got, &peer) == T5_OK ? py_net_addr_tuple(&peer) : mp_const_none;
     mp_obj_t t[2] = { MP_OBJ_FROM_PTR(client), addr };
     return mp_obj_new_tuple(2, t);
 }
@@ -427,8 +374,8 @@ static MP_DEFINE_CONST_OBJ_TYPE(py_type_server, MP_QSTR_Server, MP_TYPE_FLAG_NON
 
 static mp_obj_t net_listen(size_t n, const mp_obj_t *args)
 {
-    py_need_perm(T5_PERM_NET);
-    uint16_t port = n > 0 ? port_arg(args[0]) : 0;
+    py_need_perm(T5G_PERM_t5_tcp_listen);
+    uint16_t port = n > 0 ? py_net_port_arg(args[0]) : 0;
     int backlog = n > 1 ? (int)mp_obj_get_int(args[1]) : 4;
     py_net_t *o = new_obj(&py_type_server);
     t5_sock_t *s;
@@ -446,10 +393,10 @@ typedef struct {
     size_t n;
 } sendto_ctx_t;
 
-static int step_sendto(py_net_t *o, void *c, uint32_t ms)
+static int step_sendto(void *h, void *c, uint32_t ms)
 {
     sendto_ctx_t *s = c;
-    return t5_udp_sendto(o->h, s->to, s->p, s->n, ms);
+    return t5_udp_sendto(h, s->to, s->p, s->n, ms);
 }
 
 static mp_obj_t udp_sendto(size_t n, const mp_obj_t *args)
@@ -458,9 +405,9 @@ static mp_obj_t udp_sendto(size_t n, const mp_obj_t *args)
     mp_buffer_info_t b;
     mp_get_buffer_raise(args[1], &b, MP_BUFFER_READ);
     t5_net_addr_t to;
-    addr_arg(args[2], &to);
+    py_net_addr_arg(args[2], &to, PY_ERRNO_GENERIC);
     sendto_ctx_t c = { &to, b.buf, b.len };
-    int r = sliced(o, step_sendto, &c, timeout_arg(n > 3 ? args[3] : MP_OBJ_NULL, o->timeout));
+    int r = py_net_sliced(o->h, step_sendto, &c, timeout_arg(n > 3 ? args[3] : MP_OBJ_NULL, o->timeout));
     if (r < 0) fail(r);
     return MP_OBJ_NEW_SMALL_INT(r);
 }
@@ -472,10 +419,10 @@ typedef struct {
     t5_net_addr_t from;
 } recvfrom_ctx_t;
 
-static int step_recvfrom(py_net_t *o, void *c, uint32_t ms)
+static int step_recvfrom(void *h, void *c, uint32_t ms)
 {
     recvfrom_ctx_t *r = c;
-    return t5_udp_recvfrom(o->h, r->buf, r->n, &r->from, ms);
+    return t5_udp_recvfrom(h, r->buf, r->n, &r->from, ms);
 }
 
 static mp_obj_t udp_recvfrom(size_t n, const mp_obj_t *args)
@@ -486,14 +433,14 @@ static mp_obj_t udp_recvfrom(size_t n, const mp_obj_t *args)
     vstr_t v;
     vstr_init_len(&v, (size_t)want);
     recvfrom_ctx_t c = { (uint8_t *)v.buf, (size_t)want, { 0 } };
-    int r = sliced(o, step_recvfrom, &c, timeout_arg(n > 2 ? args[2] : MP_OBJ_NULL, o->timeout));
+    int r = py_net_sliced(o->h, step_recvfrom, &c, timeout_arg(n > 2 ? args[2] : MP_OBJ_NULL, o->timeout));
     if (r == T5_ERR_TIMEOUT) {
         vstr_clear(&v);
         return mp_const_none;
     }
     if (r < 0) fail(r);
     v.len = (size_t)r;
-    mp_obj_t t[2] = { mp_obj_new_bytes_from_vstr(&v), addr_tuple(&c.from) };
+    mp_obj_t t[2] = { mp_obj_new_bytes_from_vstr(&v), py_net_addr_tuple(&c.from) };
     return mp_obj_new_tuple(2, t);
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(udp_recvfrom_obj, 1, 3, udp_recvfrom);
@@ -502,7 +449,7 @@ static mp_obj_t udp_connect(mp_obj_t self, mp_obj_t addr)
 {
     py_net_t *o = live(self);
     t5_net_addr_t to;
-    addr_arg(addr, &to);
+    py_net_addr_arg(addr, &to, PY_ERRNO_GENERIC);
     t5_err_t e = t5_udp_connect(o->h, &to);
     if (e != T5_OK) fail(e);
     return mp_const_none;
@@ -568,12 +515,12 @@ static mp_obj_t net_udp(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     };
     mp_arg_val_t a[MP_ARRAY_SIZE(allowed)];
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, a);
-    py_need_perm(T5_PERM_NET);
+    py_need_perm(T5G_PERM_t5_udp_open);
     uint32_t flags = (a[A_broadcast].u_bool ? T5_UDP_BROADCAST : 0) | (a[A_reuse].u_bool ? T5_UDP_REUSE : 0) |
                      (a[A_ipv6].u_bool ? T5_UDP_IPV6 : 0);
     py_net_t *o = new_obj(&py_type_udp);
     t5_sock_t *s;
-    t5_err_t e = t5_udp_open(port_arg(MP_OBJ_NEW_SMALL_INT(a[A_port].u_int)), flags, &s);
+    t5_err_t e = t5_udp_open(py_net_port_arg(MP_OBJ_NEW_SMALL_INT(a[A_port].u_int)), flags, &s);
     if (e != T5_OK) fail(e);
     adopt(o, s);
     return MP_OBJ_FROM_PTR(o);
@@ -603,13 +550,13 @@ typedef struct {
     size_t max;
 } body_ctx_t;
 
-static int step_body(py_net_t *o, void *c, uint32_t ms)
+static int step_body(void *h, void *c, uint32_t ms)
 {
     body_ctx_t *b = c;
     if (b->v->len >= b->max) return T5_ERR_NO_MEM;
     size_t room = b->max - b->v->len < 4096 ? b->max - b->v->len : 4096;
     char *dst = vstr_add_len(b->v, room);
-    int r = t5_http_read(o->h, dst, room, ms);
+    int r = t5_http_read(h, dst, room, ms);
     b->v->len -= room - (r > 0 ? (size_t)r : 0);
     if (r > 0) return T5_ERR_TIMEOUT;           /* got some: keep going */
     return r;                                    /* 0 = end of body */
@@ -624,7 +571,7 @@ static mp_obj_t read_body(py_net_t *o, size_t max, int32_t timeout_ms, bool all)
     for (;;) {
         /* Each slice of data restarts the wait: the timeout is per pause, not the total. */
         size_t before = v.len;
-        int r = sliced(o, step_body, &c, timeout_ms);
+        int r = py_net_sliced(o->h, step_body, &c, timeout_ms);
         if (r == 0 || (r == T5_ERR_NO_MEM && !all) || (!all && v.len)) break;
         if (r == T5_ERR_TIMEOUT && v.len > before) continue;
         if (r == T5_ERR_NO_MEM) mp_raise_msg(&mp_type_OSError, MP_ERROR_TEXT("response too big"));
@@ -781,7 +728,7 @@ static const mp_arg_t request_args[] = {
     { MP_QSTR_data, MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
     { MP_QSTR_json, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
     { MP_QSTR_headers, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-    { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = DEFAULT_CONNECT_MS } },
+    { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = PY_NET_CONNECT_MS } },
     { MP_QSTR_redirects, MP_ARG_KW_ONLY | MP_ARG_BOOL, { .u_bool = true } },
     { MP_QSTR_verify, MP_ARG_KW_ONLY | MP_ARG_BOOL, { .u_bool = true } },
     { MP_QSTR_ca, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
@@ -790,7 +737,7 @@ static const mp_arg_t request_args[] = {
 
 static mp_obj_t do_request(const char *method, mp_arg_val_t *a, size_t body_max)
 {
-    py_need_perm(T5_PERM_NET);
+    py_need_perm(T5G_PERM_t5_http_open);
     t5_http_header_t hdr[MAX_HEADERS + 1];
     size_t nh = headers_arg(a[R_headers].u_obj, hdr, MAX_HEADERS);
     t5_http_req_t req = { .method = method, .url = mp_obj_str_get_str(a[R_url].u_obj), .headers = hdr };
@@ -806,7 +753,7 @@ static mp_obj_t do_request(const char *method, mp_arg_val_t *a, size_t body_max)
         req.body_len = b.len;
     }
     req.n_headers = nh;
-    req.timeout_ms = a[R_timeout].u_int > 0 ? (uint32_t)a[R_timeout].u_int : DEFAULT_CONNECT_MS;
+    req.timeout_ms = a[R_timeout].u_int > 0 ? (uint32_t)a[R_timeout].u_int : PY_NET_CONNECT_MS;
     req.flags = (a[R_redirects].u_bool ? 0 : T5_HTTP_NO_REDIRECT) | (a[R_verify].u_bool ? 0 : T5_HTTP_TLS_NO_VERIFY);
     if (a[R_ca].u_obj != mp_const_none) req.ca_pem = mp_obj_str_get_str(a[R_ca].u_obj);
     py_net_t *o = new_obj(&py_type_response);
@@ -866,8 +813,8 @@ static mp_obj_t compat(const char *method, mp_obj_t url, mp_obj_t body, mp_obj_t
     a[R_ca].u_obj = mp_const_none;
     a[R_redirects].u_bool = true;
     a[R_verify].u_bool = true;
-    mp_int_t to = timeout == MP_OBJ_NULL ? DEFAULT_CONNECT_MS : mp_obj_get_int(timeout);
-    a[R_timeout].u_int = to <= 0 || to > 60000 ? DEFAULT_CONNECT_MS : to;
+    mp_int_t to = timeout == MP_OBJ_NULL ? PY_NET_CONNECT_MS : mp_obj_get_int(timeout);
+    a[R_timeout].u_int = to <= 0 || to > 60000 ? PY_NET_CONNECT_MS : to;
     if (ctype != MP_OBJ_NULL) {
         mp_obj_t pair[2] = { mp_obj_new_str_from_cstr("Content-Type"), ctype };
         mp_obj_t list[1] = { mp_obj_new_tuple(2, pair) };
@@ -953,9 +900,9 @@ typedef struct {
 
 /* Wait for a message without taking it: a zero-size buffer leaves it queued
  * (T5_ERR_NO_MEM), except an empty message, which is taken (0). */
-static int step_ws_wait(py_net_t *o, void *c, uint32_t ms)
+static int step_ws_wait(void *h, void *c, uint32_t ms)
 {
-    return t5_ws_recv(o->h, NULL, 0, &((ws_wait_ctx_t *)c)->op, ms);
+    return t5_ws_recv(h, NULL, 0, &((ws_wait_ctx_t *)c)->op, ms);
 }
 
 /* recv(timeout=None): str (text) or bytes (binary); None on timeout or once
@@ -966,7 +913,7 @@ static mp_obj_t ws_recv(size_t n, const mp_obj_t *args)
     if (o->closed) return mp_const_none;
     live(args[0]);
     ws_wait_ctx_t c = { T5_WS_BINARY };
-    int r = sliced(o, step_ws_wait, &c, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
+    int r = py_net_sliced(o->h, step_ws_wait, &c, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
     if (r == T5_ERR_TIMEOUT) return mp_const_none;
     vstr_t v;
     if (r == T5_ERR_NO_MEM) {
@@ -1027,14 +974,14 @@ static mp_obj_t net_websocket(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
         { MP_QSTR_url, MP_ARG_REQUIRED | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
         { MP_QSTR_headers, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
         { MP_QSTR_protocols, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
-        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = DEFAULT_CONNECT_MS } },
+        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = PY_NET_CONNECT_MS } },
         { MP_QSTR_verify, MP_ARG_KW_ONLY | MP_ARG_BOOL, { .u_bool = true } },
         { MP_QSTR_ca, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
         { MP_QSTR_max_msg, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = 64 * 1024 } },
     };
     mp_arg_val_t a[MP_ARRAY_SIZE(allowed)];
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, a);
-    py_need_perm(T5_PERM_NET);
+    py_need_perm(T5G_PERM_t5_ws_connect);
     t5_http_header_t hdr[MAX_HEADERS];
     t5_ws_cfg_t cfg = { .headers = hdr, .n_headers = headers_arg(a[A_headers].u_obj, hdr, MAX_HEADERS) };
     mp_obj_t protos = a[A_protocols].u_obj;
@@ -1044,7 +991,7 @@ static mp_obj_t net_websocket(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
         protos = mp_call_function_1(mp_load_attr(sep, MP_QSTR_join), protos);
     }
     if (protos != mp_const_none) cfg.subprotocols = mp_obj_str_get_str(protos);
-    cfg.timeout_ms = a[A_timeout].u_int > 0 ? (uint32_t)a[A_timeout].u_int : DEFAULT_CONNECT_MS;
+    cfg.timeout_ms = a[A_timeout].u_int > 0 ? (uint32_t)a[A_timeout].u_int : PY_NET_CONNECT_MS;
     cfg.flags = a[A_verify].u_bool ? 0 : T5_HTTP_TLS_NO_VERIFY;
     if (a[A_ca].u_obj != mp_const_none) cfg.ca_pem = mp_obj_str_get_str(a[A_ca].u_obj);
     cfg.max_msg = a[A_max].u_int > 0 ? (size_t)a[A_max].u_int : 0;
@@ -1123,11 +1070,11 @@ typedef struct {
     t5_mqtt_event_t ev;
 } mqtt_wait_t;
 
-static int step_mqtt(py_net_t *o, void *c, uint32_t ms)
+static int step_mqtt(void *h, void *c, uint32_t ms)
 {
-    int need = t5_mqtt_next_size(o->h);
+    int need = t5_mqtt_next_size(h);
     if (need >= 0) return T5_OK;               /* one is waiting: take it outside */
-    t5_err_t e = t5_mqtt_next(o->h, &((mqtt_wait_t *)c)->ev, NULL, 0, ms);
+    t5_err_t e = t5_mqtt_next(h, &((mqtt_wait_t *)c)->ev, NULL, 0, ms);
     return e == T5_ERR_NO_MEM ? T5_OK : e;
 }
 
@@ -1137,7 +1084,7 @@ static mp_obj_t mqtt_recv(size_t n, const mp_obj_t *args)
 {
     py_net_t *o = live(args[0]);
     mqtt_wait_t w;
-    int r = sliced(o, step_mqtt, &w, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
+    int r = py_net_sliced(o->h, step_mqtt, &w, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
     if (r == T5_ERR_TIMEOUT) return mp_const_none;
     if (r < 0) fail(r);
     int need = t5_mqtt_next_size(o->h);
@@ -1214,11 +1161,11 @@ static mp_obj_t net_mqtt(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
         { MP_QSTR_cert, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
         { MP_QSTR_key, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
         { MP_QSTR_max_msg, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = 64 * 1024 } },
-        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = DEFAULT_CONNECT_MS } },
+        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = PY_NET_CONNECT_MS } },
     };
     mp_arg_val_t a[MP_ARRAY_SIZE(allowed)];
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, a);
-    py_need_perm(T5_PERM_NET);
+    py_need_perm(T5G_PERM_t5_mqtt_connect);
     t5_mqtt_cfg_t cfg = {
         .uri = mp_obj_str_get_str(a[A_uri].u_obj), .client_id = opt_str(a[A_id].u_obj),
         .username = opt_str(a[A_user].u_obj), .password = opt_str(a[A_pw].u_obj),
@@ -1227,7 +1174,7 @@ static mp_obj_t net_mqtt(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
                  (a[A_verify].u_bool ? 0 : T5_MQTT_TLS_NO_VERIFY),
         .ca_pem = opt_str(a[A_ca].u_obj), .cert_pem = opt_str(a[A_cert].u_obj), .key_pem = opt_str(a[A_key].u_obj),
         .max_msg = a[A_max].u_int > 0 ? (size_t)a[A_max].u_int : 0,
-        .timeout_ms = a[A_timeout].u_int > 0 ? (uint32_t)a[A_timeout].u_int : DEFAULT_CONNECT_MS,
+        .timeout_ms = a[A_timeout].u_int > 0 ? (uint32_t)a[A_timeout].u_int : PY_NET_CONNECT_MS,
     };
     if (a[A_will].u_obj != mp_const_none) {
         /* (topic, msg[, qos[, retain]]) */
@@ -1293,9 +1240,9 @@ typedef struct {
     t5_httpd_req_t *got;
 } httpd_wait_t;
 
-static int step_httpd(py_net_t *o, void *c, uint32_t ms)
+static int step_httpd(void *h, void *c, uint32_t ms)
 {
-    return t5_httpd_next(o->h, ms, &((httpd_wait_t *)c)->got);
+    return t5_httpd_next(h, ms, &((httpd_wait_t *)c)->got);
 }
 
 /* next(timeout=None) -> Request, or None on timeout. */
@@ -1304,7 +1251,7 @@ static mp_obj_t httpd_next(size_t n, const mp_obj_t *args)
     py_net_t *o = live(args[0]);
     py_net_t *r = new_obj(&py_type_request);         /* first: a Stop can't leak the request */
     httpd_wait_t w = { NULL };
-    int e = sliced(o, step_httpd, &w, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
+    int e = py_net_sliced(o->h, step_httpd, &w, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, o->timeout));
     if (e == T5_ERR_TIMEOUT) return mp_const_none;
     if (e < 0) fail(e);
     adopt(r, w.got);
@@ -1317,7 +1264,7 @@ static mp_obj_t httpd_next(size_t n, const mp_obj_t *args)
     r->content = mp_obj_new_bytes(body, bl);
     r->headers = lower_dict_httpd(w.got);
     t5_net_addr_t peer;
-    r->url = t5_httpd_peer(w.got, &peer) == T5_OK ? addr_tuple(&peer) : mp_const_none;
+    r->url = t5_httpd_peer(w.got, &peer) == T5_OK ? py_net_addr_tuple(&peer) : mp_const_none;
     r->status = info;
     return MP_OBJ_FROM_PTR(r);
 }
@@ -1497,20 +1444,20 @@ static mp_obj_t net_serve(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
         { MP_QSTR_port, MP_ARG_INT, { .u_int = 0 } },
         { MP_QSTR_max_clients, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = 4 } },
         { MP_QSTR_max_body, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = 64 * 1024 } },
-        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = DEFAULT_CONNECT_MS } },
+        { MP_QSTR_timeout, MP_ARG_KW_ONLY | MP_ARG_INT, { .u_int = PY_NET_CONNECT_MS } },
         { MP_QSTR_cert, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
         { MP_QSTR_key, MP_ARG_KW_ONLY | MP_ARG_OBJ, { .u_rom_obj = MP_ROM_NONE } },
     };
     mp_arg_val_t a[MP_ARRAY_SIZE(allowed)];
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, a);
-    py_need_perm(T5_PERM_NET);
+    py_need_perm(T5G_PERM_t5_httpd_start);
     t5_httpd_cfg_t cfg = { .max_clients = (int)a[A_clients].u_int,
                            .max_body = a[A_body].u_int > 0 ? (size_t)a[A_body].u_int : 0,
                            .timeout_ms = a[A_timeout].u_int > 0 ? (uint32_t)a[A_timeout].u_int : 0,
                            .cert_pem = opt_str(a[A_cert].u_obj), .key_pem = opt_str(a[A_key].u_obj) };
     py_net_t *o = new_obj(&py_type_httpd);
     t5_httpd_t *srv;
-    t5_err_t e = t5_httpd_start(port_arg(MP_OBJ_NEW_SMALL_INT(a[A_port].u_int)), &cfg, &srv);
+    t5_err_t e = t5_httpd_start(py_net_port_arg(MP_OBJ_NEW_SMALL_INT(a[A_port].u_int)), &cfg, &srv);
     if (e != T5_OK) fail(e);
     adopt(o, srv);
     return MP_OBJ_FROM_PTR(o);
@@ -1523,9 +1470,9 @@ typedef struct {
     int n;
 } poll_ctx_t;
 
-static int step_poll(py_net_t *o, void *c, uint32_t ms)
+static int step_poll(void *h, void *c, uint32_t ms)
 {
-    (void)o;
+    (void)h;
     poll_ctx_t *p = c;
     int r = t5_net_poll(p->items, p->n, ms);
     return r == 0 ? T5_ERR_TIMEOUT : r;
@@ -1549,7 +1496,7 @@ static mp_obj_t net_poll(size_t n, const mp_obj_t *args)
         items[i] = (t5_poll_t){ .handle = alive(o) ? o->h : NULL, .events = T5_POLL_IN };
     }
     poll_ctx_t c = { items, (int)len };
-    int r = sliced(NULL, step_poll, &c, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, -1));
+    int r = py_net_sliced(NULL, step_poll, &c, timeout_arg(n > 1 ? args[1] : MP_OBJ_NULL, -1));
     mp_obj_t out = mp_obj_new_list(0, NULL);
     if (r == T5_ERR_TIMEOUT) return out;
     if (r < 0) fail(r);

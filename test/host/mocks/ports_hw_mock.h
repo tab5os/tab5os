@@ -7,10 +7,13 @@
 #include <stdint.h>
 #include "t5_core/err.h"
 
+/* Kinds of driver object, indexing mock_ports.live. */
+typedef enum { MOCK_I2C, MOCK_UART, MOCK_SPI, MOCK_PWM, MOCK_ADC, MOCK_KINDS } mock_kind_t;
+
 typedef struct {
     bool i2c_present[128];
     uint8_t i2c_last_tx[8];
-    int live[5];                /* i2c, uart, spi, pwm, adc */
+    int live[MOCK_KINDS];       /* driver objects open, by kind */
     int opens;
     t5_err_t fail_open;         /* next driver open returns this */
     int released[64];           /* release count per GPIO */

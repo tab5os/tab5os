@@ -19,7 +19,7 @@ cd hello && t5 run                   # build, push, launch, stream the log
 
 To install by hand instead: copy the `.t5app` (from `t5 app-build`, in `build/`) to the SD card and tap it in Files, or run `app install /sd/hello.t5app` (or `app fetch <url>`) on the console. `t5 apps` builds the test apps in `test/apps/`, `t5 examples` the examples in `apps/examples/`.
 
-The build uses the firmware's own compile flags for its ABI table (`sdk/cmake/app_flags.py` reads them from `firmware/build-<rev>/compile_commands.json`), so an app sees exactly the headers and LVGL configuration the OS was built with.
+The build uses the firmware's own compile flags for its ABI table (the generated `t5_abi/abi_table.c`: `sdk/cmake/app_flags.py` reads them from `firmware/build/compile_commands.json`, which the SDK release ships at the same place), so an app sees exactly the headers and LVGL configuration the OS was built with.
 
 ## Developer mode and the t5 CLI
 
@@ -38,7 +38,7 @@ Pairing gives the computer a random 256-bit token; the Tab5 keeps only its SHA-2
 
 ### Signed packages
 
-`t5 keygen me.pem` makes an ECDSA P-256 key; `t5 pack --sign me.pem` (or `t5 run --sign me.pem`) adds `signature.t5sig`, a signature over every other file's SHA-256. `python3 tools/t5/t5pack.py --inspect app.t5app` checks it. Unsigned apps install with the usual warning (design, "App trust"); a signature names the publisher by key fingerprint.
+`t5 keygen me.pem` makes an ECDSA P-256 key; `t5 pack --sign me.pem` (or `t5 run --sign me.pem`) adds `signature.t5sig`, a signature over every other file's SHA-256. `python3 tools/t5/t5pack.py --inspect app.t5app` checks it. The device doesn't verify package signatures yet: every app, signed or not, installs with the usual warning (design, "App trust").
 
 ## What an app looks like
 

@@ -13,11 +13,14 @@
 #include "t5_display/t5_display.h"
 #include "t5_i2c/t5_i2c.h"
 #include "t5_imu/t5_imu.h"
+#include "t5_imu/t5_imu_test.h"
 #include "t5_input/t5_touch.h"
+#include "t5_input/t5_touch_test.h"
 #include "t5_pins/pins.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_time/rtc.h"
 #include "t5_time/t5_time.h"
+#include "t5_time/t5_time_test.h"
 
 /* ---- core --------------------------------------------------------------- */
 static volatile int s_ev_hits;
@@ -62,7 +65,7 @@ TEST_CASE("every internal chip answers", "[i2c]")
 TEST_CASE("bus recovery leaves devices working", "[i2c]")
 {
     t5_i2c_dev_t *d;
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_open(T5_I2C_ADDR_INA226, 400000, "test", &d));
+    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_open(T5_I2C_ADDR_INA226, T5_SYS_I2C_HZ, "test", &d));
     uint8_t id[2];
     for (int i = 0; i < 20; i++) {
         TEST_ASSERT_EQUAL(T5_OK, t5_i2c_recover());
@@ -83,7 +86,7 @@ static void hammer(void *arg)
 {
     hammer_t *h = arg;
     t5_i2c_dev_t *d;
-    if (t5_i2c_open(h->addr, 400000, "hammer", &d) != T5_OK) {
+    if (t5_i2c_open(h->addr, T5_SYS_I2C_HZ, "hammer", &d) != T5_OK) {
         h->err++;   /* counted as a failure, and the test waits on done */
         h->done = true;
         vTaskDelete(NULL);
@@ -170,14 +173,10 @@ TEST_CASE("rtc write, read back, restore", "[rtc]")
 TEST_CASE("rtc interrupts stay disabled while running", "[rtc]")
 {
     /* An RTC /IRQ while running makes the power controller cut power (bench 0.7). */
-    t5_i2c_dev_t *d;
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_open(T5_I2C_ADDR_RX8130, 400000, "test", &d));
-    uint8_t ctrl0, ext;
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read_u8(d, 0x1E, &ctrl0));
-    TEST_ASSERT_EQUAL(T5_OK, t5_i2c_read_u8(d, 0x1C, &ext));
-    t5_i2c_close(d);
-    TEST_ASSERT_EQUAL_HEX8(0, ctrl0 & 0x18);
-    TEST_ASSERT_EQUAL_HEX8(0, ext & 0x10);
+    TEST_ASSERT_EQUAL(T5_OK, t5_time_init());
+    bool on = true;
+    TEST_ASSERT_EQUAL(T5_OK, t5_rtc_irqs_enabled_for_test(&on));
+    TEST_ASSERT_FALSE(on);
 }
 
 /* ---- imu ---------------------------------------------------------------- */

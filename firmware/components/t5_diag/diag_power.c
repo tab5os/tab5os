@@ -101,7 +101,7 @@ static int cmd_power(int argc, char **argv)
 #endif
     if (!strcmp(c, "screenoff")) { t5_power_request_screen_off(); return 0; }
     if (!strcmp(c, "sleep")) { t5_power_request_sleep(); return 0; }
-    if (!strcmp(c, "wake")) { t5_power_request_active(); return 0; }
+    if (!strcmp(c, "wake")) { t5_power_user_activity(); return 0; }
     if (!strcmp(c, "profile") && argc >= 3) {
         t5_power_profile_t p = !strcmp(argv[2], "mounted") ? T5_PROFILE_MOUNTED : T5_PROFILE_HANDHELD;
         return t5_power_set_profile(p) != T5_OK;
@@ -219,8 +219,8 @@ static void print_battery(void)
 static int cmd_bat(int argc, char **argv)
 {
     if (argc == 1) { print_battery(); return 0; }
-    if (!strcmp(argv[1], "limit") && argc >= 3) return t5_battery_set_charge_limit(!strcmp(argv[2], "on")) != T5_OK;
-    if (!strcmp(argv[1], "fast") && argc >= 3) return t5_battery_set_fast_charge(!strcmp(argv[2], "on")) != T5_OK;
+    if (!strcmp(argv[1], "limit") && argc >= 3) { t5_battery_set_charge_limit(!strcmp(argv[2], "on")); return 0; }
+    if (!strcmp(argv[1], "fast") && argc >= 3) { t5_battery_set_fast_charge(!strcmp(argv[2], "on")); return 0; }
     if (!strcmp(argv[1], "log") && argc >= 3) {
         if (!strcmp(argv[2], "stop")) { t5_battery_trace_stop(); return 0; }
         if (!strcmp(argv[2], "start")) {

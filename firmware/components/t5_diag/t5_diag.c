@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include "esp_console.h"
 #include "esp_check.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "t5_core/os.h"
 #include "diag_priv.h"
 #include "t5_diag/t5_diag.h"
@@ -54,6 +56,35 @@ esp_err_t t5_diag_start(void)
     diag_register_media();
     diag_register_prof();
     diag_register_py();
+    diag_register_ota();
+    diag_register_devmode();
 
     return esp_console_start_repl(repl);
+}
+
+typedef struct {
+    int (*fn)(void *arg);
+    void *arg;
+    int rc;
+    SemaphoreHandle_t done;
+    StaticSemaphore_t done_buf;
+} internal_job_t;
+
+static void internal_task(void *arg)
+{
+    internal_job_t *j = arg;
+    j->rc = j->fn(j->arg);
+    xSemaphoreGive(j->done);
+}
+
+int diag_run_internal(const char *name, uint32_t stack, int (*fn)(void *arg), void *arg)
+{
+    internal_job_t j = { .fn = fn, .arg = arg, .rc = 1 };
+    j.done = xSemaphoreCreateBinaryStatic(&j.done_buf);
+    if (t5_task_create(name, internal_task, &j, stack, 5, 0, NULL) != T5_OK) {
+        printf("can't start %s\n", name);
+        return 1;
+    }
+    xSemaphoreTake(j.done, portMAX_DELAY);
+    return j.rc;
 }

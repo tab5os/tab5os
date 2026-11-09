@@ -13,16 +13,10 @@
 #include "t5_ui/t5_ui.h"
 
 static lv_obj_t *s_kb, *s_ta, *s_panned;
-static bool s_hw;
 
 bool keyboard_visible(void)
 {
     return s_kb != NULL;
-}
-
-static void set_y_anim(void *o, int32_t v)
-{
-    lv_obj_set_y(o, v);
 }
 
 static void unpan(void)
@@ -49,11 +43,9 @@ static void pan_for(lv_obj_t *ta)
     unpan();
     if (!s_kb || !ta) return;
     lv_obj_update_layout(s_kb);
-    lv_area_t ka, ta_a;
-    lv_obj_get_coords(s_kb, &ka);
+    lv_area_t ta_a;
     lv_obj_get_coords(ta, &ta_a);
     int32_t kb_top = lv_obj_get_height(lv_layer_top()) - lv_obj_get_height(s_kb);
-    (void)ka;
     int32_t overlap = ta_a.y2 + T5_DP(8) - kb_top;
     if (overlap <= 0) return;
     lv_obj_t *c = top_container(ta);
@@ -90,7 +82,7 @@ static void kb_clicked(lv_event_t *e)
 void keyboard_show(lv_obj_t *ta)
 {
     if (!ta) return;
-    if (s_hw) {
+    if (t5_ui_hw_keyboard()) {
         /* A USB keyboard types into the default group's focused object. */
         lv_group_t *g = lv_group_get_default();
         if (g) {
@@ -121,7 +113,7 @@ void keyboard_show(lv_obj_t *ta)
         lv_anim_t a;
         lv_anim_init(&a);
         lv_anim_set_var(&a, s_kb);
-        lv_anim_set_exec_cb(&a, set_y_anim);
+        lv_anim_set_exec_cb(&a, shell_anim_y);
         lv_anim_set_values(&a, lv_obj_get_height(s_kb), 0);
         lv_anim_set_duration(&a, MD_DUR_DRAWER_OUT_MS);
         md_anim_set_curve(&a, MD_CURVE_DECELERATION);
@@ -154,38 +146,12 @@ void keyboard_hide(void)
     }
 }
 
-void keyboard_init(void)
-{
-}
-
-static void hide_async(void *p)
-{
-    (void)p;
-    keyboard_hide();
-}
-
-void t5_shell_set_hw_keyboard(bool present)
-{
-    s_hw = present;                /* any task: read on the UI task */
-    if (present) t5_ui_async(hide_async, NULL);
-}
-
-bool keyboard_hw_present(void)
-{
-    return s_hw;
-}
-
 bool keyboard_owns(lv_obj_t *obj)
 {
     for (lv_obj_t *o = obj; o; o = lv_obj_get_parent(o)) {
         if (o == s_kb) return true;
     }
     return false;
-}
-
-lv_obj_t *keyboard_textarea(void)
-{
-    return s_ta;
 }
 
 void keyboard_reset(void)

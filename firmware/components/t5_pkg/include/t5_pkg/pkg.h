@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Package installer and registry (filesystem only).
  *
- * Layout, per root (SD "/sd/apps" or internal "/data/apps"):
+ * Layout, per root (T5_APPS_SD_DIR or T5_APPS_DATA_DIR, t5_storage/paths.h):
  *   <root>/<id>/            installed app (zip contents, incl. manifest.toml)
- *   <root>/<id>/.install    install record: dest, size, time, version
+ *   <root>/<id>/.install    install record ("t5pkg 1"): size, install time
  *   <root>/<id>~new/        staging during install
  *   <root>/<id>~old/        previous version during the swap
  *   <root>/<id>~del/        being removed
- * App data: <appdata>/<id>/ (never touched by install or upgrade), with
+ * App data: <appdata>/<id>/ (T5_APPDATA_DIR; never touched by install or upgrade), with
  * permission grants in <appdata>/<id>/.grants.
  *
  * The staging suffixes use '~' rather than '.' because '.' is legal in an
@@ -28,17 +28,13 @@
 extern "C" {
 #endif
 
-#define T5_PKG_PATH_MAX 192
+#define T5_PKG_PATH_MAX T5_APP_PATH_MAX
 
 typedef enum {
     T5_PKG_DEST_AUTO,        /* existing install's root, else SD if usable, else DATA */
     T5_PKG_DEST_SD,
     T5_PKG_DEST_DATA,
 } t5_pkg_dest_t;
-
-enum {
-    T5_PKG_ALLOW_DOWNGRADE = 1u << 0,
-};
 
 typedef struct {
     t5_manifest_t manifest;
@@ -51,19 +47,14 @@ typedef struct {
     bool shadowed;                    /* also installed on the other root; this one (SD) wins */
 } t5_pkg_info_t;
 
-/* Roots; NULL keeps the current value. Defaults: /sd/apps, /data/apps, /data/appdata. */
-void t5_pkg_set_roots(const char *sd_apps, const char *data_apps, const char *data_appdata);
-
 /* Validate a .t5app without installing: manifest.toml at the root, valid,
  * entry (and icon, if named) present in the zip. */
 T5_MUST_CHECK t5_err_t t5_pkg_inspect(const char *path, t5_manifest_t *out, char *err, size_t errlen);
 
 /* Install or upgrade. Reinstalling the same version is allowed; an older
- * version is refused with T5_ERR_DENIED unless T5_PKG_ALLOW_DOWNGRADE.
- * If the app was on the other root it moves (the old copy is removed). */
+ * version is refused with T5_ERR_DENIED. If the app was on the other root
+ * it moves (the old copy is removed). */
 T5_MUST_CHECK t5_err_t t5_pkg_install(const char *path, t5_pkg_dest_t dest, t5_pkg_info_t *out, char *err, size_t errlen);
-T5_MUST_CHECK t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags, t5_pkg_info_t *out,
-                           char *err, size_t errlen);
 
 /* Remove from every root. T5_ERR_NOT_FOUND if it was not installed (data is
  * still removed when keep_data is false). */
@@ -77,6 +68,9 @@ int t5_pkg_list(t5_pkg_info_t *out, int max);
 /* Finish or roll back interrupted installs/removals on both roots.
  * Returns the number of directories repaired or deleted. */
 int t5_pkg_recover(void);
+
+/* <appdata>/<id>: an app's data dir, built-in or installed (may not exist yet). */
+T5_MUST_CHECK t5_err_t t5_pkg_data_dir(const char *id, char *out, size_t n);
 
 /* Permission grants. Missing file: T5_ERR_NOT_FOUND with both outputs 0. */
 T5_MUST_CHECK t5_err_t t5_pkg_grants_load(const char *id, uint32_t *granted, uint32_t *denied);

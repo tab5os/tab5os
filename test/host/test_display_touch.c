@@ -1,74 +1,107 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "unity.h"
+#include "t5_bsp/panel.h"
+#include "t5_bsp/panel_test.h"
 #include "t5_bsp/xpin.h"
 #include "t5_display/t5_display.h"
+#include "t5_display/t5_display_test.h"
 #include "t5_i2c/t5_i2c.h"
 #include "t5_input/t5_touch.h"
+#include "t5_input/t5_touch_test.h"
 #include "t5_mocks.h"
-
-void t5_touch_setup_for_test(t5_i2c_dev_t *dev, t5_panel_t kind, uint16_t max_x, uint16_t max_y, uint8_t reports);
-
-static mock_i2c_dev_t *e0, *e1;
+#include "display_hw.h"
 
 void setUp(void)
 {
     mock_reset_all();
-    t5_xpin_reset_for_test();
+    t5_bsp_panel_reset_for_test();
     t5_display_reset_for_test();
-    e0 = mock_i2c_add(0x43, false);
-    e1 = mock_i2c_add(0x44, false);
-    e0->regs[1] = e1->regs[1] = 0xA0;
-    t5_xpin_init();
+    mock_expanders_start();
 }
 void tearDown(void) {}
 
-static void test_variant_decision(void)
+static void test_probe_st7121_unmirrored(void)
 {
-    TEST_ASSERT_EQUAL(T5_PANEL_ST7123, t5_display_variant_decide(true, 3, false));
-    TEST_ASSERT_EQUAL(T5_PANEL_ST7121, t5_display_variant_decide(true, 1, false));
-    TEST_ASSERT_EQUAL(T5_PANEL_UNKNOWN, t5_display_variant_decide(true, 7, false));
-    TEST_ASSERT_EQUAL(T5_PANEL_UNKNOWN, t5_display_variant_decide(true, -1, false));
-    TEST_ASSERT_EQUAL(T5_PANEL_ILI9881C_GT911, t5_display_variant_decide(false, -1, true));
-    TEST_ASSERT_EQUAL(T5_PANEL_UNKNOWN, t5_display_variant_decide(false, -1, false));
+    mock_st712x_add(1);
+    TEST_ASSERT_EQUAL(T5_OK, t5_bsp_panel_probe());
+    const t5_panel_info_t *p = t5_bsp_panel();
+    TEST_ASSERT_EQUAL(T5_PANEL_ST7121, p->panel);
+    TEST_ASSERT_FALSE(p->touch_mirror_x || p->touch_mirror_y);
 }
 
-static void test_probe_st7123_releases_resets(void)
+static void test_probe_refuses_unknown_st712x_firmware(void)
 {
-    mock_i2c_dev_t *tp = mock_i2c_add(0x55, true);
-    tp->regs[0x0000] = 3;
-    t5_panel_t p;
-    TEST_ASSERT_EQUAL(T5_OK, t5_display_probe(&p));
-    TEST_ASSERT_EQUAL(T5_PANEL_ST7123, p);
+    mock_st712x_add(7);
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_bsp_panel_probe());
+    TEST_ASSERT_EQUAL(T5_PANEL_UNKNOWN, t5_bsp_panel()->panel);
+}
+
+static void test_probe_st7123_releases_resets_and_reads_once(void)
+{
+    mock_i2c_dev_t *tp = mock_st712x_add(3);
+    TEST_ASSERT_EQUAL(T5_OK, t5_bsp_panel_probe());
+    const t5_panel_info_t *p = t5_bsp_panel();
+    TEST_ASSERT_EQUAL(T5_PANEL_ST7123, p->panel);
+    TEST_ASSERT_EQUAL_HEX8(T5_I2C_ADDR_ST712X, p->touch_addr);
+    TEST_ASSERT_EQUAL(3, p->touch_fw);
+    TEST_ASSERT_TRUE(p->touch_mirror_x && p->touch_mirror_y);
     TEST_ASSERT_EQUAL(T5_XPIN_MODE_INPUT, t5_xpin_mode(T5_XP_LCD_RST));
     TEST_ASSERT_EQUAL(T5_XPIN_PULL_UP, t5_xpin_pull(T5_XP_LCD_RST));
     TEST_ASSERT_TRUE(t5_xpin_out_level(T5_XP_TP_RST));
+    uint32_t reads = tp->reads;
+    TEST_ASSERT_EQUAL(T5_OK, t5_bsp_panel_probe());
+    TEST_ASSERT_EQUAL(reads, tp->reads);
 }
 
-static void test_probe_gt911(void)
+static void test_probe_gt911_alt_address(void)
 {
-    mock_i2c_add(0x14, true);
-    t5_panel_t p;
-    TEST_ASSERT_EQUAL(T5_OK, t5_display_probe(&p));
-    TEST_ASSERT_EQUAL(T5_PANEL_ILI9881C_GT911, p);
+    mock_i2c_add(T5_I2C_ADDR_GT911_ALT, true);
+    TEST_ASSERT_EQUAL(T5_OK, t5_bsp_panel_probe());
+    const t5_panel_info_t *p = t5_bsp_panel();
+    TEST_ASSERT_EQUAL(T5_PANEL_ILI9881C_GT911, p->panel);
+    TEST_ASSERT_EQUAL_HEX8(T5_I2C_ADDR_GT911_ALT, p->touch_addr);
+    TEST_ASSERT_FALSE(p->touch_mirror_x || p->touch_mirror_y);
 }
 
 static void test_probe_nothing(void)
 {
-    t5_panel_t p;
-    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_display_probe(&p));
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_bsp_panel_probe());
+    TEST_ASSERT_EQUAL(T5_PANEL_UNKNOWN, t5_bsp_panel()->panel);
+    TEST_ASSERT_NOT_EQUAL(T5_OK, t5_display_init());
+}
+
+static void test_touch_uses_the_probed_controller(void)
+{
+    mock_i2c_dev_t *gt = mock_i2c_add(T5_I2C_ADDR_GT911_ALT, true);
+    gt->regs[0x8048] = 0xD0; gt->regs[0x8049] = 0x02;   /* 720 */
+    gt->regs[0x804A] = 0x00; gt->regs[0x804B] = 0x05;   /* 1280 */
+    TEST_ASSERT_EQUAL(T5_OK, t5_touch_init());
+    t5_touch_info_t i;
+    t5_touch_info(&i);
+    TEST_ASSERT_TRUE(i.polling);
+    TEST_ASSERT_EQUAL(720, i.max_x);
+    TEST_ASSERT_EQUAL(1280, i.max_y);
+    TEST_ASSERT_FALSE(t5_display_ready());   /* touch doesn't need the display */
 }
 
 static void test_brightness_and_sleep(void)
 {
-    mock_i2c_dev_t *tp = mock_i2c_add(0x55, true);
-    tp->regs[0] = 3;
+    mock_st712x_add(3);
     TEST_ASSERT_EQUAL(T5_OK, t5_display_init());
+    TEST_ASSERT_EQUAL(T5_OK, t5_display_set_brightness(60));
     TEST_ASSERT_EQUAL(0, mock_backlight);        /* held off until the first frame */
     TEST_ASSERT_EQUAL(0, t5_display_effective_brightness());
     TEST_ASSERT_EQUAL(T5_OK, t5_display_release_hold());
-    TEST_ASSERT_EQUAL(80, mock_backlight);
+    TEST_ASSERT_EQUAL(60, mock_backlight);
     t5_display_set_brightness(150);
     TEST_ASSERT_EQUAL(100, t5_display_brightness());
+    t5_display_set_brightness(-5);
+    TEST_ASSERT_EQUAL(0, t5_display_brightness());
+    t5_display_set_brightness(100);
+    TEST_ASSERT_EQUAL(T5_OK, t5_display_dim(30));
+    TEST_ASSERT_EQUAL(30, mock_backlight);
+    TEST_ASSERT_EQUAL(100, t5_display_brightness());   /* the cap leaves the setting alone */
+    TEST_ASSERT_EQUAL(T5_OK, t5_display_dim(-1));
     TEST_ASSERT_EQUAL(T5_OK, t5_display_sleep());
     TEST_ASSERT_EQUAL(0, mock_backlight);
     TEST_ASSERT_TRUE(mock_panel_asleep);
@@ -79,11 +112,24 @@ static void test_brightness_and_sleep(void)
     TEST_ASSERT_FALSE(mock_panel_asleep);
 }
 
+static void test_shown_after_the_first_frame_past_the_hold(void)
+{
+    mock_st712x_add(3);
+    TEST_ASSERT_FALSE(t5_display_wait_shown(0));
+    TEST_ASSERT_EQUAL(T5_OK, t5_display_init());
+    t5_display_frame_isr();                      /* black frames while held */
+    TEST_ASSERT_FALSE(t5_display_wait_shown(0));
+    TEST_ASSERT_EQUAL(T5_OK, t5_display_release_hold());
+    TEST_ASSERT_FALSE(t5_display_wait_shown(0));
+    TEST_ASSERT_TRUE(t5_display_frame_isr());
+    TEST_ASSERT_FALSE(t5_display_frame_isr());   /* signalled once */
+    TEST_ASSERT_TRUE(t5_display_wait_shown(0));
+}
+
 static void test_init_black_and_fill_clip(void)
 {
-    mock_i2c_dev_t *tp = mock_i2c_add(0x55, true);
-    tp->regs[0] = 3;
-    t5_display_init();
+    mock_st712x_add(3);
+    TEST_ASSERT_EQUAL(T5_OK, t5_display_init());
     uint16_t *fb = t5_display_fb();
     for (int i = 0; i < T5_DISPLAY_FBS; i++) {
         uint16_t *b = t5_display_fb_n(i);
@@ -149,21 +195,15 @@ static void test_mirror(void)
     t5_touch_mirror(&p, true, true);
     TEST_ASSERT_EQUAL(0, p.x);                   /* framebuffer bottom-left */
     TEST_ASSERT_EQUAL(1279, p.y);
-    bool mx, my;
-    t5_touch_panel_mirror(T5_PANEL_ST7123, &mx, &my);
-    TEST_ASSERT_TRUE(mx && my);
-    t5_touch_panel_mirror(T5_PANEL_ILI9881C_GT911, &mx, &my);
-    TEST_ASSERT_FALSE(mx || my);
-    t5_touch_panel_mirror(T5_PANEL_ST7121, &mx, &my);
-    TEST_ASSERT_FALSE(mx || my);
 }
 
 static void test_sample_st712x_over_i2c(void)
 {
-    mock_i2c_dev_t *tp = mock_i2c_add(0x55, true);
+    mock_i2c_dev_t *tp = mock_st712x_add(3);
+    TEST_ASSERT_EQUAL(T5_OK, t5_bsp_panel_probe());
     t5_i2c_dev_t *d;
-    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(0x55, 400000, "touch", &d));
-    t5_touch_setup_for_test(d, T5_PANEL_ST7123, 720, 1280, 2);
+    TEST_ASSERT_EQUAL_INT(T5_OK, t5_i2c_open(T5_I2C_ADDR_ST712X, 0, "touch", &d));
+    t5_touch_setup_for_test(d, t5_bsp_panel(), 720, 1280, 2);
     tp->regs[0x0010] = 0x08;                     /* report has coordinates */
     const uint8_t rep[7] = { 0x80 | 0x01, 0x00, 0x02, 0x00, 9, 9, 0 };
     for (int i = 0; i < 7; i++) tp->regs[0x0014 + i] = rep[i];
@@ -180,11 +220,14 @@ static void test_sample_st712x_over_i2c(void)
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_variant_decision);
-    RUN_TEST(test_probe_st7123_releases_resets);
-    RUN_TEST(test_probe_gt911);
+    RUN_TEST(test_probe_st7121_unmirrored);
+    RUN_TEST(test_probe_refuses_unknown_st712x_firmware);
+    RUN_TEST(test_probe_st7123_releases_resets_and_reads_once);
+    RUN_TEST(test_probe_gt911_alt_address);
     RUN_TEST(test_probe_nothing);
+    RUN_TEST(test_touch_uses_the_probed_controller);
     RUN_TEST(test_brightness_and_sleep);
+    RUN_TEST(test_shown_after_the_first_frame_past_the_hold);
     RUN_TEST(test_init_black_and_fill_clip);
     RUN_TEST(test_parse_st712x);
     RUN_TEST(test_parse_gt911);

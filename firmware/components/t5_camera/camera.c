@@ -52,6 +52,7 @@
 #include "freertos/task.h"
 #include "linux/videodev2.h"
 #include "lvgl.h"
+#include "misc/cache/instance/lv_image_cache.h"
 #include "t5_bsp/xpin.h"
 #include "t5_camera/camera.h"
 #include "t5_core/event.h"
@@ -61,26 +62,22 @@
 #include "t5_i2c/t5_i2c.h"
 #include "t5_pins/pins.h"
 #include "t5_power/power.h"
-#include "t5_ui/t5_ui.h"
+#include "h264_ram.h"
 
 static const char *TAG = "t5.camera";
-
-/* LVGL's image cache (misc/cache/instance/lv_image_cache.h, not in lvgl.h). */
-void lv_image_cache_drop(const void *src);
 
 #define NBUF 4
 #define RING_BYTES (2 * 1024 * 1024)
 #define CAM_MAGIC 0x43414d31u
 #define ALIGN 128
-/* Image rotation that makes the sensor upright in landscape (90), found on
- * the bench. Other screen rotations turn it back the other way (view_deg). */
+/* Image rotation that shows the sensor upright on a landscape screen, found
+ * on the bench. Other screen rotations turn it back the other way (view_deg). */
 #define CAM_LANDSCAPE_ROT 0
 /* The sensor adds a black level (0x41 of 1023 in its register tables) for
  * the ISP to subtract, but esp_video only uses the ISP's black-level block
  * on P4 revision 3: on revision 1 the pedestal stayed in, as a grey haze
  * over every shadow that white balance then tinted. The sensor's own target
  * is lowered instead (0x3907/0x3908, written after each stream start). */
-#define CAM_SCCB_ADDR 0x36
 #define CAM_BLC_TARGET 0x00
 
 struct t5_camera {
@@ -89,7 +86,9 @@ struct t5_camera {
     int w, h;                    /* frame size: the mode it was opened in */
     uint8_t *buf[NBUF];
     uint32_t buflen[NBUF];
-    TaskHandle_t task;
+    TaskHandle_t task;           /* stays set once created: stop_task waits on exited */
+    volatile bool running;       /* cleared by the capture task as it ends */
+    SemaphoreHandle_t exited;
     uint32_t serial;             /* which open this is (preview_swap's handle) */
     volatile bool stop;
     bool mirror;
@@ -131,21 +130,32 @@ static ppa_client_handle_t s_ppa, s_ppa_pv;   /* blocking work; the preview, in 
 static jpeg_encoder_handle_t s_jpeg;
 static bool s_video_inited;
 static t5_camera_stats_t s_st;
-/* The H.264 encoder wants ~92 KB of contiguous internal RAM for its
- * reference frame, which a running system no longer has in one piece. The UI
- * holds a 100 KB internal block from boot (its draw bands) and lends it to the
- * encoder while recording: t5_ui hands it out from the encoder's allocator. */
-static void reserve_take(void)
+static t5_camera_host_t s_host;
+
+void t5_camera_set_host(const t5_camera_host_t *host)
 {
-    t5_ui_reclaim_internal();
+    s_host = host ? *host : (t5_camera_host_t){ 0 };
 }
 
-static void reserve_release(void)
+static bool on_ui_task(void)
 {
-    t5_ui_lend_internal();
+    return s_host.on_ui_task && s_host.on_ui_task();
 }
 
-/* ---- helpers ---------------------------------------------------------------- */
+static void encoder_ram_lend(void)
+{
+    size_t len = 0;
+    void *b = s_host.lend_ram ? s_host.lend_ram(&len) : NULL;
+    h264_ram_give(b, len);
+}
+
+static void encoder_ram_reclaim(void)
+{
+    void *b = h264_ram_take();
+    if (s_host.reclaim_ram) s_host.reclaim_ram(b);
+    else heap_caps_free(b);
+}
+
 static void *dma_alloc(size_t n)
 {
     return heap_caps_aligned_calloc(ALIGN, 1, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
@@ -161,19 +171,13 @@ static ppa_srm_rotation_angle_t ppa_angle(int deg)
     }
 }
 
-static int rot_deg(void)
-{
-    static const int deg[] = { 0, 90, 180, 270 };
-    t5_rotation_t r = t5_ui_rotation();
-    return deg[(int)r & 3];
-}
-
 /* Clockwise turn that shows the sensor upright on the current screen, as
  * a PPA (counter-clockwise) angle. The sensor is fixed to the board, so as
  * the screen turns clockwise the image must turn back the other way. */
 static int view_deg(void)
 {
-    return ((CAM_LANDSCAPE_ROT + 90 - rot_deg()) % 360 + 360) % 360;
+    int rot = s_host.rotation_deg ? s_host.rotation_deg() : 0;
+    return ((CAM_LANDSCAPE_ROT + 90 - rot) % 360 + 360) % 360;
 }
 
 /* The part of the frame converted at scale k/16. Below full size it is
@@ -233,19 +237,21 @@ static t5_err_t convert(const t5_camera_t *c, const uint8_t *frame, uint16_t *ou
     return convert_on(c, s_ppa, PPA_TRANS_MODE_BLOCKING, frame, out, ow, oh, k, deg, mirror);
 }
 
-/* The preview's conversion runs in the background (at 1600x1200 it takes
+/* The preview's conversion runs in the background (at 1600x900 it takes
  * longer than two frames, and in the capture loop it held capture to ~17
  * fps): the capture task keeps the frame's buffer until the PPA is done. */
 static volatile bool s_pv_busy;
+static SemaphoreHandle_t s_pv_idle;      /* given when a background conversion ends */
 
 static bool IRAM_ATTR pv_done(ppa_client_handle_t client, ppa_event_data_t *ev, void *user)
 {
     (void)client; (void)ev; (void)user;
     s_pv_busy = false;
-    return false;
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(s_pv_idle, &woken);
+    return woken == pdTRUE;
 }
 
-/* ---- preview (UI task side) ----------------------------------------------------- */
 /* Run a cam_call() waiting for this task. Claimed atomically, so a caller
  * that timed out can take it back if it hasn't started. */
 static void run_call(t5_camera_t *c)
@@ -349,7 +355,6 @@ void t5_camera_set_mirror(t5_camera_t *c, bool mirror)
     if (c && c->magic == CAM_MAGIC) c->mirror = mirror;
 }
 
-/* ---- recording writer ------------------------------------------------------------ */
 /* The writer owns the ring and the file: on stop it drains what is left
  * (a slow card can be seconds behind) and then frees both, so stopping never
  * waits on the card and never frees them under it. A new recording waits
@@ -395,6 +400,7 @@ static void writer_task(void *arg)
  * dropped (2026-11-07). Step the bitrate down a quarter while the ring is
  * over 40% full, back up while it stays under 10%. */
 #define KBPS_MIN 1500
+#define KBPS_DEFAULT 4000              /* t5_camera_record_start's kbps 0 */
 static void adapt_bitrate(t5_camera_t *c, size_t queued)
 {
     if (!c->enc_param) return;
@@ -434,7 +440,6 @@ static void encode(t5_camera_t *c, uint8_t *frame)
     s_st.rec_ms = (uint32_t)((esp_timer_get_time() - c->rec_t0) / 1000);
 }
 
-/* ---- still ---------------------------------------------------------------------------- */
 static t5_err_t take_photo(t5_camera_t *c, const uint8_t *frame)
 {
     if (!s_jpeg) {               /* made here, on core 0, for its interrupt */
@@ -477,18 +482,23 @@ static t5_err_t take_photo(t5_camera_t *c, const uint8_t *frame)
     return e;
 }
 
-/* ---- capture task ---------------------------------------------------------------------- */
 static t5_err_t cam_setup(t5_camera_t *c);
+
+/* c may be freed as soon as exited is given. */
+static void capture_exit(t5_camera_t *c)
+{
+    SemaphoreHandle_t exited = c->exited;
+    c->running = false;
+    xSemaphoreGive(exited);
+    vTaskDelete(NULL);
+}
 
 static void capture_task(void *arg)
 {
     t5_camera_t *c = arg;
     c->setup_err = cam_setup(c);
     xSemaphoreGive(c->ready);
-    if (c->setup_err != T5_OK) {
-        c->task = NULL;
-        vTaskDelete(NULL);
-    }
+    if (c->setup_err != T5_OK) capture_exit(c);
     uint32_t last_seq = 0, sec_frames = 0, sec_pv = 0;
     int64_t pv_last = 0;
     bool have_seq = false;
@@ -536,6 +546,7 @@ static void capture_task(void *arg)
             int pw = c->pw, ph = c->ph, pk = c->pk;
             t5_mutex_unlock(s_mx);
             if (want) {
+                xSemaphoreTake(s_pv_idle, 0);
                 s_pv_busy = true;
                 if (convert_on(c, s_ppa_pv, PPA_TRANS_MODE_NON_BLOCKING, frame, c->pv[target], pw, ph, pk,
                                view_deg(), c->mirror) == T5_OK) {
@@ -557,13 +568,11 @@ static void capture_task(void *arg)
         }
     }
     /* The preview buffers and the frame stay put until the PPA is done. */
-    for (int i = 0; i < 100 && s_pv_busy; i++) vTaskDelay(pdMS_TO_TICKS(2));
+    if (s_pv_busy) xSemaphoreTake(s_pv_idle, pdMS_TO_TICKS(200));
     if (holding) ioctl(c->fd, VIDIOC_QBUF, &held);
-    c->task = NULL;
-    vTaskDelete(NULL);
+    capture_exit(c);
 }
 
-/* ---- open / close ------------------------------------------------------------------------ */
 /* The two sensor modes we use. esp_video only knows the Kconfig default,
  * and VIDIOC_S_SENSOR_FMT wants the driver's own descriptor, so they come
  * from a short-lived second handle on the sensor (detect reads its ID and
@@ -572,7 +581,7 @@ static const esp_cam_sensor_format_t *s_fmt_photo, *s_fmt_video;
 
 static void find_formats(void)
 {
-    sccb_i2c_config_t sc = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = CAM_SCCB_ADDR, .scl_speed_hz = 400000 };
+    sccb_i2c_config_t sc = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = T5_I2C_ADDR_SC2356, .scl_speed_hz = T5_SYS_I2C_HZ };
     esp_sccb_io_handle_t io = NULL;
     if (sccb_new_i2c_io((i2c_master_bus_handle_t)t5_i2c_native_bus(), &sc, &io) != ESP_OK) return;
     esp_cam_sensor_config_t cfg = {
@@ -592,6 +601,10 @@ static void find_formats(void)
     if (!s_fmt_photo || !s_fmt_video) T5_LOGE(TAG, "sensor modes not found (photo %p, video %p)", s_fmt_photo, s_fmt_video);
 }
 
+/* esp_video_deinit() leaves the CSI DMA interrupt allocated, so a second
+ * esp_video_init() fails ("alloc interrupt failed"). esp_video stays up after
+ * the first open; closing stops the stream, which puts the sensor in
+ * standby. Until the first open the sensor is held in reset. */
 static t5_err_t video_up(void)
 {
     if (s_video_inited) return T5_OK;
@@ -601,7 +614,7 @@ static t5_err_t video_up(void)
     memset(&csi, 0, sizeof csi);
     csi.sccb_config.init_sccb = false;
     csi.sccb_config.i2c_handle = (i2c_master_bus_handle_t)t5_i2c_native_bus();
-    csi.sccb_config.freq = 400000;
+    csi.sccb_config.freq = T5_SYS_I2C_HZ;
     csi.reset_pin = -1;          /* CAM_RST is on the expander, handled above */
     csi.pwdn_pin = -1;
     esp_video_init_config_t cfg = { .csi = &csi };
@@ -612,14 +625,6 @@ static t5_err_t video_up(void)
     s_video_inited = true;
     find_formats();
     return T5_OK;
-}
-
-/* esp_video_deinit() leaves the CSI DMA interrupt allocated, so a second
- * esp_video_init() fails ("alloc interrupt failed"). esp_video stays up after
- * the first open; closing stops the stream, which puts the sensor in
- * standby. Until the first open the sensor is held in reset. */
-static void video_down(void)
-{
 }
 
 static void cam_release(void *h)
@@ -633,10 +638,11 @@ static void cam_release(void *h)
 static bool stop_task(t5_camera_t *c)
 {
     c->stop = true;
+    if (!c->task) return true;
     int64_t t0 = esp_timer_get_time();
-    while (c->task && esp_timer_get_time() - t0 < 5000000) t5_delay_ms(5);
+    bool exited = xSemaphoreTake(c->exited, pdMS_TO_TICKS(5000)) == pdTRUE;
     int ms = (int)((esp_timer_get_time() - t0) / 1000);
-    if (c->task) {
+    if (!exited) {
         T5_LOGE(TAG, "capture task didn't stop in %d ms: leaking it", ms);
         return false;
     }
@@ -658,6 +664,7 @@ static void free_cam(t5_camera_t *c)
     if (c->photo_done) vSemaphoreDelete(c->photo_done);
     if (c->ready) vSemaphoreDelete(c->ready);
     if (c->call_done) vSemaphoreDelete(c->call_done);
+    if (c->exited) vSemaphoreDelete(c->exited);
     c->magic = 0;
     free(c);
 }
@@ -666,7 +673,7 @@ static void free_cam(t5_camera_t *c)
 static void sensor_tune(void)
 {
     static t5_i2c_dev_t *dev;
-    if (!dev && t5_i2c_open(CAM_SCCB_ADDR, 400000, "camera", &dev) != T5_OK) return;
+    if (!dev && t5_i2c_open(T5_I2C_ADDR_SC2356, T5_SYS_I2C_HZ, "camera", &dev) != T5_OK) return;
     const uint8_t blc[2] = { 0x00, CAM_BLC_TARGET };   /* 0x3907 (high bits), 0x3908 */
     T5_LOG_ON_ERR(TAG, t5_i2c_write16(dev, 0x3907, blc, sizeof blc));
 }
@@ -726,7 +733,9 @@ static t5_err_t open_mode(t5_camera_t **out, int w, int h)
     c->photo_done = xSemaphoreCreateBinary();
     c->ready = xSemaphoreCreateBinary();
     c->call_done = xSemaphoreCreateBinary();
-    t5_err_t e = c->photo_done && c->ready && c->call_done ? T5_OK : T5_ERR_NO_MEM;
+    c->exited = xSemaphoreCreateBinary();
+    t5_err_t e = c->photo_done && c->ready && c->call_done && c->exited ? T5_OK : T5_ERR_NO_MEM;
+    c->running = true;
     if (e == T5_OK && xTaskCreatePinnedToCore(capture_task, "camera", 6144, c, 12, &c->task, 0) != pdPASS)
         e = T5_ERR_NO_MEM;
     if (e == T5_OK) {
@@ -763,6 +772,19 @@ t5_err_t t5_camera_open_photo(t5_camera_t **out)
     return open_mode(out, T5_CAMERA_PHOTO_W, T5_CAMERA_PHOTO_H);
 }
 
+typedef struct {
+    lv_obj_t *img;
+    t5_camera_t *c;
+} preview_detach_t;
+
+static void preview_detach(void *arg)
+{
+    preview_detach_t *d = arg;
+    lv_obj_remove_event_cb_with_user_data(d->img, preview_deleted, d->c);
+    lv_image_set_src(d->img, NULL);
+    for (int i = 0; i < 2; i++) lv_image_cache_drop(&d->c->dsc[i]);
+}
+
 t5_err_t t5_camera_close(t5_camera_t *c)
 {
     if (!c || c->magic != CAM_MAGIC) return T5_ERR_INVALID_ARG;
@@ -771,17 +793,16 @@ t5_err_t t5_camera_close(t5_camera_t *c)
     bool stopped = stop_task(c);
     t5_mutex_lock(s_mx);
     if (s_cam == c) s_cam = NULL;
-    lv_obj_t *img = c->img;
+    preview_detach_t d = { .img = c->img, .c = c };
     c->img = NULL;
     t5_mutex_unlock(s_mx);
     /* The preview object belongs to the caller's screen: leave it, but show
-     * nothing that is about to be freed. */
-    if (img && t5_ui_on_ui_task()) {
-        lv_obj_remove_event_cb_with_user_data(img, preview_deleted, c);
-        lv_image_set_src(img, NULL);
+     * nothing that is about to be freed, from whichever task closes. */
+    if (d.img) {
+        if (s_host.ui_call) s_host.ui_call(preview_detach, &d);
+        else preview_detach(&d);
     }
     if (stopped) free_cam(c);
-    video_down();
     s_st.open = s_st.streaming = s_st.recording = false;
     t5_ev_media_t ev = { .on = false };
     t5_event_post(T5_EV_CAMERA_STATE, &ev, sizeof ev);
@@ -794,11 +815,11 @@ bool t5_camera_active(void)
     return s_cam != NULL;
 }
 
-/* ---- stills and recording ------------------------------------------------------------------ */
 t5_err_t t5_camera_photo(t5_camera_t *c, const char *path, int quality)
 {
     if (!c || c->magic != CAM_MAGIC || !path) return T5_ERR_INVALID_ARG;
-    if (t5_ui_on_ui_task()) return T5_ERR_STATE;      /* it waits for a frame */
+    if (!t5_core_path_check(path, true)) return T5_ERR_DENIED;
+    if (on_ui_task()) return T5_ERR_STATE;      /* it waits for a frame */
     snprintf(c->photo_path, sizeof c->photo_path, "%s", path);
     c->photo_q = quality > 0 && quality <= 100 ? quality : 85;
     xSemaphoreTake(c->photo_done, 0);
@@ -818,7 +839,7 @@ typedef struct {
 static t5_err_t rec_start_impl(t5_camera_t *c, void *arg)
 {
     const char *path = ((rec_args_t *)arg)->path;
-    uint32_t kbps = ((rec_args_t *)arg)->kbps;
+    uint32_t kbps = ((rec_args_t *)arg)->kbps ? ((rec_args_t *)arg)->kbps : KBPS_DEFAULT;
     if (c->recording || s_writers) return T5_ERR_BUSY;   /* or the last one still flushing */
     /* 1600 wide, the encoder's reference buffer (115 KB, internal RAM) is
      * bigger than the 100 KB the UI can lend it: record in the video mode. */
@@ -828,18 +849,18 @@ static t5_err_t rec_start_impl(t5_camera_t *c, void *arg)
         .gop = T5_CAMERA_FPS, .fps = T5_CAMERA_FPS,
         .res = { .width = (uint16_t)c->w, .height = (uint16_t)c->h },
         /* qp_max 42 leaves the rate control room to go down when the card is slow. */
-        .rc = { .bitrate = (kbps ? kbps : 4000) * 1000, .qp_min = 25, .qp_max = 42 },
+        .rc = { .bitrate = kbps * 1000, .qp_min = 25, .qp_max = 42 },
     };
-    reserve_release();
+    encoder_ram_lend();
     if (esp_h264_enc_hw_new(&cfg, &c->enc) != ESP_H264_ERR_OK || esp_h264_enc_open(c->enc) != ESP_H264_ERR_OK) {
         if (c->enc) esp_h264_enc_del(c->enc);
         c->enc = NULL;
-        reserve_take();
+        encoder_ram_reclaim();
         return T5_ERR_NO_MEM;
     }
     c->enc_param = NULL;
     if (esp_h264_enc_hw_get_param_hd(c->enc, &c->enc_param) != ESP_H264_ERR_OK) c->enc_param = NULL;
-    c->kbps_target = c->kbps_now = kbps ? kbps : 4000;
+    c->kbps_target = c->kbps_now = kbps;
     c->kbps_changed_us = esp_timer_get_time();
     c->enc_out_len = (uint32_t)(c->w * c->h * 3 / 2);
     c->enc_out = esp_h264_aligned_calloc(ALIGN, 1, c->enc_out_len, &c->enc_out_len, MALLOC_CAP_SPIRAM);
@@ -861,7 +882,7 @@ static t5_err_t rec_start_impl(t5_camera_t *c, void *arg)
         esp_h264_enc_del(c->enc);
         c->enc = NULL;
         c->enc_out = NULL;
-        reserve_take();
+        encoder_ram_reclaim();
         return T5_ERR_IO;
     }
     s_job = j;
@@ -872,7 +893,7 @@ static t5_err_t rec_start_impl(t5_camera_t *c, void *arg)
     c->rec_t0 = esp_timer_get_time();
     c->recording = true;
     s_st.recording = true;
-    T5_LOGI(TAG, "recording to %s at %u kbit/s", path, (unsigned)(kbps ? kbps : 4000));
+    T5_LOGI(TAG, "recording to %s at %u kbit/s", path, (unsigned)kbps);
     return T5_OK;
 }
 
@@ -890,7 +911,7 @@ static t5_err_t rec_stop_impl(t5_camera_t *c, void *arg)
     c->enc_param = NULL;
     heap_caps_free(c->enc_out);
     c->enc_out = NULL;
-    reserve_take();
+    encoder_ram_reclaim();
     s_st.recording = false;
     T5_LOGI(TAG, "recorded %u frames (%u dropped), %llu bytes, %u ms", (unsigned)s_st.rec_frames,
             (unsigned)s_st.rec_dropped, (unsigned long long)s_st.rec_bytes, (unsigned)s_st.rec_ms);
@@ -899,7 +920,7 @@ static t5_err_t rec_stop_impl(t5_camera_t *c, void *arg)
 
 static t5_err_t cam_call(t5_camera_t *c, t5_err_t (*fn)(t5_camera_t *, void *), void *arg)
 {
-    if (xTaskGetCurrentTaskHandle() == c->task || !c->task) return fn(c, arg);
+    if (xTaskGetCurrentTaskHandle() == c->task || !c->running) return fn(c, arg);
     t5_mutex_lock(s_call_mx);                /* one caller at a time; not s_mx, which capture takes */
     xSemaphoreTake(c->call_done, 0);
     c->call_arg = arg;
@@ -926,9 +947,10 @@ static t5_err_t cam_call(t5_camera_t *c, t5_err_t (*fn)(t5_camera_t *, void *), 
 t5_err_t t5_camera_record_start(t5_camera_t *c, const char *path, uint32_t kbps)
 {
     if (!c || c->magic != CAM_MAGIC || !path) return T5_ERR_INVALID_ARG;
+    if (!t5_core_path_check(path, true)) return T5_ERR_DENIED;
     /* Starting lends the encoder the UI's draw buffer, through the UI task:
      * from the UI task that deadlocked (and then crashed). */
-    if (t5_ui_on_ui_task()) return T5_ERR_STATE;
+    if (on_ui_task()) return T5_ERR_STATE;
     rec_args_t a = { path, kbps };
     return cam_call(c, rec_start_impl, &a);
 }
@@ -936,7 +958,7 @@ t5_err_t t5_camera_record_start(t5_camera_t *c, const char *path, uint32_t kbps)
 t5_err_t t5_camera_record_stop(t5_camera_t *c)
 {
     if (!c || c->magic != CAM_MAGIC) return T5_ERR_INVALID_ARG;
-    if (t5_ui_on_ui_task()) return T5_ERR_STATE;    /* takes the draw buffer back, the same way */
+    if (on_ui_task()) return T5_ERR_STATE;    /* takes the draw buffer back, the same way */
     return cam_call(c, rec_stop_impl, NULL);
 }
 
@@ -966,7 +988,7 @@ t5_err_t t5_camera_snapshot(uint16_t *out, int w, int h)
     return T5_OK;
 }
 
-/* ---- JPEG decoding (gallery, UVC) ------------------------------------------------- */
+/* JPEG decoding (gallery, UVC). */
 typedef struct {
     const uint8_t *jpeg;
     size_t len;
@@ -1050,7 +1072,6 @@ t5_err_t t5_jpeg_decode(const uint8_t *jpeg, size_t len, uint16_t *out, size_t o
     return e;
 }
 
-/* ---- power ---------------------------------------------------------------------------------- */
 static t5_err_t cam_suspend(void *arg)
 {
     (void)arg;
@@ -1068,8 +1089,8 @@ t5_err_t t5_camera_init(void)
     if (s_mx) return T5_OK;
     s_mx = t5_mutex_create();
     s_call_mx = t5_mutex_create();
-    if (!s_mx || !s_call_mx) return T5_ERR_NO_MEM;
-    reserve_take();
+    s_pv_idle = xSemaphoreCreateBinary();
+    if (!s_mx || !s_call_mx || !s_pv_idle) return T5_ERR_NO_MEM;
     s_dec_q = xQueueCreate(4, sizeof(dec_req_t *));
     if (!s_dec_q || xTaskCreatePinnedToCoreWithCaps(dec_task, "jpeg.dec", 4096, NULL, 6, NULL, 0,
                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS)

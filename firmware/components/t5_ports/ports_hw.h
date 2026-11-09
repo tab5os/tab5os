@@ -2,9 +2,9 @@
  * Hardware layer under t5_ports. Device: ports_hw.c (ESP-IDF drivers).
  * Host tests: test/host/mocks/ports_hw_mock.c.
  *
- * Pins are GPIO numbers; the logic layer has already claimed them. Handles are
- * opaque driver objects. G35 (power key) is never reset and its sleep config
- * is never touched here.
+ * Pins are GPIO numbers; the logic layer has already claimed them and keeps
+ * away from the ones that must not be touched (ports_pin_hands_off). Handles
+ * are opaque driver objects.
  */
 #pragma once
 #include <stdbool.h>
@@ -53,5 +53,5 @@ t5_err_t ports_hw_adc_open(int pin, int unit, int channel, ports_hw_t *out);
 void ports_hw_adc_close(ports_hw_t h);
 t5_err_t ports_hw_adc_read_mv(ports_hw_t h, int *mv);
 
-/* Back to a quiet input (gpio_reset_pin), except G35, which is left alone. */
+/* Back to a quiet input (gpio_reset_pin). */
 void ports_hw_pin_release(int pin);

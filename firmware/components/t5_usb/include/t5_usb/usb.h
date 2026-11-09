@@ -3,8 +3,8 @@
  *
  * USB-A, host, on the high-speed controller. USB5V_EN is a rail held while
  * the host is enabled (dropped in Sleep, so devices re-enumerate on wake).
- * Hubs are supported. Class drivers: HID keyboards and mice (they become
- * LVGL input devices), mass storage mounted at /usb, CDC-ACM serial, USB
+ * Hubs are supported. Class drivers: HID keyboards and mice (decoded for an
+ * input adapter, t5_usb/hid.h), mass storage mounted at /usb, CDC-ACM serial, USB
  * MIDI and UVC cameras (MJPEG frames to an app).
  *
  * USB-C: the console (USB-Serial/JTAG) by default. Mass storage mode hands
@@ -20,12 +20,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_storage/paths.h"   /* T5_USB_PATH */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define T5_USB_PATH "/usb"
 #define T5_USB_MAX_DEVICES 8
 
 typedef enum {

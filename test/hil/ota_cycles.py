@@ -7,46 +7,28 @@ Each cycle installs the running image into the other slot with `ota selftest`
 then one of:
 
   ok        restart; the new slot runs on trial and is confirmed after 60 s
-  crash     restart, then crash it during the trial (the crasher test app):
+  crash     restart, then reset the chip during the trial, as an OS crash
+            would (apps' own crashes are contained and don't restart it):
             the next boot must be the previous slot again (rollback)
   interrupt reset in the middle of the install: the old slot must still boot
             and the half-written one must not
   badsig    a tampered signature (needs a firmware built with T5_OTA_KEYS_DIR
             holding KEY's public half): refused, nothing changes
 
-    PY=~/.espressif/python_env/idf6.1_py3.15_env/bin/python
-    $PY test/hil/ota_cycles.py --cycles 1000                  # the plan's run: days
-    $PY test/hil/ota_cycles.py --cycles 4 --mix ok,crash,interrupt   # a few minutes
+    tools/t5/t5 hil ota_cycles --cycles 1000                  # the plan's run: days
+    tools/t5/t5 hil ota_cycles --cycles 4 --mix ok,crash,interrupt   # a few minutes
 
 --mode powercut cuts the main rail instead of a chip reset for `interrupt`
 (the RTC countdown trick from fs_powerloss.py; someone may need to press the
 power button if the board stays off).
 """
 import argparse
-import os
 import random
 import re
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools", "t5"))
-from t5link import Tab5  # noqa: E402
-
-
-def connect(retries=60):
-    for _ in range(retries):
-        try:
-            t = Tab5(timeout=8).open()
-            t.cmd("ota", 8)
-            t.timeout = 30
-            return t
-        except Exception:
-            try:
-                t.close()
-            except Exception:
-                pass
-            time.sleep(1)
-    raise RuntimeError("Tab5 not reachable")
+from t5link import SERIAL_ERRORS, connect, restart
 
 
 def state(t):
@@ -60,16 +42,6 @@ def state(t):
         "failed": int(re.search(r"(\d+) failed boots", out).group(1)) if "failed boots" in out else -1,
         "raw": out,
     }
-
-
-def reboot(t):
-    try:
-        t.ser.write(b"reboot\r\n")
-    except Exception:
-        pass
-    t.close()
-    time.sleep(8)
-    return connect()
 
 
 def wait_confirmed(t, timeout=90):
@@ -94,7 +66,7 @@ def main():
     ap.add_argument("--mode", choices=("reset", "powercut"), default="reset")
     a = ap.parse_args()
     mix = a.mix.split(",")
-    t = connect()
+    t = connect(cmd_timeout=30)
     s = state(t)
     print(f"start: {s['slot']}, {'trial' if s['trial'] else 'confirmed'}")
     if s["trial"]:
@@ -109,24 +81,17 @@ def main():
         if kind == "interrupt":
             # Reset during the install (erasing the slot and writing it take
             # about 10 s); watch the output to know whether it finished first.
-            t.ser.reset_input_buffer()
-            t.ser.write(b"ota selftest\r\n")
-            stop = time.time() + random.uniform(1.0, 9.0)
-            seen = b""
-            while time.time() < stop:
-                seen += t.ser.read(256)
-            done = b"installed in" in seen
+            t.flush_input()
+            t.send("ota selftest")
+            done = b"installed in" in t.read_for(random.uniform(1.0, 9.0))
             if a.mode == "powercut":
-                t.ser.write(b"rtc timer 1\r\n")
-                time.sleep(3)
+                t0 = time.time()
+                t.send("rtc timer 1")
+                if not t.read_until_gone(10):
+                    print(f"  cycle {i}: power did not drop")
+                t = connect(timeout=180, cmd_timeout=30, booted_after=t0)
             else:
-                t.ser.dtr = False
-                t.ser.rts = True
-                time.sleep(0.1)
-                t.ser.rts = False
-            t.close()
-            time.sleep(8)
-            t = connect()
+                t = restart(t, "reset")
             # Finished: the new slot boots on trial and is confirmed; not
             # finished: the old one, untouched.
             expect = other if done else before
@@ -143,26 +108,22 @@ def main():
             if "DENIED" not in out:
                 print(f"  cycle {i} badsig: accepted a tampered signature!\n{out}")
                 fails += 1
-            t = reboot(t)
+            t = restart(t)
         else:
             out = selftest(t)
             if not re.search(r"^OK", out, re.M):
                 print(f"  cycle {i}: install failed: {out[-200:]}")
                 fails += 1
                 continue
-            t = reboot(t)
+            t = restart(t)
             s = state(t)
             if s["slot"] != other or not s["trial"]:
                 print(f"  cycle {i}: expected {other} on trial, got {s['slot']} {'trial' if s['trial'] else ''}")
                 fails += 1
             if kind == "crash":
-                try:
-                    t.cmd("app run com.t5.test.crasher", 5)
-                except Exception:
-                    pass
-                t.close()
-                time.sleep(10)
-                t = connect()
+                # The OS contains an app's crash, so the stand-in for an OS
+                # that dies during its trial is a chip reset.
+                t = t.reset()
                 expect = before          # rolled back
             else:
                 expect = other

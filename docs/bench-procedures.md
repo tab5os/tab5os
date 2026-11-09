@@ -60,11 +60,11 @@ Meter each `ext` and `stamp` pin against the table in the design doc. Toggle the
 
 ## 1.8 Real power-cut test
 
-`test/hil/fs_powerloss.py --mode powercut --cycles 10` cuts main power through the RTC interrupt mid-write. The board doesn't always come back by itself. When the script waits on "Tab5 not reachable", press the power button and run it again. The chip-reset variant runs unattended: `--mode reset --cycles 30`.
+`t5 hil fs_powerloss --mode powercut --cycles 10` cuts main power through the RTC interrupt mid-write. The board doesn't always come back by itself. When the script waits on "Tab5 not reachable", press the power button and run it again. The chip-reset variant runs unattended: `--mode reset --cycles 30`.
 
 ## 1.10 I2C stress with a stuck bus
 
-1. Run `test/hil/i2c_stress.py --seconds 3600`. It runs for 1 hour unattended.
+1. Run `t5 hil i2c_stress --seconds 3600`. It runs for 1 hour unattended.
 2. For the physical part, run it with `--manual-short` and short the system SDA line (G31, brought out as `SYS_SDA` on the M5-Bus connector) to GND with a probe for about 100 ms, a few times. Pass means `I2C STRESS PASS`: no bad data, recoveries counted, and every device answering afterwards.
 
 ## Phase 2 on battery
@@ -75,7 +75,7 @@ Unplug USB. Keep a hand near the power button: one press brings the board back.
 2. **RTC alarm wake.** `power alarm 120`, then `power off --force`. Expected: the board comes back on by itself about 2 minutes later, with `wake reason rtc-alarm`.
 3. **USB detection.** `bat` should show `usb no` and a current well above 50 mA. Note the `CHG_STAT` level.
 4. **Discharge trace.** `bat log start` (writes `/sd/battery-<epoch>.csv`), then leave it running to empty. The device turns itself off at 5% or 6.5 V. Copy the file off the card.
-5. **Draw per state (0.9).** Meter in series with the pack, then `test/hil/power_cycle.py --cycles 1 --meter-pause`.
+5. **Draw per state (0.9).** Meter in series with the pack, then `t5 hil power_cycle --cycles 1 --meter-pause`.
 
 ## Charge mode (bench checks 7 and 8)
 
@@ -108,4 +108,4 @@ Build the test apps with `t5 apps`. Either copy `test/apps/build/*.t5app` to the
 2. **Crash guard.** `app run com.t5.test.crasher`. The screen goes dark at once (the backlight is switched off in the panic handler), stays dark through the reboot, and comes back on with the launcher: no blue, cyan or test-pattern screens. `app crashes` should show one crash with a dump path. Do it again: two in a row, and `app` shows "auto-launch blocked". Open Hello and exit it; Crasher stays blocked until it exits cleanly.
 3. **UI watchdog.** `app run com.t5.test.hang`. After about 2.5 s "App not responding" appears. Tap Wait: it goes away and comes back about 5 s later. Tap Close app: the board restarts to the launcher, and `app crashes` lists Hang as "not responding".
 4. **ABI stability.** Rebuild the firmware after any unrelated change, flash it, and check the `.t5app` files built earlier still run without reinstalling.
-5. **Revisions.** Only `rev1` (v1.x silicon) is targeted; `rev3` is not tested.
+5. **Revisions.** There is one build, for v1.x silicon (`firmware/sdkconfig.board`); v3.x isn't supported.

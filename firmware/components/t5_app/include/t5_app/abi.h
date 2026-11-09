@@ -2,11 +2,12 @@
  * The stable app ABI (plan 5.5, 5.6).
  *
  * sdk/abi/api_v<N>.sym lists every symbol an app may import, with its full
- * prototype. tools/abi/abi.py turns it into abi_table.c at build time: a
- * sorted table of names and addresses, plus a redeclaration of every
+ * prototype. tools/abi/abi.py turns it into t5_abi's abi_table.c at build
+ * time: a sorted table of names and addresses, plus a redeclaration of every
  * prototype so the build fails if a header drifts from the published ABI.
  * CI (abi.py check) fails if a symbol of a published level is removed or
- * its prototype changes.
+ * its prototype changes. The table is handed to the resolver here at boot
+ * (t5_abi_register).
  *
  * Some symbols are bound to tracking wrappers (malloc, xTaskCreate,
  * lv_timer_create...), and some need a permission group: an app whose
@@ -40,13 +41,11 @@ typedef struct {
     uint8_t level;       /* API level that added it */
 } t5_abi_sym_t;
 
-extern const t5_abi_sym_t t5_abi_table[];
-extern const size_t t5_abi_count;
+/* table: sorted by name (strcmp), kept by reference. */
+void t5_abi_set_table(const t5_abi_sym_t *table, size_t count);
+size_t t5_abi_size(void);
 
 const t5_abi_sym_t *t5_abi_find(const char *name);
-/* Compiler runtime helpers (__divdi3, __errno...) come from the loader's
- * libc table rather than ours. */
-bool t5_abi_is_runtime_helper(const char *name);
 /* The address an app with the given declared permissions gets for name, or
  * 0 if the name isn't exported. *denied says a stub was substituted. */
 uintptr_t t5_abi_resolve(const char *name, uint32_t declared_perms, bool *denied);

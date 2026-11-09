@@ -11,4 +11,20 @@ t5_app(fscope SRCS fscope/main.c MANIFEST fscope/manifest.toml)
 t5_app(fsshared SRCS fscope/main.c MANIFEST fscope/shared.toml)
 t5_app(netleak SRCS netleak/main.c MANIFEST netleak/manifest.toml)
 t5_app(nonet SRCS nonet/main.c MANIFEST nonet/manifest.toml)
-t5_app(hello SRCS ../../sdk/templates/c/main.c MANIFEST ../../sdk/templates/c/manifest.toml)
+# The C template, filled in as `t5 new Hello` would (tools/t5/t5dev.py).
+set(APP_ID com.example.hello)
+set(APP_NAME Hello)
+foreach(f main.c manifest.toml)
+    configure_file(${T5_SDK}/templates/c/${f} ${CMAKE_CURRENT_BINARY_DIR}/hello/${f} @ONLY)
+endforeach()
+file(RELATIVE_PATH hello ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/hello)   # t5_app wants it relative
+t5_app(hello SRCS ${hello}/main.c MANIFEST ${hello}/manifest.toml)
+
+# Python test app: nothing to compile, the folder is the package.
+file(GLOB fspy_files ${CMAKE_CURRENT_SOURCE_DIR}/fspy/*)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/fspy.t5app
+    COMMAND ${Python3_EXECUTABLE} ${T5_ROOT}/tools/t5/t5pack.py ${CMAKE_CURRENT_SOURCE_DIR}/fspy
+            -o ${CMAKE_CURRENT_BINARY_DIR}/fspy.t5app
+    DEPENDS ${fspy_files} ${T5_ROOT}/tools/t5/t5pack.py
+    COMMENT "Packing fspy.t5app" VERBATIM)
+add_custom_target(fspy_pkg ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/fspy.t5app)

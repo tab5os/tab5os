@@ -1,30 +1,35 @@
 /* SPDX-License-Identifier: Apache-2.0
  * shell_sys.h in the simulator: the mocked services (sim_services.c) and a
  * fixed app list, so the real launcher, status bar and quick settings run
- * on the desktop.
+ * on the desktop. Launching keeps the runtime's order (t5_app/apps.h,
+ * t5_apps_home_t) with a stand-in page for the app.
  */
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include "md/md.h"
 #include "md/md_icons.h"
-#include "shell_sys.h"
+#include "shell_priv.h"
+#include "t5_storage/paths.h"
 #include "sim.h"
 
+/* The device's built-in apps (sysapps) that the launcher shows, and two
+ * installed ones, one of them blocked after crashes. */
 static const shell_app_t s_apps[] = {
-    { "com.t5.settings", "Settings", MD_ICON_SETTINGS, true, false, false },
-    { "com.t5.files", "Files", MD_ICON_FOLDER, true, false, false },
-    { "com.t5.appmanager", "App Manager", MD_ICON_APPS, true, false, false },
-    { "com.t5.power", "Power", MD_ICON_BATTERY_CHARGING_FULL, true, false, false },
-    { "com.t5.ports", "Port Inspector", MD_ICON_CABLE, true, false, false },
-    { "com.t5.camera", "Camera", MD_ICON_CAMERA_ALT, true, false, false },
+    { T5_APP_ID_SETTINGS, "Settings", MD_ICON_SETTINGS, true, false, false },
+    { T5_APP_ID_FILES, "Files", MD_ICON_FOLDER, true, false, false },
+    { T5_APP_ID_MANAGER, "App Manager", MD_ICON_APPS, true, false, false },
+    { T5_APP_ID_POWER, "Power", MD_ICON_BATTERY_CHARGING_FULL, true, false, false },
+    { T5_APP_ID_PORTS, "Port Inspector", MD_ICON_CABLE, true, false, false },
+    { T5_APP_ID_CAMERA, "Camera", MD_ICON_CAMERA_ALT, true, false, false },
     { "com.example.airlog", "Air Log", "", false, false, false },
     { "com.example.rs485", "RS-485 Console", "", false, true, false },
 };
+#define NAPPS ((int)(sizeof s_apps / sizeof s_apps[0]))
 static int s_brightness = 80, s_volume = 60;
 static bool s_muted, s_low, s_locked, s_ble;
 static lv_obj_t *s_app_scr;
-static char s_cur[64];
+static char s_cur[T5_APP_ID_LEN];
 
 void shell_sys_status(shell_status_t *o)
 {
@@ -39,7 +44,7 @@ void shell_sys_status(shell_status_t *o)
     o->wifi_rssi = g_sim.rssi;
     snprintf(o->ssid, sizeof o->ssid, "Workshop");
     o->ble_on = s_ble;
-    o->mic_active = g_sim.grove_claimed;
+    o->mic_active = g_sim.mic;
     o->rotation_locked = s_locked;
     o->brightness = s_brightness;
     o->volume = s_volume;
@@ -57,24 +62,38 @@ bool shell_sys_time(struct tm *out)
 
 int shell_sys_apps(shell_app_t *out, int max)
 {
-    int n = (int)(sizeof s_apps / sizeof s_apps[0]);
-    if (n > max) n = max;
+    int n = NAPPS < max ? NAPPS : max;
     memcpy(out, s_apps, (size_t)n * sizeof *out);
     return n;
+}
+
+/* A page titled with the id, holding every widget (sa_sim_fill). */
+static void open_stand_in(const char *id)
+{
+    snprintf(s_cur, sizeof s_cur, "%s", id);
+    if (s_app_scr) lv_obj_delete(s_app_scr);
+    s_app_scr = lv_obj_create(NULL);
+    shell_prepare(s_app_scr, id);
+    shell_changed(id);
+    lv_obj_t *page = md_page_create(s_app_scr, id, NULL, NULL, NULL);
+    sa_sim_fill(md_page_body(page));
+    lv_screen_load_anim(s_app_scr, LV_SCREEN_LOAD_ANIM_FADE_IN, MD_DUR_DIALOG_IN_MS, 0, false);
 }
 
 void shell_sys_launch(const char *id, const char *arg)
 {
     (void)arg;
-    /* A stand-in app screen: a page with the app's name. */
-    snprintf(s_cur, sizeof s_cur, "%s", id);
-    if (s_app_scr) lv_obj_delete(s_app_scr);
-    s_app_scr = lv_obj_create(NULL);
-    shell_prepare(s_app_scr, id);
-    lv_obj_t *page = md_page_create(s_app_scr, id, NULL, NULL, NULL);
-    sa_sim_fill(md_page_body(page));
-    lv_screen_load_anim(s_app_scr, LV_SCREEN_LOAD_ANIM_FADE_IN, MD_DUR_DIALOG_IN_MS, 0, false);
-    shell_changed(id);
+    for (int i = 0; i < NAPPS; i++) {
+        if (!strcmp(s_apps[i].id, id)) {
+            open_stand_in(id);
+            return;
+        }
+    }
+}
+
+void sim_show_widgets(void)
+{
+    open_stand_in(SIM_WIDGETS_PAGE);
 }
 
 bool shell_sys_dismiss_modal(void)
@@ -97,9 +116,9 @@ void shell_sys_current(char *id, size_t n)
     snprintf(id, n, "%s", s_cur);
 }
 
-bool shell_sys_can_remove(const char *id)
+void shell_sys_data_dir(const char *id, char *out, size_t n)
 {
-    return strncmp(id, "com.t5.", 7) != 0;
+    snprintf(out, n, T5_APPDATA_DIR "/%s", id);
 }
 
 void shell_sys_remove(const char *id) { (void)id; }

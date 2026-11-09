@@ -417,7 +417,12 @@ static void release_ws(void *h)
         send_close(ws, 1001, 200);
         nh_release(ws);
     }
-    if (nh_unregister(ws, NH_WS) == T5_OK) ws_free(ws);
+    T5_IGNORE(nh_unregister(ws, NH_WS));
+}
+
+static void destroy_ws(void *h)
+{
+    ws_free(h);
 }
 
 static t5_err_t check_cfg(const t5_ws_cfg_t *c)
@@ -453,7 +458,7 @@ t5_err_t t5_ws_connect(const char *url, const t5_ws_cfg_t *cfg, t5_ws_t **out)
         ws_free(ws);
         return T5_ERR_NO_MEM;
     }
-    t5_err_t e = nh_register(&ws->hdr, NH_WS, release_ws);
+    t5_err_t e = nh_register(&ws->hdr, NH_WS, release_ws, destroy_ws);
     if (e != T5_OK) {
         ws_free(ws);
         return e;
@@ -467,7 +472,7 @@ t5_err_t t5_ws_connect(const char *url, const t5_ws_cfg_t *cfg, t5_ws_t **out)
     if (e == T5_OK) e = handshake(ws, &u, cfg, timeout);
     nh_release(ws);
     if (e != T5_OK) {
-        if (nh_unregister(ws, NH_WS) == T5_OK) ws_free(ws);
+        T5_IGNORE(nh_unregister(ws, NH_WS));     /* or someone else closed it already (app exit) */
         return e;
     }
     *out = ws;
@@ -493,9 +498,7 @@ t5_err_t t5_ws_close(t5_ws_t *ws, uint16_t code)
         xSemaphoreGive(ws->rx);
     }
     nh_release(ws);
-    T5_RETURN_ON_ERR(nh_unregister(ws, NH_WS));
-    ws_free(ws);
-    return T5_OK;
+    return nh_unregister(ws, NH_WS);
 }
 
 /* ---- server side (t5_net/httpd.h) ------------------------------------------------------ */
@@ -516,7 +519,7 @@ t5_err_t ws_adopt_server(t5_sock_t *s, const uint8_t *extra, size_t n, const cha
         ws_free(ws);                    /* ws->s is still NULL: the socket stays the caller's */
         return T5_ERR_NO_MEM;
     }
-    t5_err_t e = nh_register(&ws->hdr, NH_WS, release_ws);
+    t5_err_t e = nh_register(&ws->hdr, NH_WS, release_ws, destroy_ws);
     if (e != T5_OK) {
         ws_free(ws);
         return e;

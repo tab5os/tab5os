@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Display service: panel variant probe, MIPI-DSI bring-up, backlight on G22,
- * panel sleep and wake. The panel is natively 720x1280 portrait, RGB565.
+ * Display service: MIPI-DSI bring-up for the panel t5_bsp_panel_probe() found,
+ * backlight on G22, panel sleep and wake. The panel is natively 720x1280
+ * portrait, RGB565.
  *
  * Three DPI framebuffers (plan 4.2), cleared to black at init. The backlight
  * stays off until t5_display_release_hold(): the UI calls it once its first
@@ -13,31 +14,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "t5_bsp/panel.h"
 #include "t5_core/err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define T5_DISPLAY_W 720
-#define T5_DISPLAY_H 1280
-
-typedef enum {
-    T5_PANEL_UNKNOWN,
-    T5_PANEL_ILI9881C_GT911,   /* first Tab5 batch */
-    T5_PANEL_ST7123,           /* touch firmware version 3 */
-    T5_PANEL_ST7121,           /* touch firmware version 1 */
-} t5_panel_t;
-
-const char *t5_display_panel_name(t5_panel_t p);
-
-/* Pure decision used by the probe (host-tested). st712x_fw < 0 if unread. */
-t5_panel_t t5_display_variant_decide(bool st712x_acks, int st712x_fw, bool gt911_acks);
-
-/* Release the reset lines, probe I2C to identify the panel. Safe to call
- * before t5_display_init(); the touch service uses it too. */
-t5_err_t t5_display_probe(t5_panel_t *out);
-t5_panel_t t5_display_panel(void);
+#define T5_DISPLAY_W T5_PANEL_NATIVE_W
+#define T5_DISPLAY_H T5_PANEL_NATIVE_H
 
 t5_err_t t5_display_init(void);
 bool t5_display_ready(void);
@@ -45,10 +30,15 @@ bool t5_display_ready(void);
  * real has been drawn). */
 t5_err_t t5_display_release_hold(void);
 
-/* 0..100. Kept across sleep. */
+/* 0..100, kept across sleep. 0 is backlight off (a bench measurement); the
+ * person's controls stop at T5_DISPLAY_BRIGHTNESS_MIN, as a black screen
+ * can't be turned back up. */
+#define T5_DISPLAY_BRIGHTNESS_MIN 1
 t5_err_t t5_display_set_brightness(int percent);
 int t5_display_brightness(void);
 /* Diagnostics: change the backlight PWM frequency (default 19531 Hz). */
+#define T5_DISPLAY_BL_HZ_MIN 100
+#define T5_DISPLAY_BL_HZ_MAX 40000
 t5_err_t t5_display_set_backlight_freq(uint32_t hz);
 
 /* Power states (Phase 2). Both keep the DSI video stream running, because the
@@ -57,7 +47,6 @@ t5_err_t t5_display_set_backlight_freq(uint32_t hz);
  *   dim:   cap the backlight at percent without changing the user's
  *          brightness; -1 removes the cap. Used by Dim and low-power mode. */
 t5_err_t t5_display_blank(bool blank);
-bool t5_display_blanked(void);
 t5_err_t t5_display_dim(int percent);
 /* The backlight level actually applied (0 when asleep or blanked). */
 int t5_display_effective_brightness(void);
@@ -81,12 +70,11 @@ t5_err_t t5_display_present(int i, bool cache_sync);
  * (equal when nothing is queued). Updated from the frame-done interrupt. */
 int t5_display_scanout(void);
 int t5_display_queued(void);
-/* Called from the frame-done interrupt (ISR context: keep it short). */
-typedef void (*t5_display_frame_cb_t)(void *arg);
-void t5_display_set_frame_cb(t5_display_frame_cb_t cb, void *arg);
+/* Frames scanned out since init. */
 uint32_t t5_display_frames(void);
-/* After writing to the framebuffer: write back the cache for rows y0..y1-1. */
-t5_err_t t5_display_flush_rows(int y0, int y1);
+/* Wait until a frame has been scanned out with the hold released (the UI's
+ * first frame is on the panel). False on timeout or without a display. */
+bool t5_display_wait_shown(uint32_t timeout_ms);
 
 /* Fill a rectangle and flush it. */
 t5_err_t t5_display_fill_rect(int x, int y, int w, int h, uint16_t rgb565);

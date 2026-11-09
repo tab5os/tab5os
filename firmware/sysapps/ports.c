@@ -178,6 +178,9 @@ typedef struct {
     lv_obj_t *out;
 } scan_t;
 
+/* The external I2C buses; also the app's manifest ports, which opening them needs. */
+static const char *const s_scan_ports[] = { "grove", "ext", NULL };
+
 static void scan_port(lv_event_t *e)
 {
     const char *port = lv_event_get_user_data(e);
@@ -210,10 +213,9 @@ static void open_scan(lv_event_t *e)
     sa_note(body, "Scans an external I2C bus for modules and matches them against the module profiles. Only external "
                   "buses are scanned, never the system bus.");
     lv_obj_t *row = sa_button_row(body);
-    static const char *ports[] = { "grove", "ext" };
-    for (size_t i = 0; i < sizeof ports / sizeof ports[0]; i++) {
-        lv_obj_t *b = md_button_create(row, ports[i], MD_BUTTON_OUTLINED);
-        lv_obj_add_event_cb(b, scan_port, LV_EVENT_CLICKED, (void *)ports[i]);
+    for (size_t i = 0; s_scan_ports[i]; i++) {
+        lv_obj_t *b = md_button_create(row, s_scan_ports[i], MD_BUTTON_OUTLINED);
+        lv_obj_add_event_cb(b, scan_port, LV_EVENT_CLICKED, (void *)s_scan_ports[i]);
     }
     s->out = sa_note(body, "Pick a port.");
     sa_set_refresh(&s_nav, NULL, s, free);
@@ -290,10 +292,11 @@ static void on_destroy(t5_app_t *app)
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };
 
 const t5_builtin_app_t sysapp_ports = {
-    .id = "com.t5.ports",
+    .id = T5_APP_ID_PORTS,
     .name = "Port Inspector",
     .desc = &s_desc,
     .perms = T5_PERM_PORTS | T5_PERM_SYSTEM,
     .orientation = T5_ORIENT_ANY,
+    .ports = s_scan_ports,
     .icon = MD_ICON_CABLE,
 };

@@ -18,10 +18,6 @@ jobs:
     needs: idf-version
     runs-on: ubuntu-latest
     container: espressif/idf:${{ needs.idf-version.outputs.version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        rev: [rev1, rev3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,67 +29,40 @@ jobs:
           have="$(cd "$IDF_PATH" && git describe --tags --exact-match 2>/dev/null || echo unknown)"
           echo "want $want, container has $have"
           [ "$want" = "$have" ]
+      # Every step is a t5 command (tools/t5/t5), the same one a developer runs.
       - name: Build
         shell: bash
-        working-directory: firmware
-        run: |
-          . "$IDF_PATH/export.sh"
-          idf.py -B build-${{ matrix.rev }} -D T5_REV=${{ matrix.rev }} build
-      - name: ABI layouts against the lock (docs/abi-stability.md)
-        if: matrix.rev == 'rev1'
-        shell: bash
-        run: |
-          . "$IDF_PATH/export.sh"
-          python tools/abi/layout.py check firmware/build-${{ matrix.rev }}
-      - name: Build the SDK test apps against this firmware
-        shell: bash
-        run: |
-          . "$IDF_PATH/export.sh"
-          cmake -S test/apps -B test/apps/build-${{ matrix.rev }} -G Ninja -DT5_FIRMWARE_BUILD=$PWD/firmware/build-${{ matrix.rev }}
-          cmake --build test/apps/build-${{ matrix.rev }}
-      - name: Build the example apps against this firmware
-        shell: bash
-        run: |
-          . "$IDF_PATH/export.sh"
-          cmake -S apps/examples -B apps/examples/build-${{ matrix.rev }} -G Ninja -DT5_FIRMWARE_BUILD=$PWD/firmware/build-${{ matrix.rev }}
-          cmake --build apps/examples/build-${{ matrix.rev }}
-      - name: Build the recovery image
-        shell: bash
-        working-directory: recovery
-        run: |
-          . "$IDF_PATH/export.sh"
-          idf.py -B build set-target esp32p4
-          idf.py -B build build
-          size=$(stat -c %s build/tab5recovery.bin)
-          echo "tab5recovery.bin: $size bytes, room $((0x180000 - 0x1000))"
-          [ "$size" -le $((0x180000 - 0x1000)) ]
-      - name: Build device test app
-        shell: bash
-        working-directory: test/device
-        run: |
-          . "$IDF_PATH/export.sh"
-          idf.py -B build-${{ matrix.rev }} -D T5_REV=${{ matrix.rev }} build
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 build
       - name: Image size budget
         shell: bash
-        working-directory: firmware
-        run: |
-          # ota slots are 4 MiB; fail at 90% so there is always headroom for a fix.
-          size=$(stat -c %s build-${{ matrix.rev }}/tab5os.bin)
-          budget=$((4 * 1024 * 1024 * 9 / 10))
-          echo "tab5os.bin: $size bytes, budget $budget"
-          [ "$size" -le "$budget" ]
+        run: tools/t5/t5 size-check
+      - name: ABI struct layouts against the lock (docs/abi-stability.md)
+        shell: bash
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 abi-check
+      - name: Build the SDK test apps against this firmware
+        shell: bash
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 apps
+      - name: Build the example apps against this firmware
+        shell: bash
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 examples
+      - name: Build the recovery image (and check it fits its partition)
+        shell: bash
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 recovery-build
+      - name: Build device test app
+        shell: bash
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 device-build
       - uses: actions/upload-artifact@v4
         with:
-          name: tab5os-${{ matrix.rev }}
+          name: tab5os
           path: |
-            firmware/build-${{ matrix.rev }}/tab5os.bin
-            firmware/build-${{ matrix.rev }}/tab5os.elf
-            firmware/build-${{ matrix.rev }}/bootloader/bootloader.bin
-            firmware/build-${{ matrix.rev }}/partition_table/partition-table.bin
-            firmware/build-${{ matrix.rev }}/ota_data_initial.bin
-            firmware/build-${{ matrix.rev }}/flasher_args.json
+            firmware/build/tab5os.bin
+            firmware/build/tab5os.elf
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+            firmware/build/ota_data_initial.bin
+            firmware/build/flasher_args.json
             recovery/build/tab5recovery.bin
-            test/apps/build-${{ matrix.rev }}/*.t5app
+            test/apps/build/*.t5app
 
   analyze:
     # docs/coding-standard.md, rule 10: GCC's static analyzer on the strict
@@ -105,19 +74,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Firmware with -fanalyzer
+      - name: Firmware and recovery with -fanalyzer
         shell: bash
-        working-directory: firmware
-        run: |
-          . "$IDF_PATH/export.sh"
-          idf.py -B build-analyze -D T5_REV=rev1 -D T5_ANALYZE=ON build
-      - name: Recovery with -fanalyzer
-        shell: bash
-        working-directory: recovery
-        run: |
-          . "$IDF_PATH/export.sh"
-          idf.py -B build-analyze set-target esp32p4
-          idf.py -B build-analyze -D T5_ANALYZE=ON build
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 analyze
 
   c6:
     needs: idf-version
@@ -125,19 +84,9 @@ jobs:
     container: espressif/idf:${{ needs.idf-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build the C6 radio firmware
+      - name: Build the C6 radio firmware (and check it fits c6fw)
         shell: bash
-        working-directory: c6
-        run: |
-          . "$IDF_PATH/export.sh"
-          idf.py -B build set-target esp32c6
-          idf.py -B build build
-      - name: Fits the c6fw partition
-        shell: bash
-        run: |
-          size=$(stat -c %s c6/build/tab5os_c6.bin)
-          echo "tab5os_c6.bin: $size bytes, partition $((0x180000))"
-          [ "$size" -le $((0x180000)) ]
+        run: . "$IDF_PATH/export.sh" && tools/t5/t5 c6-build
       - uses: actions/upload-artifact@v4
         with:
           name: tab5os-c6
@@ -156,16 +105,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: UI density lint (plan 4.3)
-        run: python3 tools/lint_px.py
-      - name: Coding standard lint (docs/coding-standard.md)
-        run: python3 tools/lint_std.py
-      - name: API reference is up to date (plan 8.7)
-        run: |
-          python3 tools/abi/apidoc.py /tmp/api-reference.md
-          diff -u docs/api-reference.md /tmp/api-reference.md
-      - name: ABI symbols against the lock (docs/abi-stability.md)
-        run: python3 tools/abi/abi.py check sdk/abi/api_v1.sym
+      - name: UI density, coding standard, sim LVGL config, ABI symbols, API reference (tools/t5/t5 lint)
+        run: tools/t5/t5 lint
 
   sim:
     runs-on: ubuntu-latest
@@ -173,17 +114,14 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get install -y ninja-build libsdl2-dev
       - name: Build the simulator
-        run: |
-          cmake -S sim -B sim/build -G Ninja
-          cmake --build sim/build
+        run: tools/t5/t5 sim-build
       - name: Screenshots (dark theme, both orientations)
         # Hashes were recorded on macOS/clang; if LVGL's software renderer
         # differs by a pixel on Linux/gcc, re-record them from this job's
-        # artifacts with `t5sim --shots DIR --update sim/golden`.
+        # artifacts with `t5sim --shots DIR --update sim/golden`. Until then
+        # a mismatch here doesn't fail the job.
         continue-on-error: true
-        run: |
-          mkdir -p shots
-          sim/build/t5sim --shots shots --check sim/golden
+        run: tools/t5/t5 sim-shots shots
       - uses: actions/upload-artifact@v4
         if: always()
         with:

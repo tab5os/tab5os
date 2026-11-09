@@ -18,6 +18,7 @@
 #include "multi_heap.h"
 #include "lvgl.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_ui/ui_diag.h"
 
 /* Pool size and the largest request it serves. Bigger requests (image and
  * layer buffers, label text of long documents) go to the system heap,

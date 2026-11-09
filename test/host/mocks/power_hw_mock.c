@@ -5,7 +5,6 @@
 #include "t5_mocks.h"
 #include "power_hw.h"
 #include "battery_hw.h"
-#include "t5_display/t5_display.h"
 
 mock_power_t mock_power;
 
@@ -15,8 +14,6 @@ t5_err_t t5_power_hw_rail_set(t5_rail_t rail, bool on)
     if (mock_power.rail_fail) return T5_ERR_IO;
     mock_power.rail[rail] = on;
     mock_power.rail_writes++;
-    /* As on the device: the backlight rail blanks the display. */
-    if (rail == T5_RAIL_BACKLIGHT && t5_display_ready()) return t5_display_blank(!on);
     return T5_OK;
 }
 void t5_power_hw_cpu_low(bool low) { mock_power.cpu_low = low; }

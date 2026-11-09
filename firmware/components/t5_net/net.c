@@ -2,8 +2,10 @@
  * Network service on the device: C6 power and link (esp_hosted over SDIO),
  * Wi-Fi station, SNTP, link health, sleep integration and C6 updates.
  *
- * One task owns all of it. Public calls and IDF event handlers only queue
- * messages, so no state here is touched from two tasks.
+ * One task owns all of it: public calls and IDF event handlers queue
+ * messages for it. The getters on other tasks read only s_st, s_scan and
+ * s_cfg, which the task changes under s_mtx (and reads without it);
+ * t5_net_sync_time starts SNTP under s_mtx too.
  */
 #include <stdio.h>
 #include <string.h>
@@ -37,11 +39,12 @@
 #include "t5_power/rail.h"
 #include "t5_time/t5_time.h"
 #include "c6img.h"
+#include "net_priv.h"
 
 static const char *TAG = "t5.net";
 
-#define NVS_NS "t5net"
 #define NVS_KEY "cfg"
+#define C6_PART_LABEL "c6fw"           /* partitions.csv */
 #define POWER_SETTLE_MS 100          /* C6 rail up before the link starts */
 #define POWER_OFF_MS 200             /* C6 rail down long enough to reset it */
 #define HEALTH_PERIOD_MS 30000
@@ -50,7 +53,6 @@ static const char *TAG = "t5.net";
 #define START_RETRY_MIN_MS 10000
 #define START_RETRY_MAX_MS (10u * 60 * 1000)
 #define WAKE_CPU_MS 2000             /* CPU held after a C6 wake edge */
-#define C6_UPDATE_WAIT_MS 20000
 #define SUSPEND_WAIT_MS 4000             /* the C6 may be mid-restart */
 #define SUSPEND_BUDGET_MS 1500
 
@@ -72,12 +74,10 @@ typedef struct {
 
 static QueueHandle_t s_q;
 static SemaphoreHandle_t s_done;     /* CMD_SUSPEND completion */
-static t5_mutex_t s_mtx;             /* s_st, s_scan */
+static t5_mutex_t s_mtx;
 static t5_net_status_t s_st;
 static t5_net_ap_t s_scan[T5_NET_MAX_SCAN];
 static int s_nscan;
-
-/* Task-owned state. */
 static t5_netcfg_t s_cfg;
 static t5_netcfg_backoff_t s_backoff;
 static t5_rail_hold_t *s_rail;
@@ -104,8 +104,6 @@ static uint32_t s_next_health, s_next_scan, s_next_start, s_next_connect;
 static uint32_t s_start_backoff = START_RETRY_MIN_MS;
 static int s_health_fails;
 static bool s_inited;
-
-/* ---- small helpers ------------------------------------------------------- */
 
 const char *t5_net_state_name(t5_net_state_t s)
 {
@@ -154,9 +152,28 @@ static t5_err_t send(const msg_t *m)
     return xQueueSend(s_q, m, pdMS_TO_TICKS(100)) == pdTRUE ? T5_OK : T5_ERR_BUSY;
 }
 
-/* ---- saved config (NVS) ---------------------------------------------------
- * Sealed with a key bound to this chip (plan 9.4, t5_storage/secret.h).
- * A plaintext blob from before is read once and saved sealed. */
+/* The saved networks are sealed with a key bound to this chip (plan 9.4,
+ * t5_storage/secret.h). A plaintext blob from before is read once and saved
+ * sealed. */
+
+static esp_err_t nvs_ready(void)
+{
+    static esp_err_t s_nvs = ESP_ERR_INVALID_STATE;
+    if (s_nvs == ESP_OK) return ESP_OK;
+    esp_err_t e = nvs_flash_init();
+    if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        e = nvs_flash_init();
+    }
+    s_nvs = e;
+    return e;
+}
+
+esp_err_t net_nvs_open(nvs_open_mode_t mode, nvs_handle_t *h)
+{
+    esp_err_t e = nvs_ready();
+    return e == ESP_OK ? nvs_open(NET_NVS_NS, mode, h) : e;
+}
 
 static void cfg_save(void);
 
@@ -164,7 +181,7 @@ static void cfg_load(void)
 {
     nvs_handle_t h;
     t5_netcfg_init(&s_cfg);
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    if (net_nvs_open(NVS_READONLY, &h) != ESP_OK) return;
     size_t len = 0;
     uint8_t *blob = NULL;
     if (nvs_get_blob(h, NVS_KEY, NULL, &len) == ESP_OK && len) blob = malloc(len);
@@ -204,15 +221,13 @@ static void cfg_save(void)
         return;
     }
     nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+    if (net_nvs_open(NVS_READWRITE, &h) == ESP_OK) {
         if (nvs_set_blob(h, NVS_KEY, sealed, n) == ESP_OK) nvs_commit(h);
         nvs_close(h);
     }
     memset(sealed, 0, cap);
     free(sealed);
 }
-
-/* ---- IDF event plumbing --------------------------------------------------- */
 
 static void on_idf_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -267,8 +282,6 @@ static void on_sntp(struct timeval *tv)
     msg_t m = { .type = EV_SNTP, .arg = (int32_t)tv->tv_sec };
     xQueueSend(s_q, &m, 0);
 }
-
-/* ---- link up / down ------------------------------------------------------- */
 
 static void fwversion(void)
 {
@@ -335,7 +348,7 @@ static t5_err_t power_up(void)
     set_state(T5_NET_STARTING);
     s_t_power_on = t5_time_ms();
     if (!s_rail) {
-        T5_RETURN_ON_ERR(t5_rail_acquire(T5_RAIL_WLAN, "net", T5_RAIL_KEEP_IN_SLEEP, &s_rail));
+        T5_RETURN_ON_ERR(t5_rail_acquire_system(T5_RAIL_WLAN, "net", T5_RAIL_KEEP_IN_SLEEP, &s_rail));
         t5_delay_ms(POWER_SETTLE_MS);
     }
     if (!s_hosted_up) {
@@ -395,15 +408,10 @@ static void reset_c6(const char *why)
     t5_mutex_lock(s_mtx);
     s_st.c6_resets++;
     t5_mutex_unlock(s_mtx);
-    char keep[T5_NET_SSID_LEN];
-    strcpy(keep, s_st.ssid);
     power_down();
     t5_delay_ms(POWER_OFF_MS);
     start();
-    (void)keep;   /* auto-connect picks the saved network again */
 }
-
-/* ---- connecting ------------------------------------------------------------ */
 
 static void do_connect_hint(const char *ssid, const char *pass, uint8_t channel, const uint8_t *bssid)
 {
@@ -497,6 +505,23 @@ static void on_scan_done(void)
     if (s_scan_for_auto) auto_pick();
 }
 
+/* Start SNTP; if it runs already and again is set, ask now. */
+static t5_err_t sntp_request(bool again)
+{
+    esp_err_t e = ESP_OK;
+    t5_mutex_lock(s_mtx);
+    if (!s_sntp_started) {
+        esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+        sc.sync_cb = on_sntp;
+        e = esp_netif_sntp_init(&sc);
+        s_sntp_started = e == ESP_OK;
+    } else if (again) {
+        e = esp_netif_sntp_start();     /* restarts: asks again now */
+    }
+    t5_mutex_unlock(s_mtx);
+    return e == ESP_OK ? T5_OK : T5_ERR_IO;
+}
+
 static void on_got_ip(const msg_t *m)
 {
     s_got_ip = true;
@@ -521,20 +546,15 @@ static void on_got_ip(const msg_t *m)
     scpy(s_last_ssid, sizeof s_last_ssid, s_st.ssid, sizeof s_st.ssid);
     memcpy(s_last_bssid, ap.bssid, 6);
     s_last_channel = ap.primary;
-    if (s_pending_save) {
-        t5_netcfg_add(&s_cfg, s_st.ssid, s_pending_pass);
-        s_pending_save = false;
-    }
-    if (t5_netcfg_find(&s_cfg, s_st.ssid) >= 0) {
-        t5_netcfg_mark_ok(&s_cfg, s_st.ssid);
-        cfg_save();
-    }
+    t5_mutex_lock(s_mtx);
+    if (s_pending_save) t5_netcfg_add(&s_cfg, s_st.ssid, s_pending_pass);
+    bool saved = t5_netcfg_find(&s_cfg, s_st.ssid) >= 0;
+    if (saved) t5_netcfg_mark_ok(&s_cfg, s_st.ssid);
+    t5_mutex_unlock(s_mtx);
+    s_pending_save = false;
+    if (saved) cfg_save();
     memset(s_pending_pass, 0, sizeof s_pending_pass);
-    if (!s_sntp_started) {
-        esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-        sc.sync_cb = on_sntp;
-        if (esp_netif_sntp_init(&sc) == ESP_OK) s_sntp_started = true;
-    }
+    T5_IGNORE(sntp_request(false));     /* NTP is retried on the next address */
     post_ev(T5_EV_NET_GOT_IP, T5_OK);
 }
 
@@ -581,8 +601,6 @@ static void on_disconnected(int reason)
     }
 }
 
-/* ---- C6 update -------------------------------------------------------------- */
-
 static t5_err_t part_read(void *ctx, uint32_t off, void *buf, uint32_t len)
 {
     return esp_partition_read((const esp_partition_t *)ctx, off, buf, len) == ESP_OK ? T5_OK : T5_ERR_IO;
@@ -590,7 +608,7 @@ static t5_err_t part_read(void *ctx, uint32_t off, void *buf, uint32_t len)
 
 static const esp_partition_t *c6_part(void)
 {
-    return esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "c6fw");
+    return esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, C6_PART_LABEL);
 }
 
 static void read_image_version(void)
@@ -648,9 +666,7 @@ static t5_err_t c6_update(bool force)
     /* Reboot the C6 into the new image and check it came back with it. If it
      * doesn't, a second power cycle lets the C6 bootloader roll back. */
     for (int attempt = 0; attempt < 2; attempt++) {
-        reset_c6(attempt ? "rollback check" : "apply update");
-        uint32_t t0 = t5_time_ms();
-        while (!s_hosted_up && t5_time_ms() - t0 < C6_UPDATE_WAIT_MS) t5_delay_ms(200);
+        reset_c6(attempt ? "rollback check" : "apply update");      /* the link is up, or not, when it returns */
         char now[32] = "";
         if (s_hosted_up && running_version(now, sizeof now)) {
             if (!strcmp(now, info.version)) {
@@ -664,8 +680,6 @@ static t5_err_t c6_update(bool force)
     T5_LOGE(TAG, "C6 did not come back after the update");
     return T5_ERR_TIMEOUT;
 }
-
-/* ---- sleep ------------------------------------------------------------------ */
 
 static void suspend(void)
 {
@@ -718,20 +732,22 @@ static t5_err_t hook_resume(void *arg)
     return send(&m);   /* reconnecting happens in the background */
 }
 
-/* ---- the task --------------------------------------------------------------- */
-
 static void handle(const msg_t *m)
 {
     switch (m->type) {
     case CMD_START:
         if (s_cfg.flags & T5_NETCFG_FLAG_DISABLED) {
+            t5_mutex_lock(s_mtx);
             s_cfg.flags &= ~T5_NETCFG_FLAG_DISABLED;
+            t5_mutex_unlock(s_mtx);
             cfg_save();
         }
         if (s_st.state == T5_NET_OFF || s_st.state == T5_NET_FAILED) start();
         break;
     case CMD_STOP:
+        t5_mutex_lock(s_mtx);
         s_cfg.flags |= T5_NETCFG_FLAG_DISABLED;
+        t5_mutex_unlock(s_mtx);
         cfg_save();
         s_next_start = 0;
         power_down();
@@ -754,14 +770,18 @@ static void handle(const msg_t *m)
             esp_wifi_disconnect();
         }
         break;
-    case CMD_FORGET:
-        if (t5_netcfg_remove(&s_cfg, m->ssid)) cfg_save();
+    case CMD_FORGET: {
+        t5_mutex_lock(s_mtx);
+        bool removed = t5_netcfg_remove(&s_cfg, m->ssid);
+        t5_mutex_unlock(s_mtx);
+        if (removed) cfg_save();
         if (!strcmp(s_last_ssid, m->ssid)) s_last_ssid[0] = 0;
         if (!strcmp(s_st.ssid, m->ssid) && s_wifi_up) {
             s_target[0] = 0;
             esp_wifi_disconnect();
         }
         break;
+    }
     case CMD_RESET:
         reset_c6("requested");
         break;
@@ -780,7 +800,9 @@ static void handle(const msg_t *m)
     }
     case CMD_ANTENNA:
         t5_xpin_output(T5_XP_RF_ANT_SEL, m->arg == T5_ANT_EXTERNAL);
+        t5_mutex_lock(s_mtx);
         s_cfg.antenna = (uint8_t)m->arg;
+        t5_mutex_unlock(s_mtx);
         cfg_save();
         break;
     case CMD_BLE:
@@ -819,9 +841,11 @@ static void handle(const msg_t *m)
         post_ev(T5_EV_NET_WAKE, T5_OK);
         break;
     case EV_SNTP:
-        if (t5_time_set((time_t)m->arg, T5_TIME_SRC_NTP) == T5_OK || t5_time_source() == T5_TIME_SRC_NTP) {
+        if (t5_time_set((time_t)m->arg, T5_TIME_SRC_NTP) == T5_OK) {
             if (!s_st.sntp_synced) T5_LOGI(TAG, "time from NTP");
+            t5_mutex_lock(s_mtx);
             s_st.sntp_synced = true;
+            t5_mutex_unlock(s_mtx);
         }
         break;
     }
@@ -856,7 +880,11 @@ static void timers(void)
         }
         if (s_got_ip) {
             wifi_ap_record_t ap;
-            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) s_st.rssi = ap.rssi;
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                t5_mutex_lock(s_mtx);
+                s_st.rssi = ap.rssi;
+                t5_mutex_unlock(s_mtx);
+            }
         }
     }
 }
@@ -872,24 +900,20 @@ static void net_task(void *arg)
     }
 }
 
-/* ---- public API -------------------------------------------------------------- */
-
 t5_err_t t5_net_init(void)
 {
     if (s_inited) return T5_OK;
-    esp_err_t e = nvs_flash_init();
-    if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        e = nvs_flash_init();
-    }
+    esp_err_t e = nvs_ready();
     if (e != ESP_OK) T5_LOGE(TAG, "nvs: %s", esp_err_to_name(e));
     s_mtx = t5_mutex_create();
     s_q = xQueueCreate(16, sizeof(msg_t));
     s_done = xSemaphoreCreateBinary();
     if (!s_mtx || !s_q || !s_done) return T5_ERR_NO_MEM;
+    t5_mutex_lock(s_mtx);
     cfg_load();
-    t5_xpin_output(T5_XP_RF_ANT_SEL, s_cfg.antenna == T5_ANT_EXTERNAL);
     s_st.enabled = !(s_cfg.flags & T5_NETCFG_FLAG_DISABLED);
+    t5_mutex_unlock(s_mtx);
+    t5_xpin_output(T5_XP_RF_ANT_SEL, s_cfg.antenna == T5_ANT_EXTERNAL);
     read_image_version();
 
     if (esp_netif_init() != ESP_OK) return T5_ERR_FAIL;
@@ -981,22 +1005,22 @@ t5_err_t t5_net_forget(const char *ssid)
 
 int t5_net_saved_list(char (*ssids)[T5_NET_SSID_LEN], int max)
 {
-    int n = s_cfg.n < max ? s_cfg.n : max;
+    if (!s_mtx) return 0;
+    t5_mutex_lock(s_mtx);
+    int total = s_cfg.n;
+    int n = total < max ? total : max;
     for (int i = 0; ssids && i < n; i++) memcpy(ssids[i], s_cfg.e[i].ssid, T5_NET_SSID_LEN);
-    return s_cfg.n;
+    t5_mutex_unlock(s_mtx);
+    return total;
 }
 
 t5_err_t t5_net_sync_time(void)
 {
-    if (!s_got_ip) return T5_ERR_STATE;
-    if (!s_sntp_started) {
-        esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-        sc.sync_cb = on_sntp;
-        if (esp_netif_sntp_init(&sc) != ESP_OK) return T5_ERR_IO;
-        s_sntp_started = true;
-        return T5_OK;
-    }
-    return esp_netif_sntp_start() == ESP_OK ? T5_OK : T5_ERR_IO;   /* restarts: asks again now */
+    if (!s_mtx) return T5_ERR_STATE;
+    t5_mutex_lock(s_mtx);
+    bool up = s_st.state == T5_NET_CONNECTED;
+    t5_mutex_unlock(s_mtx);
+    return up ? sntp_request(true) : T5_ERR_STATE;
 }
 
 t5_err_t t5_net_c6_reset(void)
@@ -1011,7 +1035,7 @@ t5_err_t t5_net_c6_update(bool force)
     return send(&m);
 }
 
-void t5_net_ble_changed(void)
+void net_ble_changed(void)
 {
     msg_t m = { .type = CMD_BLE };
     send(&m);
@@ -1026,5 +1050,9 @@ t5_err_t t5_radio_antenna_set(t5_antenna_t ant)
 
 t5_antenna_t t5_radio_antenna(void)
 {
-    return s_cfg.antenna == T5_ANT_EXTERNAL ? T5_ANT_EXTERNAL : T5_ANT_INTERNAL;
+    if (!s_mtx) return T5_ANT_INTERNAL;
+    t5_mutex_lock(s_mtx);
+    bool ext = s_cfg.antenna == T5_ANT_EXTERNAL;
+    t5_mutex_unlock(s_mtx);
+    return ext ? T5_ANT_EXTERNAL : T5_ANT_INTERNAL;
 }

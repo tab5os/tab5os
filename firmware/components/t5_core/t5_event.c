@@ -1,9 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Subscriber table and dispatch. Shared by the device loop and host tests.
+ * Posting, the subscriber table and dispatch. Shared by the device loop and
+ * host tests.
  */
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 #include "t5_core/event.h"
+#include "t5_core/event_test.h"
 #include "t5_core/os.h"
 #include "t5_event_priv.h"
 
@@ -20,10 +23,7 @@ static t5_mutex_t s_lock;
 
 t5_err_t t5_event_table_init(void)
 {
-    if (!s_lock) {
-        s_lock = t5_mutex_create();
-    }
-    return s_lock ? T5_OK : T5_ERR_NO_MEM;
+    return t5_mutex_once(&s_lock) ? T5_OK : T5_ERR_NO_MEM;
 }
 
 t5_err_t t5_event_subscribe(t5_event_id_t id, t5_event_handler_t fn, void *arg)
@@ -60,8 +60,23 @@ t5_err_t t5_event_unsubscribe(t5_event_id_t id, t5_event_handler_t fn, void *arg
     return err;
 }
 
-void t5_event_dispatch(t5_event_id_t id, const void *data, size_t len)
+t5_err_t t5_event_post(t5_event_id_t id, const void *data, size_t len)
 {
+    if (len > T5_EVENT_MAX_DATA) {
+        return T5_ERR_INVALID_ARG;
+    }
+    if (!data) {
+        return t5_event_loop_post(id, NULL);
+    }
+    t5_event_msg_t m = { .len = (uint32_t)len };
+    memcpy(m.data, data, len);
+    return t5_event_loop_post(id, &m);
+}
+
+void t5_event_deliver(t5_event_id_t id, const t5_event_msg_t *msg)
+{
+    const void *data = msg ? msg->data : NULL;
+    size_t len = msg ? msg->len : 0;
     sub_t hits[MAX_SUBS];
     int n = 0;
     if (t5_event_table_init() != T5_OK) {
@@ -74,7 +89,7 @@ void t5_event_dispatch(t5_event_id_t id, const void *data, size_t len)
         }
     }
     t5_mutex_unlock(s_lock);
-    /* Handlers run without the lock so they may (un)subscribe or post. */
+    /* Without the lock, so handlers may (un)subscribe or post. */
     for (int i = 0; i < n; i++) {
         hits[i].fn(id, data, len, hits[i].arg);
     }

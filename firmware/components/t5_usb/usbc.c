@@ -4,7 +4,8 @@
  *   1. unmount /sd and borrow the raw card (t5_storage_sd_lend)
  *   2. start TinyUSB MSC on the full-speed OTG controller
  *   3. swap the PHYs, so OTG takes PHY 0 (the USB-C pins) and USJ moves to
- *      PHY 1, with its pads off (PHY 1's pads are I2S pins on the Tab5)
+ *      PHY 1, with its pads off (PHY 1's pads are I2S pins on the Tab5, so
+ *      audio is held off them meanwhile: t5_audio/hold.h)
  * Leaving reverses it: when the computer ejects the card, on request
  * (Settings), or after an optional timeout. /data is never exposed.
  */
@@ -18,6 +19,7 @@
 #include "soc/lp_system_struct.h"
 #include "soc/usb_serial_jtag_struct.h"
 #include "soc/usb_wrap_struct.h"
+#include "t5_audio/hold.h"
 #include "t5_core/event.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
@@ -26,6 +28,7 @@
 #include "tinyusb_default_config.h"
 #include "tinyusb_msc.h"
 #include "tusb.h"
+#include "t5_usb/usb_diag.h"
 #include "usb_priv.h"
 
 static const char *TAG = "t5.usbc";
@@ -44,8 +47,6 @@ static void phy_log(const char *when)
             (unsigned)LP_SYS.usb_ctrl.sw_usb_phy_sel, (unsigned)USB_SERIAL_JTAG.conf0.usb_pad_enable,
             (unsigned)usb_wrap_ll_phy_is_pad_enabled(&USB_WRAP));
 }
-
-static void phy_log(const char *when);
 
 /* The log lines here are load-bearing: without a console write right after
  * USB-Serial/JTAG gets its PHY back, its console never answers again (seen
@@ -68,6 +69,15 @@ static void phy_to_otg(bool otg)
 static t5_err_t storage_on(void)
 {
     T5_RETURN_ON_ERR(t5_storage_sd_lend(&s_card));
+    t5_err_t he = t5_audio_hold_pins(true);
+    if (he != T5_OK) {
+        /* Audio still drives PHY 1's pads: swapping now would fight it. */
+        T5_LOGE(TAG, "audio didn't let go of the I2S pins: %s", t5_err_str(he));
+        T5_IGNORE(t5_audio_hold_pins(false));
+        t5_storage_sd_reclaim(s_card);
+        s_card = NULL;
+        return T5_ERR_BUSY;
+    }
     /* App-side mounting on: it is how an eject is reported (msc_event). */
     const tinyusb_msc_driver_config_t dc = { .callback = msc_event, .callback_arg = NULL };
     tinyusb_msc_storage_config_t sc = { .medium = { .card = s_card }, .mount_point = TINYUSB_MSC_STORAGE_MOUNT_USB };
@@ -91,6 +101,7 @@ static t5_err_t storage_on(void)
         s_store = NULL;
         tinyusb_msc_uninstall_driver();
         phy_to_otg(false);
+        T5_IGNORE(t5_audio_hold_pins(false));    /* releasing doesn't wait */
         t5_storage_sd_reclaim(s_card);
         s_card = NULL;
         return T5_ERR_IO;
@@ -98,8 +109,6 @@ static t5_err_t storage_on(void)
     return T5_OK;
 }
 
-
-/* Where a hand-back got to, kept across a reset (`usbc trace`). */
 RTC_NOINIT_ATTR static uint32_t s_trace;
 
 uint32_t t5_usbc_trace(void)
@@ -113,6 +122,7 @@ static void storage_off(void)
     tinyusb_driver_uninstall();
     s_trace = 0x7B000002;
     phy_to_otg(false);
+    T5_IGNORE(t5_audio_hold_pins(false));        /* releasing doesn't wait */
     s_trace = 0x7B000003;
     if (s_store) tinyusb_msc_delete_storage(s_store);
     s_trace = 0x7B000004;

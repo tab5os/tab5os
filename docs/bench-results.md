@@ -163,7 +163,7 @@ Measured with `sleep light <ms> <MB> [g<pin>...]`: fill PSRAM with a pattern, en
 | 30 s, G23 armed, person touching during sleep (first attempt) | **Board hung**, screen dark, USB dead; needed a button press. Cause: `gpio_wakeup_enable()` turns G23's interrupt into a level one, and the touch service's ISR then fired non-stop while the finger was down. Fixed: mask the pin's ISR during sleep, restore its falling-edge interrupt afterwards |
 | 30 s, G23 armed, person touching (after the fix) | Survived, but **woke by timer, not touch**. Screen held grey; queued touches drew once video resumed. Touch works normally afterwards |
 
-**Answer:** light sleep keeps PSRAM and the DSI panel on this revision, and wakes cleanly from the timer. Two board rules: G35 must keep its pad config through sleep (`t5_bsp_board_init()` does this), and a pin with a live ISR must have it masked while armed as a wake source.
+**Answer:** light sleep keeps PSRAM and the DSI panel on this revision, and wakes cleanly from the timer. Two board rules: G35 must keep its pad config through sleep (`t5_bsp_board_init()` does this) [now `t5_bsp_bringup()`], and a pin with a live ISR must have it masked while armed as a wake source.
 
 **Touch can't wake the board from light sleep.** The ST7123 scans touch during display blanking (see the display findings), and the video stream stops in light sleep, so the touch interrupt never fires. The button can't serve as a gentle wake either (0.6). **Phase 2 decision (plan's decision rule):** the Sleep state becomes "screen off, video stream kept alive, CPU idling at low clock". Deep standby is soft off, which wakes with a reboot and a session restore.
 
@@ -342,7 +342,7 @@ What changed:
 - **The bands are in internal RAM**: two 20-line bands, one 100 KB block. CPU writes there don't pull PSRAM lines into the cache before writing, need no cache write-back, and the PPA reads them off the PSRAM bus. This is the main gain (37 to 55 fps). tab5emu found the same for its blit: about 100 MB/s for cached PSRAM writes.
 - **Espressif's PPA hang fix** (`firmware/components/esp_driver_ppa`, an override of IDF's driver; see its README.t5.md). LVGL's PPA fills now run beside the band copies (30 to 37 fps). The CPU-fill workaround is gone.
 - Code and fonts run from PSRAM (`CONFIG_SPIRAM_XIP_FROM_PSRAM`, +3 fps).
-- The H.264 encoder's 92 KB boot reservation is gone. The encoder borrows the band block while recording: `t5_ui` wraps `esp_h264_aligned_calloc` to hand it out and `heap_caps_free` to take it back. Meanwhile the UI draws in 40-line PSRAM bands.
+- The H.264 encoder's 92 KB boot reservation is gone. The encoder borrows the band block while recording: `t5_ui` wraps `esp_h264_aligned_calloc` to hand it out and `heap_caps_free` to take it back. [The wrap is now in `t5_camera/h264_ram.c`.] Meanwhile the UI draws in 40-line PSRAM bands.
 
 | Check | Result |
 | --- | --- |
@@ -395,7 +395,7 @@ These fps figures include the gate's idle time between animations. At 64 Hz, the
 ### Kept
 
 - **LVGL's own internal-RAM pool** (`t5_ui/lv_mem_t5.c`, `LV_USE_CUSTOM_MALLOC`). Requests up to 4 KB come from an 88 KB pool in L2MEM. It shrinks in 8 KB steps if there isn't room, down to 32 KB. Everything else goes to PSRAM, never plain malloc. `ui mem` shows where allocations landed; `ui mem check` checks the pool's integrity.
-- **Software fills** instead of the PPA for LVGL fills (`T5_UI_PPA_FILLS false`; `ui ppafill on|off`). Scroll render max fell from 17 to 14 ms and the transition frame from 100 to 83 ms. PPA image blits stay on (`ui ppaimg`).
+- **Software fills** instead of the PPA for LVGL fills (`T5_UI_PPA_FILLS false`; `ui ppafill on|off`) [now the `s_ppa_fills` default in `t5_ui/ui.c`]. Scroll render max fell from 17 to 14 ms and the transition frame from 100 to 83 ms. PPA image blits stay on (`ui ppaimg`).
 - **Snapshot transitions** (`md/md_freeze.c`). The linker wraps `lv_screen_load_anim`, so apps get it too. Both screens are rendered once into RGB565 PSRAM snapshots and hidden. The display's bottom layer then draws the snapshots where LVGL's animation puts the screens. The top and sys layers stay live. If another screen load interrupts, the snapshots are dropped. `ui freeze [on|off|<mask>]` switches this and reports stats.
 - **Cold static buffers in PSRAM** (`CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`, `EXT_RAM_BSS_ATTR`). This moved 38 KB: the dmesg ring (16 KB), the scratch buffers for the `fs`, `audio` and `i2c` test commands, and the loaded port profiles. That room let the pool grow from 72 to 88 KB; it no longer overflows during the gates.
 - **Camera close/reopen fix** (found by the stress pass, below).
@@ -617,7 +617,7 @@ Seen and not explained: `net reset` while the device was in Sleep left the radio
 | Item | Needs | Status |
 | --- | --- | --- |
 | 0.5 confirm `PWROFF_PLUSE` cuts power | Battery only, a person | Soft off is implemented (`power off --force`, M5Unified's 10 × 50 ms toggle). Not yet run on battery |
-| 0.9 power per state | External meter | `test/hil/power_cycle.py --meter-pause`; not measured |
+| 0.9 power per state | External meter | `t5 hil power_cycle --meter-pause`; not measured |
 | Charge mode, bench checks 7 and 8 | USB attached, a person | Implemented (deep sleep with a 60 s timer check); not yet run |
 | `CHG_STAT` polarity | Battery only | Reads 1 on USB with a full pack. `bat` counts its level against current direction; the gauge doesn't use it yet |
 | USB-power detection on battery | Battery only | Assumed from battery current (under 50 mA means USB). Confirm the running draw on battery is well above that |
@@ -639,9 +639,9 @@ Seen and not explained: `net reset` while the device was in Sleep left the radio
 | `HP_DET` polarity | Headphones in the jack | Assumed high with a plug in |
 | Camera preview frame rate | Phase 4 pipeline work | 11 fps; see Phases 6 and 7 |
 | Phase 8: Python app with a real Grove I2C sensor | A sensor on Grove | Code path runs (scan returns nothing with no device); read a real register next time one is plugged in |
-| Phase 9 exit: power pulled during an update | A person or a relay | Resets during the install pass (`ota_cycles.py --mix interrupt`); a real power cut is `--mode powercut` (RTC trick; may need the power button) |
-| Phase 9: 1,000 OTA cycles with forced failures | Unattended board time (~3 days) | `test/hil/ota_cycles.py --cycles 1000 --mix ok,crash,interrupt` |
-| Phase 9: 7-day soak | Unattended week | `test/hil/soak.py --hours 168` |
+| Phase 9 exit: power pulled during an update | A person or a relay | Resets during the install pass (`t5 hil ota_cycles --mix interrupt`); a real power cut is `--mode powercut` (RTC trick; may need the power button) |
+| Phase 9: 1,000 OTA cycles with forced failures | Unattended board time (~3 days) | `t5 hil ota_cycles --cycles 1000 --mix ok,crash,interrupt` |
+| Phase 9: 7-day soak | Unattended week | `t5 hil soak --hours 168` |
 | Phase 9 exit: the logger for a week on one charge, draw measured | Battery, a sensor, a meter | The background wake arms the RTC, which can leave the board off until the power button; start it with someone nearby |
 | Recovery "Reinstall from SD" and the SD `RECOVERY` flag | Writing to the SD card from a computer | macOS refused this session access to removable volumes; put a `.t5os` and a `RECOVERY` file on the card by hand |
 | USB fallback for large files | Board time | 3.4 MB stalled once at ~3 MB over the console; apps are fine |

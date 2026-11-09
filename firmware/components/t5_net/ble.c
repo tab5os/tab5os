@@ -19,15 +19,18 @@
 #include "t5_net/ble.h"
 #include "t5_net/net.h"
 #include "t5_power/power.h"
+#include "net_priv.h"
 
 static const char *TAG = "t5.ble";
 
 #define OP_TIMEOUT_MS 10000
+#define SYNC_WAIT_MS 3000
 
 static bool s_enabled;          /* the user wants BLE */
 static bool s_link;             /* the C6 link is up */
 static volatile bool s_running; /* stack started */
 static volatile bool s_synced;  /* host and controller in sync */
+static SemaphoreHandle_t s_sync; /* given by on_sync */
 static uint8_t s_own_addr_type;
 static volatile uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static t5_wakelock_t *s_lock;
@@ -94,7 +97,7 @@ static int gap_event(struct ble_gap_event *e, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         if (e->connect.status == 0) {
             s_conn = e->connect.conn_handle;
-            if (!s_lock) s_lock = t5_wakelock_acquire(T5_LOCK_NET, "ble");
+            if (!s_lock) s_lock = t5_wakelock_acquire_system(T5_LOCK_NET, "ble");
             T5_LOGI(TAG, "connected (handle %u)", s_conn);
             post(T5_EV_BLE_CONNECTED, T5_OK);
         } else {
@@ -130,6 +133,7 @@ static void on_sync(void)
 {
     if (ble_hs_id_infer_auto(0, &s_own_addr_type) == 0) {
         s_synced = true;
+        xSemaphoreGive(s_sync);
         T5_LOGI(TAG, "ready");
         post(T5_EV_BLE_READY, T5_OK);
     }
@@ -138,6 +142,7 @@ static void on_sync(void)
 static void on_reset(int reason)
 {
     s_synced = false;
+    xSemaphoreTake(s_sync, 0);
     T5_LOGW(TAG, "host reset: %d", reason);
 }
 
@@ -168,6 +173,7 @@ static void stack_start(void)
     }
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
+    xSemaphoreTake(s_sync, 0);
     s_running = true;
     nimble_port_freertos_init(host_task);
 }
@@ -179,7 +185,7 @@ static void stack_stop(void)
      * frees timers that the sync then uses (seen as a crash in
      * ble_hs_timer_sched when Sleep powered the C6 off right after boot).
      * Let the start finish first. */
-    for (int i = 0; i < 30 && !s_synced; i++) t5_delay_ms(100);
+    if (!s_synced) xSemaphoreTake(s_sync, pdMS_TO_TICKS(SYNC_WAIT_MS));
     if (s_conn != BLE_HS_CONN_HANDLE_NONE) {
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         post(T5_EV_BLE_DISCONNECTED, -1);
@@ -195,20 +201,30 @@ static void stack_stop(void)
     s_synced = false;
 }
 
+/* From the net task (t5_ble_on_link) and any caller of t5_ble_enable. */
 static void ensure_init(void)
 {
-    if (!s_mtx) {
+    static t5_mutex_t s_init_mx;
+    static bool s_inited;
+    if (__atomic_load_n(&s_inited, __ATOMIC_ACQUIRE)) return;
+    t5_mutex_t m = t5_mutex_once(&s_init_mx);
+    if (!m) return;
+    t5_mutex_lock(m);
+    if (!s_inited) {
         s_mtx = t5_mutex_create();
         s_op_done = xSemaphoreCreateBinary();
         s_op_lock = xSemaphoreCreateMutex();
+        s_sync = xSemaphoreCreateBinary();
         nvs_handle_t h;
         uint8_t v = 0;
-        if (nvs_open("t5net", NVS_READONLY, &h) == ESP_OK) {
+        if (net_nvs_open(NVS_READONLY, &h) == ESP_OK) {
             nvs_get_u8(h, "ble", &v);
             nvs_close(h);
         }
         s_enabled = v;
+        __atomic_store_n(&s_inited, true, __ATOMIC_RELEASE);
     }
+    t5_mutex_unlock(m);
 }
 
 void t5_ble_on_link(bool up)
@@ -224,13 +240,13 @@ t5_err_t t5_ble_enable(bool on)
     ensure_init();
     s_enabled = on;
     nvs_handle_t h;
-    if (nvs_open("t5net", NVS_READWRITE, &h) == ESP_OK) {
+    if (net_nvs_open(NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_u8(h, "ble", on);
         nvs_commit(h);
         nvs_close(h);
     }
     /* The stack starts and stops on the net task, which owns the C6. */
-    t5_net_ble_changed();
+    net_ble_changed();
     return on && !s_link ? T5_ERR_STATE : T5_OK;   /* starts when the C6 is up */
 }
 

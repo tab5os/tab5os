@@ -1,5 +1,6 @@
+include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS "rtc.c" "t5_time.c" "t5_time_hw.c" "tz.c"
+    SRCS ${T5_TIME_PORTABLE_SRCS} "t5_time_hw.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core

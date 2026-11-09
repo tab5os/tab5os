@@ -4,8 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "unity.h"
-#include "t5_mocks.h"
 #include "t5_net/ble.h"
+#include "t5_bootfmt/espimg.h"
 #include "t5_net/netcfg.h"
 #include "c6img.h"
 #include "netproto.h"
@@ -65,14 +65,18 @@ static void test_valid_rejects_garbage(void)
 static void test_backoff(void)
 {
     TEST_ASSERT_EQUAL(0, t5_netcfg_backoff_ms(0));
-    TEST_ASSERT_EQUAL(5000, t5_netcfg_backoff_ms(1));
-    TEST_ASSERT_EQUAL(10000, t5_netcfg_backoff_ms(2));
+    TEST_ASSERT_EQUAL(T5_NETCFG_BACKOFF_MIN_MS, t5_netcfg_backoff_ms(1));
+    for (uint8_t f = 1; f < 20; f++) {
+        uint32_t a = t5_netcfg_backoff_ms(f), b = t5_netcfg_backoff_ms((uint8_t)(f + 1));
+        TEST_ASSERT_TRUE(b > a || b == T5_NETCFG_BACKOFF_MAX_MS);
+        TEST_ASSERT_TRUE(b <= T5_NETCFG_BACKOFF_MAX_MS);
+    }
     TEST_ASSERT_EQUAL(T5_NETCFG_BACKOFF_MAX_MS, t5_netcfg_backoff_ms(20));
     t5_netcfg_backoff_t b = {0};
     TEST_ASSERT_EQUAL(100, t5_netcfg_next_retry(&b, 100));
     t5_netcfg_fail(&b, "home", 1000);
     t5_netcfg_fail(&b, "home", 1000);
-    TEST_ASSERT_EQUAL(11000, t5_netcfg_next_retry(&b, 1000));
+    TEST_ASSERT_EQUAL(1000 + t5_netcfg_backoff_ms(2), t5_netcfg_next_retry(&b, 1000));
     t5_netcfg_clear_fail(&b, "home");
     TEST_ASSERT_EQUAL(1000, t5_netcfg_next_retry(&b, 1000));
 }
@@ -117,23 +121,26 @@ static t5_err_t rd(void *ctx, uint32_t off, void *buf, uint32_t len)
 
 static void put32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 
+#define SEG0_LEN 300
+#define SEG1_LEN 100
+#define SEG1_OFF (T5_IMG_DESC_OFF + SEG0_LEN)
+
 static void make_image(const char *ver, bool hash)
 {
     memset(s_img, 0xFF, sizeof s_img);
-    s_img[0] = 0xE9;
-    s_img[1] = 2;                 /* segments */
-    s_img[12] = 13;               /* chip id: C6 */
-    s_img[13] = 0;
-    s_img[23] = hash ? 1 : 0;
-    /* segment 0: 300 bytes with the app descriptor first */
-    put32(s_img + 24, 0x42000020);
-    put32(s_img + 28, 300);
-    put32(s_img + 32, 0xABCD5432);
-    memset(s_img + 48, 0, 32);
-    memcpy(s_img + 48, ver, strlen(ver));
-    /* segment 1: 100 bytes */
-    put32(s_img + 32 + 300, 0x40800000);
-    put32(s_img + 36 + 300, 100);
+    s_img[0] = T5_IMG_MAGIC;
+    s_img[T5_IMG_SEGMENTS_OFF] = 2;
+    s_img[T5_IMG_CHIP_ID_OFF] = T5_IMG_CHIP_ESP32C6;
+    s_img[T5_IMG_CHIP_ID_OFF + 1] = 0;
+    s_img[T5_IMG_HASH_APPENDED_OFF] = hash ? 1 : 0;
+    /* segment 0 holds the app descriptor */
+    put32(s_img + T5_IMG_HDR_LEN, 0x42000020);
+    put32(s_img + T5_IMG_HDR_LEN + 4, SEG0_LEN);
+    put32(s_img + T5_IMG_DESC_OFF, T5_IMG_DESC_MAGIC);
+    memset(s_img + T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF, 0, T5_IMG_DESC_VERSION_LEN);
+    memcpy(s_img + T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF, ver, strlen(ver));
+    put32(s_img + SEG1_OFF, 0x40800000);
+    put32(s_img + SEG1_OFF + 4, SEG1_LEN);
 }
 
 static void test_c6img_parse(void)
@@ -143,8 +150,7 @@ static void test_c6img_parse(void)
     TEST_ASSERT_EQUAL(T5_OK, t5_c6img_parse(rd, NULL, sizeof s_img, &info));
     TEST_ASSERT_EQUAL(T5_C6_CHIP_ID, info.chip_id);
     TEST_ASSERT_EQUAL_STRING("t5-c6 0.1.0", info.version);
-    /* 24 + 8 + 300 + 8 + 100 = 440; checksum pads to 448; + 32 hash */
-    TEST_ASSERT_EQUAL(480, info.size);
+    TEST_ASSERT_EQUAL(480, info.size);   /* segments end at 440, checksum block to 448, SHA-256 */
     make_image("x", false);
     TEST_ASSERT_EQUAL(T5_OK, t5_c6img_parse(rd, NULL, sizeof s_img, &info));
     TEST_ASSERT_EQUAL(448, info.size);
@@ -156,10 +162,10 @@ static void test_c6img_rejects(void)
     memset(s_img, 0xFF, sizeof s_img);
     TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_c6img_parse(rd, NULL, sizeof s_img, &info));   /* erased */
     make_image("v", false);
-    put32(s_img + 32, 0);
+    put32(s_img + T5_IMG_DESC_OFF, 0);
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_c6img_parse(rd, NULL, sizeof s_img, &info));  /* no descriptor */
     make_image("v", false);
-    put32(s_img + 28, 100000);
+    put32(s_img + T5_IMG_HDR_LEN + 4, 100000);
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_c6img_parse(rd, NULL, sizeof s_img, &info));  /* runs off the end */
 }
 

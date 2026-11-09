@@ -2,8 +2,6 @@
  * shell_sys.h on the device: the shell's view of the OS services, and the
  * home hooks that make the shell the app runtime's home screen.
  */
-#include "esp_system.h"
-#include "t5_power/autosave.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,10 +13,12 @@
 #include "t5_display/t5_display.h"
 #include "t5_net/ble.h"
 #include "t5_net/net.h"
+#include "t5_pkg/pkg.h"
 #include "t5_power/power.h"
 #include "t5_time/t5_time.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_usb/usb.h"
+#include "t5_shell/accent.h"
 #include "shell_priv.h"
 #include "t5_core/log.h"
 
@@ -43,9 +43,7 @@ void shell_sys_status(shell_status_t *o)
     snprintf(o->ssid, sizeof o->ssid, "%s", n.ssid);
     o->ble_on = t5_ble_ready();
     o->ble_connected = t5_ble_connected();
-    /* What the user sees: the screen follows the board only with auto-rotate
-     * on and no lock (auto-rotate alone is otherwise console-only). */
-    o->rotation_locked = t5_ui_rotation_locked() || !t5_ui_auto_rotate();
+    o->rotation_locked = !t5_ui_follows_board();
     o->brightness = t5_display_brightness();
     o->volume = t5_audio_volume();
     o->muted = t5_audio_muted();
@@ -54,7 +52,6 @@ void shell_sys_status(shell_status_t *o)
     o->cam_active = t5_camera_active();
     o->usb_devices = t5_usb_device_count() > 0;
     o->usb_storage = t5_usbc_mode() == T5_USBC_STORAGE;
-    o->hw_keyboard = t5_usb_keyboard_present();
 }
 
 bool shell_sys_time(struct tm *out)
@@ -101,22 +98,14 @@ void shell_sys_current(char *id, size_t n)
     t5_apps_current(id, n);
 }
 
-bool shell_sys_can_remove(const char *id)
-{
-    shell_app_t *a = calloc(48, sizeof *a);
-    if (!a) return false;
-    int n = shell_sys_apps(a, 48);
-    bool ok = false;
-    for (int i = 0; i < n; i++) {
-        if (!strcmp(a[i].id, id)) ok = !a[i].builtin && !a[i].running;
-    }
-    free(a);
-    return ok;
-}
-
 void shell_sys_remove(const char *id)
 {
     T5_LOG_ON_ERR(TAG, t5_apps_remove(id, true));
+}
+
+void shell_sys_data_dir(const char *id, char *out, size_t n)
+{
+    if (t5_pkg_data_dir(id, out, n) != T5_OK) snprintf(out, n, "the data folder");
 }
 
 void shell_sys_set_wifi(bool on)
@@ -131,8 +120,7 @@ void shell_sys_set_ble(bool on)
 
 void shell_sys_set_rotation_lock(bool on)
 {
-    if (!on) t5_ui_set_auto_rotate(true);
-    t5_ui_set_rotation_lock(on);   /* saves both */
+    T5_LOG_ON_ERR(TAG, t5_ui_set_follows_board(!on));
 }
 
 void shell_sys_set_low_power(bool on)
@@ -142,7 +130,8 @@ void shell_sys_set_low_power(bool on)
 
 void shell_sys_set_brightness(int pct)
 {
-    t5_display_set_brightness(pct < 1 ? 1 : pct);
+    /* The quick settings slider starts at 0. */
+    T5_LOG_ON_ERR(TAG, t5_display_set_brightness(pct < T5_DISPLAY_BRIGHTNESS_MIN ? T5_DISPLAY_BRIGHTNESS_MIN : pct));
 }
 
 void shell_sys_set_volume(int pct)
@@ -162,11 +151,7 @@ void shell_sys_click(void)
 
 void shell_sys_apply_prefs(void)
 {
-    FILE *f = fopen("/data/sys/accent", "rb");
-    if (!f) return;
-    int v = fgetc(f);
-    fclose(f);
-    if (v >= 0 && v < MD_ACCENT_COUNT) md_set_accent((md_accent_t)v, MD_ACCENT_TEAL);
+    t5_shell_accent_restore();
 }
 
 void *shell_sys_enter(void)
@@ -179,13 +164,41 @@ void shell_sys_leave(void *saved)
     t5_sys_leave(saved);
 }
 
-/* ---- registration ------------------------------------------------------------------ */
+static void app_notice(t5_apps_notice_t what, const char *name)
+{
+    const char *why;
+    switch (what) {
+    case T5_APPS_NOTICE_SAFE_MODE:
+        t5_shell_toast("Safe mode: installed apps are off until you restart");
+        return;
+    case T5_APPS_NOTICE_HUNG: why = "stopped responding and was closed"; break;
+    case T5_APPS_NOTICE_LOW_MEMORY: why = "was closed: the device is low on memory"; break;
+    default: why = "stopped: it crashed"; break;
+    }
+    char msg[128];
+    snprintf(msg, sizeof msg, "%.40s %s", name ? name : "The app", why);
+    t5_shell_toast(msg);
+}
+
 static const t5_apps_home_t s_home = {
     .screen = shell_home_screen,
     .refresh = launcher_reload,
     .prepare = shell_prepare,
     .changed = shell_changed,
+    .notice = app_notice,
 };
+
+static void input_added_ui(void *arg)
+{
+    (void)arg;
+    shell_input_added();
+}
+
+static void input_added(t5_event_id_t id, const void *data, size_t len, void *arg)
+{
+    (void)id; (void)data; (void)len; (void)arg;
+    T5_LOG_ON_ERR(TAG, t5_ui_async(input_added_ui, NULL));
+}
 
 static void usbc_event(t5_event_id_t id, const void *data, size_t len, void *arg)
 {
@@ -199,15 +212,15 @@ static void usbc_event(t5_event_id_t id, const void *data, size_t len, void *arg
 t5_err_t t5_shell_register(void)
 {
     t5_apps_set_home(&s_home);
-    t5_event_subscribe(T5_EV_USBC_MODE, usbc_event, NULL);
-    return T5_OK;
+    T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_USBC_MODE, usbc_event, NULL));
+    return t5_event_subscribe(T5_EV_UI_INPUT_ADDED, input_added, NULL);
 }
 
 bool shell_sys_safe_mode(char *why, size_t n)
 {
     if (!t5_apps_safe_mode()) return false;
-    t5_crash_rec_t rec[8];
-    int k = t5_apps_crashes(rec, 8);
+    t5_crash_rec_t *rec = calloc(T5_CRASH_MAX_APPS, sizeof *rec);
+    int k = rec ? t5_apps_crashes(rec, T5_CRASH_MAX_APPS) : 0;
     int last = -1;
     for (int i = 0; i < k; i++) {
         if (rec[i].total && (last < 0 || rec[i].last_time > rec[last].last_time)) last = i;
@@ -217,11 +230,11 @@ bool shell_sys_safe_mode(char *why, size_t n)
     } else {
         snprintf(why, n, "The last boots didn't finish.");
     }
+    free(rec);
     return true;
 }
 
 void shell_sys_restart(void)
 {
-    T5_LOG_ON_ERR(TAG, t5_autosave_now());
-    esp_restart();
+    t5_power_restart();
 }

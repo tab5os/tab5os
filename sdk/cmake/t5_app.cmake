@@ -10,11 +10,11 @@
 # Produces <name>.elf (position-independent, entry t5_app_entry, imports
 # only) and <name>.t5app (the installable package). T5_FIRMWARE_BUILD points
 # at the firmware build the app is compiled against (default: the repo's
-# firmware/build-rev1); it supplies the exact headers and LVGL config.
+# firmware/build); it supplies the exact headers and LVGL config.
 get_filename_component(T5_SDK "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 get_filename_component(T5_ROOT "${T5_SDK}/.." ABSOLUTE)
 if(NOT T5_FIRMWARE_BUILD)
-    set(T5_FIRMWARE_BUILD "${T5_ROOT}/firmware/build-rev1")
+    set(T5_FIRMWARE_BUILD "${T5_ROOT}/firmware/build")
 endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 

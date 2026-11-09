@@ -25,11 +25,8 @@
 #include "py/runtime.h"
 #include "py/stream.h"
 #include "t5_net/sock.h"
-#include "t5_pkg/manifest.h"
-#include "py_priv.h"
-
-#define SLICE_MS 100
-#define CONNECT_MS 10000
+#include "bind_perm.h"
+#include "py_net.h"
 
 /* lwIP's values, which programs ported from C expect. */
 enum {
@@ -55,25 +52,7 @@ typedef struct {
     bool mcast_loop;
 } py_sock_t;
 
-uint32_t py_net_poll_tick;     /* vm.c: wake often while sockets are being polled */
-
 static const mp_obj_type_t py_type_socket;
-
-/* ---- helpers --------------------------------------------------------------------------- */
-static int t5_to_errno(int e)
-{
-    switch (e) {
-    case T5_ERR_TIMEOUT: return MP_ETIMEDOUT;
-    case T5_ERR_NO_MEM: return MP_ENOMEM;
-    case T5_ERR_INVALID_ARG: return MP_EINVAL;
-    case T5_ERR_NOT_FOUND: return MP_ENOENT;
-    case T5_ERR_BUSY: return MP_EADDRINUSE;
-    case T5_ERR_DENIED: return MP_EACCES;
-    case T5_ERR_NOT_SUPPORTED: return MP_EOPNOTSUPP;
-    case T5_ERR_STATE: return MP_ENOTCONN;
-    default: return MP_ECONNRESET;
-    }
-}
 
 static MP_NORETURN void raise_errno(int err)
 {
@@ -83,16 +62,12 @@ static MP_NORETURN void raise_errno(int err)
 
 static MP_NORETURN void raise_t5(int e)
 {
-    if (e == T5_ERR_DENIED) {
-        mp_event_handle_nowait();
-        py_raise_t5((t5_err_t)e);
-    }
-    raise_errno(t5_to_errno(e));
+    py_net_fail(e, PY_ERRNO_SOCKET);
 }
 
 static bool alive(const py_sock_t *s)
 {
-    return s->h && s->id && t5_net_handle_id(s->h) == s->id;
+    return py_net_alive(s->h, s->id);
 }
 
 static py_sock_t *self_live(mp_obj_t o)
@@ -109,53 +84,22 @@ static void adopt(py_sock_t *s, t5_sock_t *h, uint8_t state)
     s->state = state;
 }
 
-/* (host, port) -> address; names are resolved. */
-static void addr_arg(mp_obj_t t, t5_net_addr_t *out, const char **host)
+/* The socket's timeout: -1 blocking, 0 non-blocking (one try). */
+static int sliced(py_sock_t *s, py_net_step_t step, void *ctx)
 {
-    size_t n;
-    mp_obj_t *items;
-    mp_obj_get_array(t, &n, &items);
-    if (n < 2) mp_raise_TypeError(MP_ERROR_TEXT("address is (host, port)"));
-    const char *h = mp_obj_str_get_str(items[0]);
-    mp_int_t port = mp_obj_get_int(items[1]);
-    if (port < 0 || port > 65535) mp_raise_ValueError(MP_ERROR_TEXT("port is 0-65535"));
-    if (host) *host = h;
-    if (!*h) h = "0.0.0.0";
-    t5_err_t e = t5_net_resolve(h, out, CONNECT_MS);
-    if (e != T5_OK) raise_t5(e);
-    out->port = (uint16_t)port;
+    return py_net_sliced(s->h, step, ctx, s->timeout);
 }
 
-static mp_obj_t addr_tuple(const t5_net_addr_t *a)
+static void addr_arg(mp_obj_t t, t5_net_addr_t *out)
 {
-    char ip[48];
-    if (t5_net_addr_str(a, ip, sizeof ip) < 0) ip[0] = 0;
-    mp_obj_t t[2] = { mp_obj_new_str_from_cstr(ip), MP_OBJ_NEW_SMALL_INT(a->port) };
-    return mp_obj_new_tuple(2, t);
+    py_net_addr_arg(t, out, PY_ERRNO_SOCKET);
 }
 
-/* Call step in slices for the socket's timeout. Returns its result, or
- * T5_ERR_TIMEOUT once the timeout passes (immediately for non-blocking). */
-typedef int (*step_t)(py_sock_t *s, void *ctx, uint32_t ms);
-
-static int sliced(py_sock_t *s, step_t step, void *ctx)
+static int timeout_errno(const py_sock_t *s)
 {
-    uint32_t t0 = mp_hal_ticks_ms();
-    for (;;) {
-        uint32_t ms = SLICE_MS;
-        if (s->timeout >= 0) {
-            uint32_t el = mp_hal_ticks_ms() - t0;
-            uint32_t left = el >= (uint32_t)s->timeout ? 0 : (uint32_t)s->timeout - el;
-            if (left < ms) ms = left;
-        }
-        int r = step(s, ctx, ms);
-        if (r != T5_ERR_TIMEOUT) return r;
-        if (s->timeout >= 0 && mp_hal_ticks_ms() - t0 >= (uint32_t)s->timeout) return T5_ERR_TIMEOUT;
-        mp_event_handle_nowait();
-    }
+    return s->timeout == 0 ? MP_EAGAIN : MP_ETIMEDOUT;
 }
 
-/* ---- opening the t5 handle lazily ---------------------------------------------------------- */
 static void apply_opts(py_sock_t *s)
 {
     if (s->nodelay) T5_IGNORE(t5_sock_set_option(s->h, T5_SOCKOPT_NODELAY, 1));      /* best effort, like setsockopt */
@@ -173,22 +117,21 @@ static void udp_open(py_sock_t *s)
     adopt(s, h, ST_UDP);
 }
 
-/* ---- the stream protocol --------------------------------------------------------------------- */
 typedef struct {
     void *buf;
     size_t n;
 } io_t;
 
-static int step_read(py_sock_t *s, void *c, uint32_t ms)
+static int step_read(void *h, void *c, uint32_t ms)
 {
     io_t *io = c;
-    return t5_sock_recv(s->h, io->buf, io->n, ms);
+    return t5_sock_recv(h, io->buf, io->n, ms);
 }
 
-static int step_write(py_sock_t *s, void *c, uint32_t ms)
+static int step_write(void *h, void *c, uint32_t ms)
 {
     io_t *io = c;
-    int r = t5_sock_send(s->h, io->buf, io->n, ms);
+    int r = t5_sock_send(h, io->buf, io->n, ms);
     return r == 0 && io->n ? T5_ERR_TIMEOUT : r;
 }
 
@@ -207,7 +150,7 @@ static mp_uint_t sock_read(mp_obj_t o, void *buf, mp_uint_t size, int *err)
     io_t io = { buf, size };
     int r = sliced(s, step_read, &io);
     if (r >= 0) return (mp_uint_t)r;
-    *err = r == T5_ERR_TIMEOUT ? (s->timeout == 0 ? MP_EAGAIN : MP_ETIMEDOUT) : t5_to_errno(r);
+    *err = r == T5_ERR_TIMEOUT ? timeout_errno(s) : py_errno(r, PY_ERRNO_SOCKET);
     return MP_STREAM_ERROR;
 }
 
@@ -225,7 +168,7 @@ static mp_uint_t sock_write(mp_obj_t o, const void *buf, mp_uint_t size, int *er
     io_t io = { (void *)buf, size };
     int r = size ? sliced(s, step_write, &io) : 0;
     if (r >= 0) return (mp_uint_t)r;
-    *err = r == T5_ERR_TIMEOUT ? (s->timeout == 0 ? MP_EAGAIN : MP_ETIMEDOUT) : t5_to_errno(r);
+    *err = r == T5_ERR_TIMEOUT ? timeout_errno(s) : py_errno(r, PY_ERRNO_SOCKET);
     return MP_STREAM_ERROR;
 }
 
@@ -265,7 +208,6 @@ static const mp_stream_p_t sock_stream_p = {
     .is_text = false,
 };
 
-/* ---- methods ------------------------------------------------------------------------------- */
 static mp_obj_t sock_close(mp_obj_t o)
 {
     py_sock_t *s = MP_OBJ_TO_PTR(o);
@@ -289,7 +231,7 @@ static mp_obj_t sock_connect(mp_obj_t o, mp_obj_t addr)
     py_sock_t *s = self_live(o);
     if (s->type == SOCK_DGRAM_) {
         t5_net_addr_t a;
-        addr_arg(addr, &a, NULL);
+        addr_arg(addr, &a);
         udp_open(s);
         t5_err_t e = t5_udp_connect(s->h, &a);
         if (e != T5_OK) raise_t5(e);
@@ -302,11 +244,11 @@ static mp_obj_t sock_connect(mp_obj_t o, mp_obj_t addr)
     if (n < 2) mp_raise_TypeError(MP_ERROR_TEXT("address is (host, port)"));
     mp_int_t port = mp_obj_get_int(items[1]);
     if (port <= 0 || port > 65535) mp_raise_ValueError(MP_ERROR_TEXT("port is 1-65535"));
-    t5_tcp_cfg_t cfg = { .timeout_ms = s->timeout > 0 ? (uint32_t)s->timeout : CONNECT_MS,
+    t5_tcp_cfg_t cfg = { .timeout_ms = s->timeout > 0 ? (uint32_t)s->timeout : PY_NET_CONNECT_MS,
                          .flags = s->nodelay ? T5_TCP_NODELAY : 0 };
     t5_sock_t *h;
     t5_err_t e = t5_tcp_connect(mp_obj_str_get_str(items[0]), (uint16_t)port, &cfg, &h);
-    if (e != T5_OK) raise_errno(e == T5_ERR_IO ? MP_ECONNREFUSED : e == T5_ERR_NOT_FOUND ? MP_ENOENT : t5_to_errno(e));
+    if (e != T5_OK) raise_errno(e == T5_ERR_IO ? MP_ECONNREFUSED : py_errno(e, PY_ERRNO_SOCKET));
     adopt(s, h, ST_TCP);
     apply_opts(s);
     return mp_const_none;
@@ -318,7 +260,7 @@ static mp_obj_t sock_bind(mp_obj_t o, mp_obj_t addr)
     py_sock_t *s = self_live(o);
     if (s->state != ST_NEW) raise_errno(MP_EINVAL);
     t5_net_addr_t a;
-    addr_arg(addr, &a, NULL);              /* the address part is ignored: every interface */
+    addr_arg(addr, &a);                    /* the address part is ignored: every interface */
     s->port = a.port;
     if (s->type == SOCK_DGRAM_) udp_open(s);
     return mp_const_none;
@@ -342,9 +284,9 @@ typedef struct {
     t5_sock_t *got;
 } accept_t;
 
-static int step_accept(py_sock_t *s, void *c, uint32_t ms)
+static int step_accept(void *h, void *c, uint32_t ms)
 {
-    return t5_tcp_accept(s->h, ms, &((accept_t *)c)->got);
+    return t5_tcp_accept(h, ms, &((accept_t *)c)->got);
 }
 
 static mp_obj_t sock_accept(mp_obj_t o)
@@ -358,12 +300,12 @@ static mp_obj_t sock_accept(mp_obj_t o)
     c->timeout = -1;
     accept_t a = { NULL };
     int r = sliced(s, step_accept, &a);
-    if (r == T5_ERR_TIMEOUT) raise_errno(s->timeout == 0 ? MP_EAGAIN : MP_ETIMEDOUT);
+    if (r == T5_ERR_TIMEOUT) raise_errno(timeout_errno(s));
     if (r < 0) raise_t5(r);
     adopt(c, a.got, ST_TCP);
     t5_net_addr_t peer = { 0 };
     T5_IGNORE(t5_sock_peer_addr(a.got, &peer));        /* ("", 0) if it already went away */
-    mp_obj_t t[2] = { MP_OBJ_FROM_PTR(c), addr_tuple(&peer) };
+    mp_obj_t t[2] = { MP_OBJ_FROM_PTR(c), py_net_addr_tuple(&peer) };
     return mp_obj_new_tuple(2, t);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(sock_accept_obj, sock_accept);
@@ -424,16 +366,16 @@ typedef struct {
     t5_net_addr_t from;
 } dgram_t;
 
-static int step_sendto(py_sock_t *s, void *c, uint32_t ms)
+static int step_sendto(void *h, void *c, uint32_t ms)
 {
     dgram_t *d = c;
-    return t5_udp_sendto(s->h, d->to, d->buf, d->n, ms);
+    return t5_udp_sendto(h, d->to, d->buf, d->n, ms);
 }
 
-static int step_recvfrom(py_sock_t *s, void *c, uint32_t ms)
+static int step_recvfrom(void *h, void *c, uint32_t ms)
 {
     dgram_t *d = c;
-    return t5_udp_recvfrom(s->h, d->buf, d->n, &d->from, ms);
+    return t5_udp_recvfrom(h, d->buf, d->n, &d->from, ms);
 }
 
 static mp_obj_t sock_sendto(mp_obj_t o, mp_obj_t data, mp_obj_t addr)
@@ -443,11 +385,11 @@ static mp_obj_t sock_sendto(mp_obj_t o, mp_obj_t data, mp_obj_t addr)
     mp_buffer_info_t b;
     mp_get_buffer_raise(data, &b, MP_BUFFER_READ);
     t5_net_addr_t to;
-    addr_arg(addr, &to, NULL);
+    addr_arg(addr, &to);
     udp_open(s);
     dgram_t d = { &to, b.buf, b.len, { 0 } };
     int r = sliced(s, step_sendto, &d);
-    if (r == T5_ERR_TIMEOUT) raise_errno(s->timeout == 0 ? MP_EAGAIN : MP_ETIMEDOUT);
+    if (r == T5_ERR_TIMEOUT) raise_errno(timeout_errno(s));
     if (r < 0) raise_t5(r);
     return MP_OBJ_NEW_SMALL_INT(r);
 }
@@ -466,11 +408,11 @@ static mp_obj_t sock_recvfrom(mp_obj_t o, mp_obj_t len)
     int r = sliced(s, step_recvfrom, &d);
     if (r < 0) {
         vstr_clear(&v);
-        if (r == T5_ERR_TIMEOUT) raise_errno(s->timeout == 0 ? MP_EAGAIN : MP_ETIMEDOUT);
+        if (r == T5_ERR_TIMEOUT) raise_errno(timeout_errno(s));
         raise_t5(r);
     }
     v.len = (size_t)r;
-    mp_obj_t t[2] = { mp_obj_new_bytes_from_vstr(&v), addr_tuple(&d.from) };
+    mp_obj_t t[2] = { mp_obj_new_bytes_from_vstr(&v), py_net_addr_tuple(&d.from) };
     return mp_obj_new_tuple(2, t);
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(sock_recvfrom_obj, sock_recvfrom);
@@ -549,7 +491,7 @@ static mp_obj_t sock_addr(mp_obj_t o, bool peer)
     t5_net_addr_t a;
     t5_err_t e = peer ? t5_sock_peer_addr(s->h, &a) : t5_sock_local_addr(s->h, &a);
     if (e != T5_OK) raise_errno(MP_ENOTCONN);
-    return addr_tuple(&a);
+    return py_net_addr_tuple(&a);
 }
 
 static mp_obj_t sock_getpeername(mp_obj_t o)
@@ -607,7 +549,7 @@ static mp_obj_t sock_tls(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     t5_tls_cfg_t cfg = {
         .flags = (a[A_server].u_bool ? T5_TLS_SERVER : 0) | (a[A_verify].u_bool ? 0 : T5_TLS_NO_VERIFY) |
                  (a[A_name].u_bool ? 0 : T5_TLS_NO_NAME_CHECK),
-        .timeout_ms = s->timeout > 0 ? (uint32_t)s->timeout : CONNECT_MS,
+        .timeout_ms = s->timeout > 0 ? (uint32_t)s->timeout : PY_NET_CONNECT_MS,
         .sni = a[A_host].u_obj != mp_const_none ? mp_obj_str_get_str(a[A_host].u_obj) : NULL,
         .ca_pem = a[A_ca].u_obj != mp_const_none ? mp_obj_str_get_str(a[A_ca].u_obj) : NULL,
         .cert_pem = a[A_cert].u_obj != mp_const_none ? mp_obj_str_get_str(a[A_cert].u_obj) : NULL,
@@ -660,7 +602,7 @@ static MP_DEFINE_CONST_DICT(net_sock_locals, net_sock_locals_table);
 static mp_obj_t sock_make_new(const mp_obj_type_t *type, size_t n, size_t n_kw, const mp_obj_t *args)
 {
     mp_arg_check_num(n, n_kw, 0, 3, false);
-    py_need_perm(T5_PERM_NET);
+    py_need_perm(T5G_PERM_t5_tcp_connect);
     mp_int_t af = n > 0 ? mp_obj_get_int(args[0]) : AF_INET_;
     mp_int_t st = n > 1 ? mp_obj_get_int(args[1]) : SOCK_STREAM_;
     if (af != AF_INET_ && af != AF_INET6_) raise_errno(MP_EAFNOSUPPORT);
@@ -677,11 +619,10 @@ static mp_obj_t sock_make_new(const mp_obj_type_t *type, size_t n, size_t n_kw, 
 static MP_DEFINE_CONST_OBJ_TYPE(py_type_socket, MP_QSTR_socket, MP_TYPE_FLAG_ITER_IS_STREAM, make_new, sock_make_new,
                                 print, sock_print, protocol, &sock_stream_p, locals_dict, &net_sock_locals);
 
-/* ---- module functions ------------------------------------------------------------------------ */
 /* getaddrinfo(host, port, af=0, type=0, proto=0, flags=0) -> [(af, type, proto, '', (ip, port))] */
 static mp_obj_t socket_getaddrinfo(size_t n, const mp_obj_t *args)
 {
-    py_need_perm(T5_PERM_NET);
+    py_need_perm(T5G_PERM_t5_net_resolve);
     mp_int_t type = n > 3 && mp_obj_get_int(args[3]) ? mp_obj_get_int(args[3]) : SOCK_STREAM_;
     mp_obj_t host = args[0];
     mp_int_t port = 0;
@@ -689,12 +630,12 @@ static mp_obj_t socket_getaddrinfo(size_t n, const mp_obj_t *args)
     else if (args[1] != mp_const_none) port = mp_obj_get_int(args[1]);
     if (port < 0 || port > 65535) mp_raise_ValueError(MP_ERROR_TEXT("port is 0-65535"));
     t5_net_addr_t a;
-    t5_err_t e = t5_net_resolve(host == mp_const_none ? "127.0.0.1" : mp_obj_str_get_str(host), &a, CONNECT_MS);
-    if (e != T5_OK) raise_errno(e == T5_ERR_NOT_FOUND || e == T5_ERR_INVALID_ARG ? MP_ENOENT : t5_to_errno(e));
+    t5_err_t e = t5_net_resolve(host == mp_const_none ? "127.0.0.1" : mp_obj_str_get_str(host), &a, PY_NET_CONNECT_MS);
+    if (e != T5_OK) raise_errno(e == T5_ERR_INVALID_ARG ? MP_ENOENT : py_errno(e, PY_ERRNO_SOCKET));
     a.port = (uint16_t)port;
     mp_obj_t t[5] = { MP_OBJ_NEW_SMALL_INT(a.family == 6 ? AF_INET6_ : AF_INET_), MP_OBJ_NEW_SMALL_INT(type),
                       MP_OBJ_NEW_SMALL_INT(type == SOCK_DGRAM_ ? IPPROTO_UDP_ : IPPROTO_TCP_), MP_OBJ_NEW_QSTR(MP_QSTR_),
-                      addr_tuple(&a) };
+                      py_net_addr_tuple(&a) };
     mp_obj_t entry = mp_obj_new_tuple(5, t);
     return mp_obj_new_list(1, &entry);
 }

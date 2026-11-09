@@ -13,31 +13,53 @@ warning at install); the signature names the publisher.
 
 Stdlib only (Python 3.11+ for tomllib). The checks mirror the firmware's
 manifest validator (firmware/components/t5_pkg/manifest.c), including the
-TOML subset it understands, so a package that packs here installs there.
+TOML subset it understands, so a package that packs here installs there; the
+limits, permission names and API level are read from the firmware sources
+(t5const). A native app's imports are checked against sdk/abi/api_v1.sym, as
+the installer does.
 """
 import argparse
 import base64
 import hashlib
 import os
 import re
-import subprocess
 import sys
+import struct
 import tempfile
 import tomllib
 import zipfile
 
-API_LEVEL = 1
-NAME_MAX = 127           # zip entry names, bytes (T5_ZIP_NAME_MAX - 1)
-MAX_PORTS = 8
-MAX_HEAP_KB = 32 * 1024
-TOP_KEYS = {"id", "name", "version", "api", "runtime", "entry", "icon", "min_heap_mb", "min_heap_kb",
-            "orientation", "description", "author", "homepage", "license"}
-PERM_BOOLS = {"camera", "mic", "net", "ble", "usb", "storage", "shared_read", "shared_write", "all_files", "background_wake", "system"}
+from t5const import MANIFEST_C, MANIFEST_H, define, permissions, runtimes, strings
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(ROOT, "tools", "abi"))
+sys.path.insert(0, os.path.join(ROOT, "tools", "ota"))
+import abi  # noqa: E402  (parse_sym)
+import sign  # noqa: E402  (openssl, the key id)
+
+ABI_SYM = os.path.join(ROOT, "sdk", "abi", "api_v1.sym")
+
+
+def _m(name):
+    return define(MANIFEST_H, name)
+
+
+API_LEVEL = _m("T5_API_LEVEL")
+NAME_MAX = define("t5_pkg/include/t5_pkg/zip.h", "T5_ZIP_NAME_MAX") - 1   # zip entry names, bytes
+MAX_PORTS = _m("T5_MANIFEST_MAX_PORTS")
+MAX_HEAP_KB = _m("T5_MANIFEST_MAX_HEAP_KB")
+BG_MAX_SECONDS = _m("T5_MANIFEST_BG_MAX_SECONDS")
+TOP_KEYS = set(strings(MANIFEST_C, "s_top_keys") + strings(MANIFEST_C, "s_info_keys"))
+BG_KEYS = strings(MANIFEST_C, "s_bg_keys")
+ORIENTATIONS = strings(MANIFEST_C, "s_orients")
+ENTRY_SYMBOL = define("t5_app/include/t5_app/app.h", "T5_APP_ENTRY_SYMBOL")
+PERM_BOOLS = {p.name for p in permissions() if p.name != "ports"}
+RUNTIMES = runtimes()
 ID_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)+$")
 IDENT = r"[0-9A-Za-z-]+"
 VERSION_RE = re.compile(rf"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-{IDENT}(\.{IDENT})*)?(\+{IDENT}(\.{IDENT})*)?$")
-PORT_RE = re.compile(r"^[a-z0-9_.]{1,15}$")
-FUNC_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,30}$")
+PORT_RE = re.compile(r"^[a-z0-9_.]{1,%d}$" % (_m("T5_MANIFEST_PORT_LEN") - 1))
+FUNC_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,%d}$" % (_m("T5_MANIFEST_FUNC_LEN") - 2))
 SKIP_NAMES = {".DS_Store", "Thumbs.db", "__pycache__", ".git", ".install", "build", "signature.t5sig"}
 SIG_NAME = "signature.t5sig"
 
@@ -132,11 +154,11 @@ def validate(text):
         else:
             check_subset(value, key)
 
-    id_ = string(m, "id", True, 63)
+    id_ = string(m, "id", True, _m("T5_APP_ID_LEN") - 1)
     if not ID_RE.match(id_):
         raise PackError(f"id: '{id_}' is not reverse-DNS (lowercase a-z, 0-9, _; at least two parts)")
-    string(m, "name", True, 47)
-    version = string(m, "version", True, 15)
+    string(m, "name", True, _m("T5_APP_NAME_LEN") - 1)
+    version = string(m, "version", True, _m("T5_APP_VERSION_LEN") - 1)
     if not VERSION_RE.match(version):
         raise PackError(f"version: '{version}' is not MAJOR.MINOR.PATCH")
     if "api" not in m:
@@ -147,10 +169,10 @@ def validate(text):
     if api > API_LEVEL:
         raise PackError(f"api: app needs API level {api}, this firmware has {API_LEVEL}")
     runtime = string(m, "runtime", True, 15)
-    if runtime not in ("native", "micropython"):
-        raise PackError(f"runtime: unknown '{runtime}' (native or micropython)")
+    if runtime not in RUNTIMES:
+        raise PackError(f"runtime: unknown '{runtime}' ({' or '.join(RUNTIMES)})")
     for key in ("entry", "icon"):
-        v = string(m, key, key == "entry", 63)
+        v = string(m, key, key == "entry", _m("T5_MANIFEST_FILE_LEN") - 1)
         if v is not None and (not name_ok(v) or v.endswith("/")):
             raise PackError(f"{key}: '{v}' is not a relative file path")
     has_mb = integer(m, "min_heap_mb", 0, MAX_HEAP_KB // 1024) is not None
@@ -158,8 +180,8 @@ def validate(text):
     if has_mb and has_kb:
         raise PackError("min_heap_mb and min_heap_kb are exclusive")
     orient = string(m, "orientation", False, 15)
-    if orient is not None and orient not in ("any", "landscape", "portrait"):
-        raise PackError(f"orientation: unknown '{orient}' (any, landscape or portrait)")
+    if orient is not None and orient not in ORIENTATIONS:
+        raise PackError(f"orientation: unknown '{orient}' ({', '.join(ORIENTATIONS[:-1])} or {ORIENTATIONS[-1]})")
 
     perms = m.get("permissions", {})
     for k, v in perms.items():
@@ -184,13 +206,60 @@ def validate(text):
         if perms.get("background_wake") is not True:
             raise PackError("[background] needs background_wake = true in [permissions]")
         for k in bg:
-            if k not in ("entry", "max_seconds"):
+            if k not in BG_KEYS:
                 raise PackError(f"unknown key 'background.{k}'")
-        entry = string(bg, "entry", False, 31)
+        entry = string(bg, "entry", False, _m("T5_MANIFEST_FUNC_LEN") - 1)
         if entry is not None and not FUNC_RE.match(entry):
             raise PackError(f"background.entry: '{entry}' is not a function name")
-        integer(bg, "max_seconds", 1, 300)
+        integer(bg, "max_seconds", 1, BG_MAX_SECONDS)
     return m
+
+
+def elf_imports(data):
+    """(undefined non-weak symbols, defined functions) of an ELF32 app, as the
+    installer reads them (t5_app/elfsym.c): .dynsym, then .symtab."""
+    if len(data) < 52 or data[:4] != b"\x7fELF" or data[4] != 1 or data[5] != 1:
+        raise PackError("entry is not a 32-bit little-endian ELF")
+    shoff, = struct.unpack_from("<I", data, 32)
+    shentsize, shnum = struct.unpack_from("<HH", data, 46)
+    secs = [struct.unpack_from("<IIIIIIIIII", data, shoff + i * shentsize) for i in range(shnum)]
+    undef, defined = set(), set()
+    for want in (11, 2):    # SHT_DYNSYM, SHT_SYMTAB
+        for _, typ, _, _, off, size, link, _, _, entsize in secs:
+            if typ != want or entsize != 16:
+                continue
+            stroff = secs[link][4]
+            for k in range(1, size // 16):
+                st_name, _, _, info, _, shndx = struct.unpack_from("<IIIBBH", data, off + k * 16)
+                end = data.index(b"\0", stroff + st_name)
+                name = data[stroff + st_name:end].decode(errors="replace")
+                bind = info >> 4
+                if not name or bind == 0:     # STB_LOCAL
+                    continue
+                if shndx == 0:
+                    if bind != 2:             # STB_WEAK imports may stay unresolved
+                        undef.add(name)
+                elif info & 0xF == 2:         # STT_FUNC
+                    defined.add(name)
+    return undef, defined
+
+
+def exported_symbols(path=ABI_SYM):
+    return {s.name for s in abi.parse_sym(path)[1]}
+
+
+def check_imports(data, sym=ABI_SYM):
+    """Refuse an app ELF the installer would refuse: imports the OS doesn't
+    export, or no entry symbol (T5_APP)."""
+    try:
+        undef, defined = elf_imports(data)
+    except (struct.error, ValueError, IndexError):
+        raise PackError("entry is not a valid ELF") from None
+    missing = sorted(undef - exported_symbols(sym))
+    if missing:
+        raise PackError("the app calls functions Tab5 OS doesn't export (sdk/abi/api_v1.sym): " + ", ".join(missing))
+    if ENTRY_SYMBOL not in defined:
+        raise PackError(f"the app has no {ENTRY_SYMBOL} (missing T5_APP?)")
 
 
 def collect(app_dir, out_path):
@@ -220,26 +289,20 @@ def digest_text(entries):
     return ("\n".join(lines) + "\n").encode()
 
 
-def openssl(args, data=None):
+def openssl(args):
     try:
-        r = subprocess.run(["openssl"] + args, input=data, capture_output=True, check=False)
-    except FileNotFoundError:
-        raise PackError("signing needs the openssl command") from None
-    if r.returncode != 0:
-        raise PackError("openssl " + " ".join(args[:2]) + ": " + r.stderr.decode(errors="replace").strip())
-    return r.stdout
+        return sign.openssl(args)
+    except sign.SignError as e:
+        raise PackError(str(e)) from None
 
 
 def sign_entries(entries, key_path):
-    pub = openssl(["pkey", "-in", key_path, "-pubout", "-outform", "DER"])
-    with tempfile.NamedTemporaryFile(delete=False) as t:
-        t.write(digest_text(entries))
-        tname = t.name
     try:
-        sig = openssl(["dgst", "-sha256", "-sign", key_path, tname])
-    finally:
-        os.remove(tname)
-    fp = hashlib.sha256(pub).hexdigest()
+        pub = sign.public_der(key_path)
+        sig = sign.sign_sha256(key_path, digest_text(entries))
+    except sign.SignError as e:
+        raise PackError(str(e)) from None
+    fp = sign.key_id(pub).hex()
     text = (f"t5sig 1\nkey {fp}\npub {base64.b64encode(pub).decode()}\n"
             f"sig {base64.b64encode(sig).decode()}\n")
     return text.encode(), fp
@@ -251,7 +314,7 @@ def verify_entries(entries):
     fields = dict(l.split(" ", 1) for l in sig_text.decode().splitlines() if " " in l)
     pub = base64.b64decode(fields["pub"])
     sig = base64.b64decode(fields["sig"])
-    if hashlib.sha256(pub).hexdigest() != fields.get("key"):
+    if sign.key_id(pub).hex() != fields.get("key"):
         raise PackError("signature: key fingerprint doesn't match the key")
     with tempfile.TemporaryDirectory() as d:
         kp, sp, dp = (os.path.join(d, n) for n in ("pub.der", "sig.der", "digest"))
@@ -281,6 +344,9 @@ def pack(app_dir, out_path, key_path=None):
         raise PackError(f"entry '{m['entry']}' not found in {app_dir}")
     if "icon" in m and m["icon"] not in names:
         raise PackError(f"icon '{m['icon']}' not found in {app_dir}")
+    if m["runtime"] == "native":
+        with open(dict(files)[m["entry"]], "rb") as f:
+            check_imports(f.read())
     tmp = out_path + ".tmp"
     total = len(raw)
     entries = [("manifest.toml", raw)]
@@ -355,10 +421,15 @@ def inspect(path):
                       f"runtime={m['runtime']} entry={m['entry']}")
                 print(f"  permissions: {', '.join(granted) or 'none'}")
                 if "background" in m:
-                    print(f"  background: entry={m['background'].get('entry', 'on_alarm')} "
-                          f"max_seconds={m['background'].get('max_seconds', 30)}")
+                    print(f"  background: entry={m['background'].get('entry', _m('T5_MANIFEST_BG_DEFAULT_ENTRY'))} "
+                          f"max_seconds={m['background'].get('max_seconds', _m('T5_MANIFEST_BG_DEFAULT_SECONDS'))}")
                 if m["entry"] not in names:
                     problems.append(f"entry '{m['entry']}' is not in the package")
+                elif m["runtime"] == "native":
+                    try:
+                        check_imports(z.read(m["entry"]))
+                    except PackError as e:
+                        problems.append(str(e))
                 if "icon" in m and m["icon"] not in names:
                     problems.append(f"icon '{m['icon']}' is not in the package")
             except (PackError, UnicodeDecodeError) as e:
