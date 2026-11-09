@@ -207,6 +207,33 @@ The decoder takes WAV: PCM 8, 16, 24 and 32-bit, 32 and 64-bit float, `WAVE_FORM
 
 Microphone input (`t5_audio_in_open`) and the camera (`t5_camera_open`) need the permission declared in the manifest and asked for at run time: call `t5_app_request_permission(app, T5_PERM_MIC, cb, user)` first and open in the callback. While either is open the status bar shows an indicator. Close the camera in `on_suspend` (the OS closes it for you at sleep, and on exit). The camera and the hardware JPEG decoder run their interrupts on core 0, so call them from any task; the photo and record calls block and must not run on the UI task.
 
+### Media sessions
+
+An app that plays music or other long audio opens a **media session**. That gives the person controls for it outside the app: the music card on the [standby screen](#standby) shows the title, artist and progress, and its previous, play/pause and next buttons send commands to your app. They don't touch your player directly, so your app stays in charge of what plays.
+
+```c
+t5_media_session_t *ms;
+t5_media_session_open(&ms);                       /* one per app; closed when the app exits */
+t5_media_info_t info = { .duration_ms = 215000 };
+snprintf(info.title, sizeof info.title, "%s", "Clair de lune");
+snprintf(info.artist, sizeof info.artist, "%s", "Claude Debussy");
+t5_media_session_set_info(ms, &info);
+t5_media_session_set_state(ms, T5_MEDIA_PLAYING, 0);   /* on changes only: the OS moves the position on */
+
+/* On a task of your own: */
+t5_media_cmd_t c;
+while (t5_app_running(app)) {
+    if (t5_media_session_next(ms, &c, 250) != T5_OK) continue;
+    switch (c.type) {
+    case T5_MEDIA_CMD_TOGGLE: /* play or pause, then set_state */ break;
+    case T5_MEDIA_CMD_NEXT:   /* next track: set_info, set_state(PLAYING, 0) */ break;
+    default: break;                               /* PLAY, PAUSE, PREVIOUS, STOP, SEEK (c.position_ms) */
+    }
+}
+```
+
+The active session is the one most recently opened or set to `T5_MEDIA_PLAYING`; commands go to it. Up to 4 sessions are open at once, and 8 commands are queued per session. No permission is needed. Audio keeps playing under standby and with the screen off, because an open output stream holds an audio wake lock. `apps/examples/music` is a complete player.
+
 ## Rules
 
 - **Threads.** Every callback runs on the UI task, so LVGL calls are safe there. Tasks you create (`t5_task_create`, or `xTaskCreate`) must use `t5_ui_async()` or `t5_ui_lock()`/`t5_ui_unlock()` for LVGL.
@@ -266,6 +293,24 @@ t5_shell_activity_end(a);                                            /* or the a
 
 At most `T5_SHELL_ACTIVITY_MAX` (4) per app; the icon is one `MD_ICON_*` glyph.
 
+## Standby
+
+When the device is on USB power and dims, the shell shows the **standby screen** in front of whatever is open: a large clock and the date, the music card for the active [media session](#media-sessions), and the newest app card. The app under it keeps running. The backlight is capped at 20%, and from 22:00 to 07:00 at 5% with everything in dim red. A tap leaves it, and so does unplugging. It also gives way to a dialog, menu or sheet that opens over it. A toast shows on top without leaving. People can turn it off under Settings > Display > Standby.
+
+An app with `ambient = true` in `[permissions]` can post one card there, for weather, a calendar entry, an alarm and so on:
+
+```c
+t5_ambient_card_t card = { .expires_s = 3 * 3600 };       /* 0: until cleared */
+snprintf(card.icon, sizeof card.icon, "%s", MD_ICON_CLOUD);   /* one MD_ICON_* glyph */
+snprintf(card.title, sizeof card.title, "%s", "Bengaluru");  /* shown as "Bengaluru · <app name>" */
+snprintf(card.value, sizeof card.value, "%s", "29°");        /* large */
+snprintf(card.detail, sizeof card.detail, "%s", "Overcast, high 29°, low 20°");
+t5_ambient_set(&card);       /* any task; replaces this app's card */
+t5_ambient_clear();          /* takes it down */
+```
+
+The card is copied and kept after your app exits, and across a restart, until you clear it or it expires. It isn't shown once the app is removed. Set it when what it shows changes; there's no need to keep the app running. The OS keeps 8 cards (the least recently set goes when a ninth arrives), and standby shows the newest. Without the permission, `t5_ambient_set` returns `T5_ERR_DENIED`.
+
 ## Manifest
 
 ```toml
@@ -292,7 +337,7 @@ title = "Air Log"             # its text (default: name)
 fullscreen = false            # start in full screen
 ```
 
-Permission groups: `camera`, `mic`, `net`, `ble`, `ports`, `usb`, `storage`, `shared_read`, `shared_write`, `all_files`, `background_wake`, `system`. Calling a function whose group the manifest doesn't declare gets a stub that returns `T5_ERR_DENIED` (or `NULL`, `false`, `0`). Camera and mic also ask the person on first use (`t5_app_request_permission()`). **These are consent and correctness checks, not a security boundary:** a native app shares the OS address space and can reach the hardware directly. The installer says so.
+Permission groups: `camera`, `mic`, `net`, `ble`, `ports`, `usb`, `storage`, `shared_read`, `shared_write`, `all_files`, `background_wake`, `system`, `ambient`. Calling a function whose group the manifest doesn't declare gets a stub that returns `T5_ERR_DENIED` (or `NULL`, `false`, `0`). Camera and mic also ask the person on first use (`t5_app_request_permission()`). **These are consent and correctness checks, not a security boundary:** a native app shares the OS address space and can reach the hardware directly. The installer says so.
 
 ## Stability
 

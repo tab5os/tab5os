@@ -49,6 +49,33 @@ typedef struct {
 } shell_activity_t;
 int shell_sys_activities(shell_activity_t *out, int max);
 
+/* ---- the standby screen (standby.c) ---- */
+/* An app's card (t5_ambient_set), with the app's name. */
+typedef struct {
+    char icon[T5_APP_ICON_LEN];
+    char title[32];
+    char value[24];
+    char detail[64];
+    char who[T5_APP_NAME_LEN];
+} shell_card_t;
+/* Unexpired cards, the most recently set first. */
+int shell_sys_cards(shell_card_t *out, int max);
+/* The active media session (t5_media_now). */
+typedef struct {
+    bool active, playing;
+    char title[64], artist[64];
+    char who[T5_APP_NAME_LEN];
+    uint32_t position_ms, duration_ms;
+} shell_media_t;
+bool shell_sys_media(shell_media_t *out);
+/* A command for the active session. */
+typedef enum { SHELL_MEDIA_PREVIOUS, SHELL_MEDIA_TOGGLE, SHELL_MEDIA_NEXT } shell_media_cmd_t;
+void shell_sys_media_cmd(shell_media_cmd_t cmd);
+/* Standby on: hold the screen awake and cap the backlight at percent; off:
+ * release both. */
+void shell_sys_standby_hold(bool on, int percent);
+bool shell_sys_standby_enabled(void);
+
 /* One entry of the app registry (t5_app_entry_t on the device). */
 typedef struct {
     char id[T5_APP_ID_LEN];

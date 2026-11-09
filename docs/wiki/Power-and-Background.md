@@ -18,6 +18,8 @@ In low-power mode, at 10% battery or by choice, Dim is 15 s, Screen off is 60 s,
 
 The person picks the profile, and on USB power idle soft off doesn't happen.
 
+On USB power, reaching Dim shows the standby screen (unless it's turned off in Settings). It holds a screen wake lock, so the screen stays on with the backlight capped at 20% (5% at night) instead of turning off, until a tap or unplugging. See [Standby](../sdk.md#standby).
+
 ## Wake locks
 
 ```c

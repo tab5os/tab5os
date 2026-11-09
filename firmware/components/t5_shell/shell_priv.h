@@ -52,6 +52,16 @@ void bars_reset(void);
 bool shell_fullscreen(void);
 /* activity.c (device): the activities apps posted; app_name fills who. */
 int shell_activity_list(shell_activity_t *out, int max, const char *(*app_name)(void *app, char *buf, size_t n));
+/* standby.c */
+void standby_show(void);
+void standby_hide(void);
+bool standby_shown(void);
+void standby_tick(void);              /* once a second from the shell's timer */
+void standby_reset(void);
+/* ambient.c (device): app cards, newest first; name fills who from an app id. */
+/* Cards newest first; name() fills in the app's name and says whether it
+ * is still installed (a removed app's card is left out). */
+int ambient_list(shell_card_t *out, int max, bool (*name)(const char *id, char *buf, size_t n));
 /* qs.c */
 void qs_open(void);
 void qs_close(void);

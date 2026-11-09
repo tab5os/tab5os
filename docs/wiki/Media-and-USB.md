@@ -46,6 +46,10 @@ Write from a task, since `t5_audio_out_write` blocks until there's room. That al
 
 Files follow your app's file rules, and decoders and players close when the app exits (4 per app). `audio wav /sd/t.wav 2 440` and `audio file /sd/t.wav` on the console make and play a test file; `audio duck` measures the ducking.
 
+## Media sessions
+
+A player app opens a media session (`t5_media_session_open`), publishes what is playing with `_set_info` and `_set_state`, and reads commands with `_next` on a task of its own. The standby screen's music card shows the active session and sends it play, pause, next and previous. The session doesn't play anything itself; your app does, and it reports back with `_set_state`. The details are in the [SDK guide](../sdk.md#media-sessions), and `apps/examples/music` is a complete player. On the console, `media` shows the active session, and `media play`, `pause`, `toggle`, `next`, `prev` and `stop` send it commands.
+
 ## Microphone
 
 Declare `mic = true`, and [ask at run time](Manifest-and-Packaging.md#permissions-the-person-is-asked-for).

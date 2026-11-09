@@ -28,12 +28,14 @@
 #include "freertos/task.h"
 #include "t5_audio/audio.h"
 #include "t5_audio/decode.h"
+#include "t5_audio/media_sys.h"
 #include "t5_camera/camera.h"
 #include "t5_core/os.h"
 #include "t5_display/shot.h"
 #include "t5_dev/control.h"
 #include "t5_power/power.h"
 #include "t5_shell/shell.h"
+#include "t5_shell/standby.h"
 #include "t5_app/apps.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_usb/usb.h"
@@ -69,7 +71,52 @@ static int cmd_shell(int argc, char **argv)
         printf("%s\n", t5_err_str(e));
         return e != T5_OK;
     }
-    printf("usage: shell home | qs [off] | toast <text> | launch <id> [arg]\n");
+    if (argc >= 3 && !strcmp(argv[1], "standby")) {
+        const char *c = argv[2];
+        if (!strcmp(c, "enable") || !strcmp(c, "disable")) {
+            t5_shell_set_standby_enabled(!strcmp(c, "enable"));
+            return 0;
+        }
+        t5_power_user_activity();
+        t5_err_t e = t5_shell_standby(!strcmp(c, "on"));
+        printf("%s\n", t5_err_str(e));
+        return e != T5_OK;
+    }
+    if (argc == 2 && !strcmp(argv[1], "standby")) {
+        printf("standby %s, %s\n", t5_shell_standby_enabled() ? "enabled" : "disabled",
+               t5_shell_standby_shown() ? "shown" : "not shown");
+        return 0;
+    }
+    printf("usage: shell home | qs [off] | toast <text> | launch <id> [arg] | standby [on|off|enable|disable]\n");
+    return 1;
+}
+
+/* ---- media sessions ------------------------------------------------------------------ */
+static int cmd_media(int argc, char **argv)
+{
+    if (argc == 1) {
+        t5_media_now_t m;
+        if (!t5_media_now(&m)) {
+            printf("no media session\n");
+            return 0;
+        }
+        static const char *st[] = { "stopped", "playing", "paused" };
+        printf("%s: %s, \"%s\" by \"%s\", %u / %u ms\n", m.app_id, st[m.state], m.info.title, m.info.artist,
+               (unsigned)m.position_ms, (unsigned)m.info.duration_ms);
+        return 0;
+    }
+    static const struct { const char *name; t5_media_cmd_type_t type; } cmds[] = {
+        { "play", T5_MEDIA_CMD_PLAY }, { "pause", T5_MEDIA_CMD_PAUSE }, { "toggle", T5_MEDIA_CMD_TOGGLE },
+        { "next", T5_MEDIA_CMD_NEXT }, { "prev", T5_MEDIA_CMD_PREVIOUS }, { "stop", T5_MEDIA_CMD_STOP },
+    };
+    for (size_t i = 0; i < sizeof cmds / sizeof cmds[0]; i++) {
+        if (!strcmp(argv[1], cmds[i].name)) {
+            t5_err_t e = t5_media_command(&(t5_media_cmd_t){ .type = cmds[i].type });
+            printf("%s\n", t5_err_str(e));
+            return e != T5_OK;
+        }
+    }
+    printf("usage: media [play | pause | toggle | next | prev | stop]\n");
     return 1;
 }
 
@@ -575,6 +622,8 @@ void diag_register_media(void)
         { .command = "shot", .help = "Screen as base64 RGB565", .hint = "[div]", .func = cmd_shot },
         { .command = "shell", .help = "Shell: home, quick settings, toast, launch", .hint = "[home|qs|toast|launch]",
           .func = cmd_shell },
+        { .command = "media", .help = "The active media session: state, commands", .hint = "[play|pause|next|...]",
+          .func = cmd_media },
         { .command = "audio", .help = "Audio: state, volume, tones, play/record tests",
           .hint = "[vol|mute|sounds|sound|tone|play|rec]", .func = cmd_audio },
         { .command = "cam", .help = "Camera: open, stats, photo, record, snapshot",

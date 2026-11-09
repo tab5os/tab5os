@@ -102,6 +102,8 @@ enum T5_DIS_ACT_WARN = size=4
 enum T5_EV_ANY = size=4
 enum T5_IMU_OFF = size=4
 enum T5_LOCK_SCREEN = size=4
+enum T5_MEDIA_CMD_PLAY = size=4
+enum T5_MEDIA_STOPPED = size=4
 enum T5_MODE_I2C = size=4
 enum T5_MQTT_EV_MESSAGE = size=4
 enum T5_NET_OFF = size=4
@@ -1161,6 +1163,16 @@ enumerator T5_LOCK_NET = 3
 enumerator T5_LOCK_RAIL = 4
 enumerator T5_LOCK_SCREEN = 0
 enumerator T5_LOCK_TYPE_COUNT = 5
+enumerator T5_MEDIA_CMD_NEXT = 3
+enumerator T5_MEDIA_CMD_PAUSE = 1
+enumerator T5_MEDIA_CMD_PLAY = 0
+enumerator T5_MEDIA_CMD_PREVIOUS = 4
+enumerator T5_MEDIA_CMD_SEEK = 6
+enumerator T5_MEDIA_CMD_STOP = 5
+enumerator T5_MEDIA_CMD_TOGGLE = 2
+enumerator T5_MEDIA_PAUSED = 2
+enumerator T5_MEDIA_PLAYING = 1
+enumerator T5_MEDIA_STOPPED = 0
 enumerator T5_MODE_ADC = 5
 enumerator T5_MODE_COUNT = 7
 enumerator T5_MODE_GPIO = 3
@@ -1196,6 +1208,7 @@ enumerator T5_PANEL_ST7121 = 3
 enumerator T5_PANEL_ST7123 = 2
 enumerator T5_PANEL_UNKNOWN = 0
 enumerator T5_PERM_ALL_FILES = 2048
+enumerator T5_PERM_AMBIENT = 4096
 enumerator T5_PERM_BACKGROUND_WAKE = 128
 enumerator T5_PERM_BLE = 8
 enumerator T5_PERM_CAMERA = 1
@@ -2923,6 +2936,7 @@ macro T5_MANIFEST_FUNC_LEN = 32
 macro T5_MANIFEST_MAX_HEAP_KB = (32u * 1024u)
 macro T5_MANIFEST_MAX_PORTS = 8
 macro T5_MANIFEST_PORT_LEN = 16
+macro T5_MEDIA_TEXT_LEN = 64
 macro T5_MODBUS_FN_READ_COILS = 0x01
 macro T5_MODBUS_FN_READ_DISCRETE = 0x02
 macro T5_MODBUS_FN_READ_HOLDING = 0x03
@@ -2959,7 +2973,7 @@ macro T5_PANEL_H = T5_PANEL_NATIVE_H
 macro T5_PANEL_NATIVE_H = 1280
 macro T5_PANEL_NATIVE_W = 720
 macro T5_PANEL_W = T5_PANEL_NATIVE_W
-macro T5_PERM_ALL = 0xfffu
+macro T5_PERM_ALL = 0x1fffu
 macro T5_POLL_ERR = (1u << 2)
 macro T5_POLL_IN = (1u << 0)
 macro T5_POLL_OUT = (1u << 1)
@@ -3534,6 +3548,7 @@ typedef size_t = unsigned int
 typedef socklen_t = u32_t
 typedef ssize_t = _ssize_t
 typedef suseconds_t = __suseconds_t
+typedef t5_ambient_card_t = struct{icon@+0:char[8]; title@+8:char[32]; value@+40:char[24]; detail@+64:char[64]; expires_s@+128:uint32_t}
 typedef t5_app_desc_t = struct{api@+0:uint32_t; on_create@+4:fn(t5_app_t *) -> void *; on_resume@+8:fn(t5_app_t *) -> void *; on_suspend@+12:fn(t5_app_t *) -> void *; on_destroy@+16:fn(t5_app_t *) -> void *; on_rotate@+20:fn(t5_app_t *, int) -> void *; on_alarm@+24:fn(t5_app_t *) -> void *}
 typedef t5_app_entry_t = struct{id@+0:char[64]; name@+64:char[48]; version@+112:char[16]; builtin@+128:_Bool; running@+129:_Bool; autolaunch_blocked@+130:_Bool; crashes@+132:uint16_t; icon@+134:char[8]; perms@+144:uint32_t}
 typedef t5_app_info_t = struct{entry@+0:t5_app_entry_t; install_dir@+148:char[192]; data_dir@+340:char[192]; install_bytes@+536:uint64_t; data_bytes@+544:uint64_t; on_sd@+552:_Bool; install_time@+560:int64_t; granted@+568:uint32_t; denied@+572:uint32_t; crashes_total@+576:uint16_t; last_crash_kind@+578:uint8_t; last_crash_time@+584:int64_t; has_dump@+592:_Bool; dump_path@+593:char[192]; runtime@+785:char[12]}
@@ -3576,6 +3591,10 @@ typedef t5_httpd_cfg_t = struct{max_clients@+0:int; max_body@+4:size_t; timeout_
 typedef t5_imu_accel_t = struct{x@+0:int16_t; y@+2:int16_t; z@+4:int16_t}
 typedef t5_imu_status_t = enum{T5_IMU_OFF}
 typedef t5_lock_type_t = enum{T5_LOCK_SCREEN}
+typedef t5_media_cmd_t = struct{type@+0:t5_media_cmd_type_t; position_ms@+4:uint32_t}
+typedef t5_media_cmd_type_t = enum{T5_MEDIA_CMD_PLAY}
+typedef t5_media_info_t = struct{title@+0:char[64]; artist@+64:char[64]; album@+128:char[64]; duration_ms@+192:uint32_t}
+typedef t5_media_state_t = enum{T5_MEDIA_STOPPED}
 typedef t5_modbus_t = struct{port@+0:t5_port_t *; timeout_ms@+4:uint32_t; exception@+8:uint8_t; last_us@+16:int64_t}
 typedef t5_mqtt_cfg_t = struct{uri@+0:const char *; client_id@+4:const char *; username@+8:const char *; password@+12:const char *; keepalive_s@+16:uint16_t; will_topic@+20:const char *; will_msg@+24:const void *; will_len@+28:size_t; will_qos@+32:uint8_t; will_retain@+33:_Bool; flags@+36:uint32_t; ca_pem@+40:const char *; cert_pem@+44:const char *; key_pem@+48:const char *; max_msg@+52:size_t; timeout_ms@+56:uint32_t}
 typedef t5_mqtt_ev_type_t = enum{T5_MQTT_EV_MESSAGE}

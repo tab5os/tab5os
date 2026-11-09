@@ -9,6 +9,7 @@ set(T5_SHELL_LVGL_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/shell.c
     ${CMAKE_CURRENT_LIST_DIR}/statusbar.c
     ${CMAKE_CURRENT_LIST_DIR}/bars.c
+    ${CMAKE_CURRENT_LIST_DIR}/standby.c
     ${CMAKE_CURRENT_LIST_DIR}/qs.c
     ${CMAKE_CURRENT_LIST_DIR}/keyboard.c
     ${CMAKE_CURRENT_LIST_DIR}/gesture.c

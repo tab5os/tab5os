@@ -22,6 +22,7 @@ const t5_perm_info_t t5_perms[] = {
     {T5_PERM_ALL_FILES, "all_files", true},
     {T5_PERM_BACKGROUND_WAKE, "background_wake", false},
     {T5_PERM_SYSTEM, "system", false},
+    {T5_PERM_AMBIENT, "ambient", false},
 };
 const size_t t5_perm_count = sizeof t5_perms / sizeof t5_perms[0];
 

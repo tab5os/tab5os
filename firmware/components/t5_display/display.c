@@ -9,6 +9,7 @@ static bool s_ready, s_asleep, s_blank;
 static bool s_hold = true;    /* backlight held off until there's something to show */
 static int s_brightness = 80;
 static int s_dim = -1;
+static int s_standby = -1;        /* the standby screen's cap, apart from the power states' */
 static uint16_t *s_fb;                      /* buffer on screen or queued */
 static uint16_t *s_fbs[T5_DISPLAY_FBS];
 static volatile int s_scanout, s_queued;
@@ -56,7 +57,8 @@ int t5_display_effective_brightness(void)
     if (!s_ready || s_asleep || s_blank || s_hold) {
         return 0;
     }
-    return (s_dim >= 0 && s_dim < s_brightness) ? s_dim : s_brightness;
+    int b = (s_dim >= 0 && s_dim < s_brightness) ? s_dim : s_brightness;
+    return (s_standby >= 0 && s_standby < b) ? s_standby : b;
 }
 
 static t5_err_t apply_backlight(void)
@@ -83,6 +85,13 @@ t5_err_t t5_display_dim(int percent)
 {
     if (percent > 100) percent = 100;
     s_dim = percent < 0 ? -1 : percent;
+    return apply_backlight();
+}
+
+t5_err_t t5_display_standby_cap(int percent)
+{
+    if (percent > 100) percent = 100;
+    s_standby = percent < 0 ? -1 : percent;
     return apply_backlight();
 }
 
@@ -212,6 +221,7 @@ void t5_display_reset_for_test(void)
     s_asleep = false;
     s_blank = false;
     s_dim = -1;
+    s_standby = -1;
     s_fb = NULL;
     for (int i = 0; i < T5_DISPLAY_FBS; i++) s_fbs[i] = NULL;
     s_scanout = s_queued = 0;

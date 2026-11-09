@@ -276,4 +276,5 @@ The **gesture bar** is a handle in a 16 dp strip at the bottom of every app scre
 | `t5_shell_set_app_bar(shown)`, `t5_shell_set_title(text)`, `t5_shell_app_bar()` | The app bar |
 | `t5_shell_get_insets(&in)` | What the bars take, in dp; `T5_EV_UI_INSETS` when it changes |
 | `t5_shell_activity_start/update/end` | An ongoing activity in the status bar and quick settings ([SDK guide](../sdk.md#status-bar-and-activities)) |
+| `t5_ambient_set(&card)`, `t5_ambient_clear()` | Your app's card on the standby screen, which shows on USB power when the device dims. Needs `ambient = true` ([SDK guide](../sdk.md#standby)) |
 

@@ -23,6 +23,7 @@
 #include "md/md_diag.h"
 #include "md/md_icons.h"
 #include "sim.h"
+#include "t5_shell/standby.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_shell/shell.h"
 #include "shell_priv.h"
@@ -63,7 +64,7 @@ static void run_virtual(uint32_t ms)
 }
 
 typedef enum { SCENE_GATE, SCENE_GATE_DIALOG, SCENE_LAUNCHER, SCENE_QS, SCENE_WIDGETS, SCENE_DRAWER, SCENE_MENU, SCENE_APPS,
-               SCENE_APP_BAR, SCENE_FULLSCREEN } scene_t;
+               SCENE_APP_BAR, SCENE_FULLSCREEN, SCENE_STANDBY } scene_t;
 
 typedef struct {
     const char *name;
@@ -135,6 +136,8 @@ static int shots(const char *dir, const char *check, const char *update)
         { "shell_appbar_land", T5_ROT_90, SCENE_APP_BAR },
         { "shell_appbar_port", T5_ROT_0, SCENE_APP_BAR },
         { "shell_fullscreen_land", T5_ROT_90, SCENE_FULLSCREEN },
+        { "shell_standby_land", T5_ROT_90, SCENE_STANDBY },
+        { "shell_standby_port", T5_ROT_0, SCENE_STANDBY },
     };
     sim_fixed_time = true;
     s_virtual = true;
@@ -171,6 +174,7 @@ static int shots(const char *dir, const char *check, const char *update)
             if (s->scene == SCENE_WIDGETS) sim_show_widgets();
             if (s->scene == SCENE_APP_BAR) sim_show_app(true, false);
             if (s->scene == SCENE_FULLSCREEN) sim_show_app(false, true);   /* the handle peeks at first */
+            if (s->scene == SCENE_STANDBY) T5_IGNORE(t5_shell_standby(true));
             if (s->scene == SCENE_APPS) {
                 shell_note_launch(T5_APP_ID_CAMERA);
                 shell_note_launch(T5_APP_ID_FILES);

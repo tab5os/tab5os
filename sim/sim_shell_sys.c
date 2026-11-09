@@ -146,6 +146,47 @@ void shell_sys_insets_changed(void)
 {
 }
 
+/* The standby screen's content in screenshots: a song playing, a weather card. */
+int shell_sys_cards(shell_card_t *out, int max)
+{
+    if (max < 1) return 0;
+    memset(out, 0, sizeof *out);
+    snprintf(out->icon, sizeof out->icon, "%s", MD_ICON_WB_CLOUDY);
+    snprintf(out->title, sizeof out->title, "Weather");
+    snprintf(out->value, sizeof out->value, "21\xc2\xb0");
+    snprintf(out->detail, sizeof out->detail, "Cloudy, high 24\xc2\xb0, low 14\xc2\xb0");
+    snprintf(out->who, sizeof out->who, "Weather");
+    return 1;
+}
+
+bool shell_sys_media(shell_media_t *out)
+{
+    memset(out, 0, sizeof *out);
+    out->active = out->playing = true;
+    snprintf(out->title, sizeof out->title, "Clair de lune");
+    snprintf(out->artist, sizeof out->artist, "Claude Debussy");
+    snprintf(out->who, sizeof out->who, "Music");
+    out->position_ms = 95000;
+    out->duration_ms = 300000;
+    return true;
+}
+
+void shell_sys_media_cmd(shell_media_cmd_t cmd)
+{
+    (void)cmd;
+}
+
+void shell_sys_standby_hold(bool on, int percent)
+{
+    (void)on;
+    (void)percent;
+}
+
+bool shell_sys_standby_enabled(void)
+{
+    return true;
+}
+
 /* The activities a screenshot shows: one an app posted, with progress, and
  * an app working in the background. */
 int shell_sys_activities(shell_activity_t *out, int max)

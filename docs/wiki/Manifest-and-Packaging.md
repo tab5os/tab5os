@@ -64,6 +64,7 @@ Declare only what you use. People see the list at install.
 | `all_files` | bool | All of `/sd` and `/usb`, and `/data/user`. Never OS files or other apps' files | **Yes** |
 | `background_wake` | bool | `t5_app_schedule_alarm`. Also needs `[background]` | No |
 | `system` | bool | App list, launching others, per-app power, charge history | No |
+| `ambient` | bool | A card on the standby screen (`t5_ambient_set`) | No |
 
 Port names: `grove`, `mbus.spi`, `mbus.uart`, `mbus.debug`, `mbus.i2c`, `mbus.g2` and the other M5-Bus single pins, `ext`, `rs485`, `stamp`.
 

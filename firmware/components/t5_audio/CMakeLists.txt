@@ -3,7 +3,7 @@
 # esp_codec_dev and I2S.
 include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS ${T5_AUDIO_PORTABLE_SRCS} "audio.c" "audio_hw.c" "decode.c"
+    SRCS ${T5_AUDIO_PORTABLE_SRCS} "audio.c" "audio_hw.c" "decode.c" "media.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core

@@ -34,8 +34,9 @@ enum { /* permission groups, bit flags */
     T5_PERM_SHARED_READ = 1u << 9,      /* the shared folders, asked at first use */
     T5_PERM_SHARED_WRITE = 1u << 10,    /* ...and changing them */
     T5_PERM_ALL_FILES = 1u << 11,       /* all of /sd and /usb, never OS or other apps' files */
+    T5_PERM_AMBIENT = 1u << 12,         /* a card on the standby screen (t5_ambient_*) */
 };
-#define T5_PERM_ALL 0xfffu
+#define T5_PERM_ALL 0x1fffu
 
 /* One row per permission group: its [permissions] key and whether the person
  * is asked on first use (the rest are granted by installing the app). */

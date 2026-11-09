@@ -48,6 +48,9 @@ t5_err_t t5_display_set_backlight_freq(uint32_t hz);
  *          brightness; -1 removes the cap. Used by Dim and low-power mode. */
 t5_err_t t5_display_blank(bool blank);
 t5_err_t t5_display_dim(int percent);
+/* A second cap for the standby screen, which the power states don't touch
+ * (Dim and waking set the first). -1 removes it. */
+t5_err_t t5_display_standby_cap(int percent);
 /* The backlight level actually applied (0 when asleep or blanked). */
 int t5_display_effective_brightness(void);
 

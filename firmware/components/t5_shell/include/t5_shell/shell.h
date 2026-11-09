@@ -76,6 +76,26 @@ t5_err_t t5_shell_activity_start(const char *icon, const char *text, t5_shell_ac
 t5_err_t t5_shell_activity_update(t5_shell_activity_t *a, const char *text, int percent);
 t5_err_t t5_shell_activity_end(t5_shell_activity_t *a);
 
+/* ---- App API: a card on the standby screen (needs ambient) -------------------
+ *
+ * While the Tab5 charges and sits idle, the shell shows the standby screen:
+ * a large clock and up to two cards. One is the music card, drawn by the
+ * OS from the active media session (t5_audio/media.h). The other is the
+ * most recently updated app card, set here: weather, the next alarm, a
+ * calendar entry, a sensor. Each app has one card; setting it again
+ * replaces it. It stays (across the app's exit and a restart) until the app
+ * clears it or it expires, so an app that updates it from its background
+ * alarm keeps it current without running. Any task. */
+typedef struct {
+    char icon[8];             /* one MD_ICON_* glyph, "" for the app's */
+    char title[32];           /* "Weather", "Next alarm" */
+    char value[24];           /* the big line: "21°", "07:30" */
+    char detail[64];          /* "Cloudy, high 24°" */
+    uint32_t expires_s;       /* seconds from now it goes; 0 = until cleared */
+} t5_ambient_card_t;
+t5_err_t t5_ambient_set(const t5_ambient_card_t *card);
+t5_err_t t5_ambient_clear(void);
+
 /* A snackbar from any task (copied). */
 t5_err_t t5_shell_toast(const char *text);
 /* Open or close quick settings, go home. */

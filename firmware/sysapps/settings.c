@@ -16,6 +16,7 @@
 #include "t5/power.h"
 #include "t5/shell.h"
 #include "t5_shell/accent.h"
+#include "t5_shell/standby.h"
 #include "t5/storage.h"
 #include "t5/sys.h"
 #include "t5/system.h"
@@ -361,6 +362,11 @@ static void autorot_toggle(bool on)
     sa_report(t5_ui_set_follows_board(on), "change auto-rotate");
 }
 
+static void standby_toggle(bool on)
+{
+    t5_shell_set_standby_enabled(on);
+}
+
 static void stats_toggle(bool on)
 {
     t5_ui_show_stats(on);
@@ -387,6 +393,9 @@ static void page_display(void)
     lv_obj_t *body = sa_push(&s_nav, "Display");
     md_section_create(body, "Brightness");
     slider_row(body, MD_ICON_BRIGHTNESS_6, T5_DISPLAY_BRIGHTNESS_MIN, 100, t5_display_brightness(), bright_changed);
+    md_section_create(body, "Standby");
+    switch_row(body, MD_ICON_NIGHTS_STAY, "Standby while charging",
+               "A clock, music and app cards instead of dimming", t5_shell_standby_enabled(), standby_toggle);
     md_section_create(body, "Rotation");
     switch_row(body, MD_ICON_SCREEN_ROTATION, "Auto-rotate", "Off keeps the current orientation, across reboots",
                t5_ui_follows_board(), autorot_toggle);

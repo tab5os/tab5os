@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "shell_priv.h"
+#include "t5_shell/standby.h"
 #include "t5_ui/t5_ui.h"
 
 static bool s_ready;
@@ -177,6 +178,7 @@ static void tick(lv_timer_t *t)
     (void)t;
     statusbar_update();
     launcher_tick();
+    standby_tick();
 }
 
 static void app_screen_deleted(lv_event_t *e)
@@ -399,6 +401,22 @@ t5_err_t t5_shell_home(void)
     return t5_ui_async(home_async, NULL);
 }
 
+static void standby_async(void *p)
+{
+    if (p) standby_show();
+    else standby_hide();
+}
+
+t5_err_t t5_shell_standby(bool on)
+{
+    return on_ui(standby_async, on ? (void *)1 : NULL);
+}
+
+bool t5_shell_standby_shown(void)
+{
+    return standby_shown();
+}
+
 void shell_input_added(void)
 {
     if (!s_ready) return;            /* the chrome attaches every device when it is built */
@@ -429,6 +447,7 @@ void shell_reset(void)
     s_inset_top = s_inset_bottom = 0;
     memset(&s_recents, 0, sizeof s_recents);
     bars_reset();
+    standby_reset();
     launcher_reset();
     statusbar_reset();
     qs_reset();

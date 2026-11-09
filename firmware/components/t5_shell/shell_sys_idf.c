@@ -8,6 +8,7 @@
 #include "t5_app/apps.h"
 #include "t5_core/event.h"
 #include "t5_audio/audio.h"
+#include "t5_audio/media_sys.h"
 #include "t5_battery/battery.h"
 #include "t5_camera/camera.h"
 #include "t5_display/t5_display.h"
@@ -22,21 +23,27 @@
 #include "t5_ui/t5_ui.h"
 #include "t5_usb/usb.h"
 #include "t5_shell/accent.h"
+#include "t5_shell/standby.h"
 #include "shell_priv.h"
 #include "t5_core/log.h"
 
 static const char *TAG = "t5.shell";
 
-/* An app's name from its id (the id itself if it isn't installed). */
-static void app_name_of(const char *id, char *out, size_t n)
+/* An app's name from its id (the id itself if it isn't installed, and
+ * then false). */
+static bool app_name_of(const char *id, char *out, size_t n)
 {
     snprintf(out, n, "%s", id);
+    bool found = false;
     t5_app_entry_t *e = calloc(T5_APPS_MAX, sizeof *e);
     int k = e ? t5_apps_list(e, T5_APPS_MAX) : 0;
     for (int i = 0; i < k; i++) {
-        if (!strcmp(e[i].id, id) && e[i].name[0]) snprintf(out, n, "%s", e[i].name);
+        if (strcmp(e[i].id, id)) continue;
+        found = true;
+        if (e[i].name[0]) snprintf(out, n, "%s", e[i].name);
     }
     free(e);
+    return found;
 }
 
 static const char *ctx_name(void *app, char *buf, size_t n)
@@ -116,6 +123,75 @@ int shell_sys_activities(shell_activity_t *out, int max)
         act(&out[n++], MD_ICON_ALARM, name, text, -1);
     }
     return n + shell_activity_list(out + n, max - n, ctx_name);
+}
+
+/* ---- the standby screen ---- */
+static bool name_fill(const char *id, char *out, size_t n)
+{
+    return app_name_of(id, out, n);
+}
+
+int shell_sys_cards(shell_card_t *out, int max)
+{
+    return ambient_list(out, max, name_fill);
+}
+
+bool shell_sys_media(shell_media_t *out)
+{
+    memset(out, 0, sizeof *out);
+    t5_media_now_t m;
+    if (!t5_media_now(&m)) return false;
+    out->active = true;
+    out->playing = m.state == T5_MEDIA_PLAYING;
+    snprintf(out->title, sizeof out->title, "%s", m.info.title);
+    snprintf(out->artist, sizeof out->artist, "%s", m.info.artist);
+    app_name_of(m.app_id, out->who, sizeof out->who);
+    out->position_ms = m.position_ms;
+    out->duration_ms = m.info.duration_ms;
+    return true;
+}
+
+void shell_sys_media_cmd(shell_media_cmd_t cmd)
+{
+    static const t5_media_cmd_type_t map[] = {
+        [SHELL_MEDIA_PREVIOUS] = T5_MEDIA_CMD_PREVIOUS,
+        [SHELL_MEDIA_TOGGLE] = T5_MEDIA_CMD_TOGGLE,
+        [SHELL_MEDIA_NEXT] = T5_MEDIA_CMD_NEXT,
+    };
+    if ((unsigned)cmd >= sizeof map / sizeof map[0]) return;
+    t5_media_cmd_t c = { .type = map[cmd] };
+    T5_LOG_ON_ERR(TAG, t5_media_command(&c));
+}
+
+static t5_wakelock_t *s_standby_lock;
+
+void shell_sys_standby_hold(bool on, int percent)
+{
+    if (on && !s_standby_lock) s_standby_lock = t5_wakelock_acquire_system(T5_LOCK_SCREEN, "standby");
+    if (!on && s_standby_lock) {
+        t5_wakelock_release(s_standby_lock);
+        s_standby_lock = NULL;
+    }
+    T5_LOG_ON_ERR(TAG, t5_display_standby_cap(on ? percent : -1));
+}
+
+bool shell_sys_standby_enabled(void)
+{
+    return t5_shell_standby_enabled();
+}
+
+/* Dim while charging: standby instead. Unplugged: standby goes. */
+static void standby_power(t5_event_id_t id, const void *data, size_t len, void *arg)
+{
+    (void)len; (void)arg;
+    t5_battery_status_t b;
+    t5_battery_status(&b);
+    if (id == T5_EV_POWER_STATE) {
+        const t5_ev_power_t *e = data;
+        if (e && e->to == T5_PWR_DIM && b.usb && t5_shell_standby_enabled()) T5_LOG_ON_ERR(TAG, t5_shell_standby(true));
+    } else if (!b.usb && t5_shell_standby_shown()) {
+        T5_LOG_ON_ERR(TAG, t5_shell_standby(false));
+    }
 }
 
 void shell_sys_status(shell_status_t *o)
@@ -332,6 +408,8 @@ t5_err_t t5_shell_register(void)
 {
     t5_apps_set_home(&s_home);
     T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_USBC_MODE, usbc_event, NULL));
+    T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_POWER_STATE, standby_power, NULL));
+    T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_USB_POWER, standby_power, NULL));
     return t5_event_subscribe(T5_EV_UI_INPUT_ADDED, input_added, NULL);
 }
 

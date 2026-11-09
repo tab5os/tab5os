@@ -150,6 +150,7 @@ static const struct {
     { T5_PERM_SHARED_WRITE, "Change shared files", "change your photos, music and documents" },
     { T5_PERM_ALL_FILES, "Manage all files", "manage all files on your SD card and USB drives" },
     { T5_PERM_MIC, NULL, "use the microphone" },
+    { T5_PERM_AMBIENT, "Show a card on the standby screen", NULL },
 };
 
 const char *t5_perm_label(uint32_t perm_bit)
