@@ -27,7 +27,8 @@ bool t5_ble_adv_name(const uint8_t *adv, size_t len, char *out, size_t cap)
         if (l == 0 || i + 1 + l > len) break;
         uint8_t type = adv[i + 1];
         if ((type == 0x09 || (type == 0x08 && !found)) && cap) {
-            size_t n = l - 1 < cap - 1 ? l - 1 : cap - 1;
+            size_t name_len = (size_t)l - 1;          /* l >= 1: the type byte */
+            size_t n = name_len < cap - 1 ? name_len : cap - 1;
             memcpy(out, adv + i + 2, n);
             out[n] = 0;
             found = true;
