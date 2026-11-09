@@ -9,7 +9,8 @@
  *   from the bottom edge, up 40 dp -> home (in apps), or closes the
  *                                     quick settings, app drawer or file picker;
  *                                     in full screen a touch here shows the
- *                                     gesture bar's handle (bars.c)
+ *                                     gesture bar's handle while the finger
+ *                                     stays, and SHELL_PEEK_MS after (bars.c)
  *   anywhere on home, up 40 dp     -> the app drawer
  * A triggered swipe cancels the press, so the object under the finger
  * doesn't scroll or click.
@@ -58,6 +59,8 @@ static void poll(lv_timer_t *t)
         stop_poll();
         cancel_press(indev);
         qs_open();
+    } else if (s_edge == EDGE_BOTTOM && dy > -T5_DP(SWIPE_DP) && shell_fullscreen()) {
+        bars_handle_peek();                         /* stays while the finger rests on the edge */
     } else if (s_edge == EDGE_BOTTOM && dy < -T5_DP(SWIPE_DP)) {
         stop_poll();
         cancel_press(indev);

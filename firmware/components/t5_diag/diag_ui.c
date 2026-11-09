@@ -36,6 +36,7 @@
 #include "t5_ui/t5_ui.h"
 #include "t5_ui/ui_diag.h"
 #include "t5_shell/shell.h"
+#include "t5_core/event.h"
 #include "diag_priv.h"
 
 static void print_status(void)
@@ -395,6 +396,9 @@ static void tap_start(void *arg)
         s_tap_indev = lv_indev_create();
         lv_indev_set_type(s_tap_indev, LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(s_tap_indev, tap_read);
+        /* Like any pointer that joins later: the shell attaches its edge
+         * gestures (swipe home, quick settings, the gesture bar) to it. */
+        T5_IGNORE(t5_event_post(T5_EV_UI_INPUT_ADDED, NULL, 0));   /* without it only the gestures are missing */
     }
     s_tap_until = lv_tick_get() + ms;
 }

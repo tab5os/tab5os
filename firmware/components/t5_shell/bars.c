@@ -8,9 +8,10 @@
  *                actions never outlive its code.
  *   Gesture bar  a handle centred in a 16 dp strip at the bottom: swipe up
  *                from here to go home. The app's screen is padded clear of
- *                the strip. In full screen it is hidden; touching the bottom
- *                edge shows it for a moment (SHELL_PEEK_MS), and so does
- *                entering full screen, so the way out stays visible.
+ *                the strip. In full screen it is hidden; a finger on the
+ *                bottom edge shows it until SHELL_PEEK_MS after it lifts,
+ *                and entering full screen shows it for SHELL_PEEK_MS, so the
+ *                way out stays visible.
  *
  * Both live on lv_layer_top() behind everything else there (quick
  * settings, menus, dialogs, the keyboard). UI task only.
@@ -90,10 +91,11 @@ static void peek_end(lv_timer_t *t)
 {
     (void)t;
     s_peek = NULL;
-    if (s_handle && !s_handle_wanted) lv_obj_fade_out(s_handle, MD_DUR_DIALOG_OUT_MS, 0);
+    if (s_handle && !s_handle_wanted) lv_obj_set_hidden(s_handle, true);
 }
 
-/* shown: the handle sits in its strip (an app outside full screen). */
+/* shown: the handle sits in its strip (an app outside full screen), behind
+ * everything else on the top layer. */
 void bars_handle_show(bool shown)
 {
     handle_create();
@@ -102,30 +104,26 @@ void bars_handle_show(bool shown)
         lv_timer_delete(s_peek);
         s_peek = NULL;
     }
-    lv_anim_delete(s_handle, NULL);          /* a fade in progress */
-    lv_obj_set_style_opa(s_handle, LV_OPA_COVER, 0);
+    lv_obj_move_to_index(s_handle, 0);
     lv_obj_set_hidden(s_handle, !shown);
 }
 
-/* Full screen: show the handle over the app for SHELL_PEEK_MS. */
+/* Full screen: show the handle over the app for SHELL_PEEK_MS, in front of
+ * whatever else is on the top layer. */
 void bars_handle_peek(void)
 {
     handle_create();
     if (s_handle_wanted) return;
-    /* Hidden, or faded out (lv_obj_fade_out leaves it at opacity 0). */
-    if (lv_obj_is_hidden(s_handle) || lv_obj_get_style_opa(s_handle, 0) != LV_OPA_COVER) {
-        lv_anim_delete(s_handle, NULL);
-        lv_obj_set_hidden(s_handle, false);
-        lv_obj_fade_in(s_handle, MD_DUR_DIALOG_IN_MS, 0);
-    }
+    void *saved = shell_sys_enter();
+    lv_obj_move_foreground(s_handle);
+    lv_obj_set_hidden(s_handle, false);
     if (s_peek) lv_timer_reset(s_peek);
     else {
-        void *saved = shell_sys_enter();
         s_peek = lv_timer_create(peek_end, SHELL_PEEK_MS, NULL);
         lv_timer_set_repeat_count(s_peek, 1);
         lv_timer_set_auto_delete(s_peek, true);
-        shell_sys_leave(saved);
     }
+    shell_sys_leave(saved);
 }
 
 void bars_reset(void)
