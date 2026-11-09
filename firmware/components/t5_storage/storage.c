@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -101,12 +102,29 @@ static void poll_task(void *arg)
     }
 }
 
+/* Uploads that never got installed (the transfer or the board died). Nothing
+ * in the temp folder outlives a boot. */
+static void clear_tmp(void)
+{
+    DIR *d = opendir(T5_TMP_DIR);
+    if (!d) return;
+    char p[160];
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_type != DT_REG) continue;
+        if (snprintf(p, sizeof p, T5_TMP_DIR "/%s", e->d_name) >= (int)sizeof p) continue;
+        remove(p);
+    }
+    closedir(d);
+}
+
 static void make_dirs(void)
 {
     /* EEXIST is fine. */
     mkdir(t5_sys_dir(), 0755);
     mkdir(T5_USER_DIR, 0755);
     mkdir(T5_TMP_DIR, 0755);
+    clear_tmp();
 }
 
 t5_err_t t5_storage_init(void)

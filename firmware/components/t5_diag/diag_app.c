@@ -302,6 +302,9 @@ static int cmd_app(int argc, char **argv)
         t5_pkg_dest_t dest = t5_apps_dest_parse(argc >= 4 ? argv[3] : NULL);
         char err[256] = "";
         t5_err_t e = t5_apps_install(argv[2], dest, NULL, err, sizeof err);
+        /* An upload (`app put`) is done with either way: /data is small. A
+         * package on the card stays. */
+        if (!strncmp(argv[2], T5_TMP_DIR "/", sizeof T5_TMP_DIR)) remove(argv[2]);
         printf("%s%s%s\n", t5_err_str(e), err[0] ? ": " : "", err);
         if (e == T5_OK) printf("%s\n", T5_NATIVE_APP_WARNING);
         return e != T5_OK;
