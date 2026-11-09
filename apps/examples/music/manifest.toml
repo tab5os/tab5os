@@ -1,0 +1,14 @@
+id = "com.t5.example.music"
+name = "Music"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+orientation = "any"
+description = "Plays WAV files and built-in tunes, and shows them on the standby screen"
+
+[permissions]
+shared_read = true
+
+[shell]
+app_bar = true

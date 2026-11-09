@@ -10,3 +10,4 @@ t5_app(rs485_console SRCS rs485_console/main.c MANIFEST rs485_console/manifest.t
 t5_app(weather SRCS weather/main.c weather/wx.c weather/json.c MANIFEST weather/manifest.toml)
 t5_app(ble_explorer SRCS ble_explorer/main.c MANIFEST ble_explorer/manifest.toml)
 t5_app(ui_gallery SRCS ui_gallery/main.c MANIFEST ui_gallery/manifest.toml)
+t5_app(music SRCS music/main.c MANIFEST music/manifest.toml)
