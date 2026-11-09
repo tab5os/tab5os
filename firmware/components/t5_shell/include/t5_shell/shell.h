@@ -10,6 +10,7 @@
  */
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include "t5_core/err.h"
 
 #ifdef __cplusplus
@@ -21,9 +22,36 @@ extern "C" {
  * shown. */
 t5_err_t t5_shell_register(void);
 
-/* App API (any task). Hide the status bar for the foreground app (camera,
- * games). Reset when the app leaves the foreground. */
+/* ---- App API: the foreground app's chrome ------------------------------------
+ *
+ *   status bar   24 dp at the top, always (except in full screen)
+ *   app bar      48 dp under it with the app's title: off unless the
+ *                manifest says [shell] app_bar = true or the app turns it on
+ *   gesture bar  16 dp at the bottom with a handle: swipe up from here to go
+ *                home
+ *
+ * The app's screen (t5_app_screen) is padded clear of them, so content
+ * built under it never sits beneath a bar. t5_shell_get_insets() says how
+ * much they take (dp), and T5_EV_UI_INSETS is posted when that changes.
+ *
+ * Full screen hides all three and the padding goes to 0. The swipes still
+ * work: touching the bottom edge shows the handle for a moment, and so does
+ * entering full screen. Everything resets when the app leaves the
+ * foreground. Any task, unless it says UI task. */
 t5_err_t t5_shell_set_fullscreen(bool on);
+bool t5_shell_fullscreen(void);
+t5_err_t t5_shell_set_app_bar(bool shown);
+/* The app bar's text. NULL goes back to the manifest's title (or name). */
+t5_err_t t5_shell_set_title(const char *title);
+/* The app bar, to add actions to (md_appbar_add_action), while it is shown.
+ * NULL otherwise, or off the UI task. It is deleted with the app's screen. */
+struct _lv_obj_t;
+struct _lv_obj_t *t5_shell_app_bar(void);
+typedef struct {
+    int32_t top, bottom, left, right;   /* dp */
+} t5_shell_insets_t;
+/* T5_ERR_STATE (and zeros) on the home screen. */
+t5_err_t t5_shell_get_insets(t5_shell_insets_t *out);
 /* A snackbar from any task (copied). */
 t5_err_t t5_shell_toast(const char *text);
 /* Open or close quick settings, go home. */

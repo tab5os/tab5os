@@ -8,6 +8,9 @@
 #include "t5_shell/shell.h"
 
 #define SHELL_STATUS_H_DP 24
+#define SHELL_APP_BAR_H_DP MD_APP_BAR_DENSE_DP   /* 48 */
+#define SHELL_GESTURE_H_DP 16                    /* the gesture bar's strip at the bottom */
+#define SHELL_PEEK_MS 2500                       /* the handle's showing in full screen */
 
 /* shell.c */
 void shell_chrome_init(void);          /* status bar, gestures, keyboard; once, UI task */
@@ -36,6 +39,17 @@ lv_obj_t *statusbar_create(void);
 void statusbar_update(void);
 void statusbar_set_hidden(bool hidden);
 void statusbar_set_in_app(bool in_app);
+/* bars.c: the app bar and the gesture bar */
+void bars_appbar_create(const char *title);
+void bars_appbar_delete(void);
+void bars_appbar_show(bool shown);
+void bars_appbar_title(const char *title);
+lv_obj_t *bars_appbar(void);           /* NULL unless shown */
+void bars_handle_show(bool shown);
+void bars_handle_peek(void);
+void bars_reset(void);
+/* shell.c: in an app, in full screen (the gesture bar peeks on an edge touch) */
+bool shell_fullscreen(void);
 /* qs.c */
 void qs_open(void);
 void qs_close(void);

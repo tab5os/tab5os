@@ -62,7 +62,8 @@ static void run_virtual(uint32_t ms)
     }
 }
 
-typedef enum { SCENE_GATE, SCENE_GATE_DIALOG, SCENE_LAUNCHER, SCENE_QS, SCENE_WIDGETS, SCENE_DRAWER, SCENE_MENU, SCENE_APPS } scene_t;
+typedef enum { SCENE_GATE, SCENE_GATE_DIALOG, SCENE_LAUNCHER, SCENE_QS, SCENE_WIDGETS, SCENE_DRAWER, SCENE_MENU, SCENE_APPS,
+               SCENE_APP_BAR, SCENE_FULLSCREEN } scene_t;
 
 typedef struct {
     const char *name;
@@ -131,6 +132,9 @@ static int shots(const char *dir, const char *check, const char *update)
         { "shell_menu_port", T5_ROT_0, SCENE_MENU },
         { "shell_apps_land", T5_ROT_90, SCENE_APPS },
         { "shell_apps_port", T5_ROT_0, SCENE_APPS },
+        { "shell_appbar_land", T5_ROT_90, SCENE_APP_BAR },
+        { "shell_appbar_port", T5_ROT_0, SCENE_APP_BAR },
+        { "shell_fullscreen_land", T5_ROT_90, SCENE_FULLSCREEN },
     };
     sim_fixed_time = true;
     s_virtual = true;
@@ -165,6 +169,8 @@ static int shots(const char *dir, const char *check, const char *update)
             run_virtual(500);
             if (s->scene == SCENE_QS) t5_shell_quick_settings(true);
             if (s->scene == SCENE_WIDGETS) sim_show_widgets();
+            if (s->scene == SCENE_APP_BAR) sim_show_app(true, false);
+            if (s->scene == SCENE_FULLSCREEN) sim_show_app(false, true);   /* the handle peeks at first */
             if (s->scene == SCENE_APPS) {
                 shell_note_launch(T5_APP_ID_CAMERA);
                 shell_note_launch(T5_APP_ID_FILES);
@@ -210,7 +216,10 @@ static int shots(const char *dir, const char *check, const char *update)
             }
             if (f) fclose(f);
         }
-        if (s->scene >= SCENE_LAUNCHER) shell_reset();
+        if (s->scene >= SCENE_LAUNCHER) {
+            shell_reset();
+            sim_shell_sys_reset();
+        }
         lv_display_delete(d);
         free(s_fb);
     }

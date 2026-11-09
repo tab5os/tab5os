@@ -51,6 +51,7 @@ MAX_HEAP_KB = _m("T5_MANIFEST_MAX_HEAP_KB")
 BG_MAX_SECONDS = _m("T5_MANIFEST_BG_MAX_SECONDS")
 TOP_KEYS = set(strings(MANIFEST_C, "s_top_keys") + strings(MANIFEST_C, "s_info_keys"))
 BG_KEYS = strings(MANIFEST_C, "s_bg_keys")
+SHELL_KEYS = strings(MANIFEST_C, "s_shell_keys")
 ORIENTATIONS = strings(MANIFEST_C, "s_orients")
 ENTRY_SYMBOL = define("t5_app/include/t5_app/app.h", "T5_APP_ENTRY_SYMBOL")
 PERM_BOOLS = {p.name for p in permissions() if p.name != "ports"}
@@ -144,7 +145,7 @@ def validate(text):
         raise PackError("manifest.toml: quoted keys are not supported on the device")
 
     for key, value in m.items():
-        if key in ("permissions", "background"):
+        if key in ("permissions", "background", "shell"):
             if not isinstance(value, dict):
                 raise PackError(f"{key}: must be a table")
             for k, v in value.items():
@@ -212,6 +213,14 @@ def validate(text):
         if entry is not None and not FUNC_RE.match(entry):
             raise PackError(f"background.entry: '{entry}' is not a function name")
         integer(bg, "max_seconds", 1, BG_MAX_SECONDS)
+
+    shell = m.get("shell", {})
+    for k, v in shell.items():
+        if k not in SHELL_KEYS:
+            raise PackError(f"unknown key 'shell.{k}'")
+        if k != "title" and not isinstance(v, bool):
+            raise PackError(f"shell.{k}: must be true or false")
+    string(shell, "title", False, _m("T5_APP_NAME_LEN") - 1)
     return m
 
 

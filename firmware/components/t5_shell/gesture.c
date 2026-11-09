@@ -7,7 +7,9 @@
  * is down (scrolling objects never see LVGL's own gesture events):
  *   from the top edge, down 40 dp  -> quick settings
  *   from the bottom edge, up 40 dp -> home (in apps), or closes the
- *                                     quick settings, app drawer or file picker
+ *                                     quick settings, app drawer or file picker;
+ *                                     in full screen a touch here shows the
+ *                                     gesture bar's handle (bars.c)
  *   anywhere on home, up 40 dp     -> the app drawer
  * A triggered swipe cancels the press, so the object under the finger
  * doesn't scroll or click.
@@ -86,8 +88,10 @@ static void indev_event(lv_event_t *e)
         int32_t h = lv_display_get_vertical_resolution(lv_display_get_default());
         stop_poll();
         if (s_start.y < T5_DP(EDGE_TOP_DP) && !qs_is_open()) s_edge = EDGE_TOP;
-        else if (s_start.y > h - T5_DP(EDGE_BOTTOM_DP) && (shell_in_app() || qs_is_open() || launcher_drawer_is_open()))
+        else if (s_start.y > h - T5_DP(EDGE_BOTTOM_DP) && (shell_in_app() || qs_is_open() || launcher_drawer_is_open())) {
             s_edge = EDGE_BOTTOM;
+            if (shell_fullscreen()) bars_handle_peek();   /* the gesture bar shows where to swipe */
+        }
         else if (!shell_in_app() && !qs_is_open() && !launcher_drawer_is_open() && obj &&
                  lv_obj_get_screen(obj) == launcher_get())   /* not a menu or dialog over it */
             s_edge = EDGE_HOME;

@@ -30,6 +30,7 @@ static int s_brightness = 80, s_volume = 60;
 static bool s_muted, s_low, s_locked, s_ble;
 static lv_obj_t *s_app_scr;
 static char s_cur[T5_APP_ID_LEN];
+static shell_chrome_t s_chrome;     /* the next launch's [shell] (sim_show_app) */
 
 void shell_sys_status(shell_status_t *o)
 {
@@ -94,6 +95,53 @@ void shell_sys_launch(const char *id, const char *arg)
 void sim_show_widgets(void)
 {
     open_stand_in(SIM_WIDGETS_PAGE);
+}
+
+/* An app as the SDK's ui_gallery would look: the shell's app bar (or full
+ * screen) over plain content, no page of its own. */
+void sim_show_app(bool app_bar, bool fullscreen)
+{
+    memset(&s_chrome, 0, sizeof s_chrome);
+    s_chrome.app_bar = app_bar;
+    s_chrome.fullscreen = fullscreen;
+    snprintf(s_chrome.title, sizeof s_chrome.title, "Air Log");
+    snprintf(s_cur, sizeof s_cur, "com.example.airlog");
+    if (s_app_scr) lv_obj_delete(s_app_scr);
+    s_app_scr = lv_obj_create(NULL);
+    shell_prepare(s_app_scr, s_cur);
+    shell_changed(s_cur);
+    lv_obj_set_flex_flow(s_app_scr, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_hor(s_app_scr, T5_DP(16), 0);
+    lv_obj_set_style_pad_row(s_app_scr, T5_DP(8), 0);
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *card = md_card_create(s_app_scr);
+        lv_obj_set_size(card, LV_PCT(100), LV_PCT(45));
+        md_label_create(card, i ? "Humidity 41%" : "CO2 612 ppm", MD_TYPE_HEADLINE5);
+    }
+    if (app_bar) md_appbar_add_action(t5_shell_app_bar(), MD_ICON_REFRESH, NULL, NULL);
+    lv_screen_load(s_app_scr);
+    memset(&s_chrome, 0, sizeof s_chrome);
+}
+
+/* Between screenshots: the display, and every object on it, is gone. */
+void sim_shell_sys_reset(void)
+{
+    s_app_scr = NULL;
+    s_cur[0] = 0;
+}
+
+void shell_sys_chrome(shell_chrome_t *out)
+{
+    *out = s_chrome;
+    if (!out->title[0]) {
+        for (int i = 0; i < NAPPS; i++) {
+            if (!strcmp(s_apps[i].id, s_cur)) snprintf(out->title, sizeof out->title, "%s", s_apps[i].name);
+        }
+    }
+}
+
+void shell_sys_insets_changed(void)
+{
 }
 
 bool shell_sys_dismiss_modal(void)

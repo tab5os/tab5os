@@ -212,6 +212,8 @@ def header_protos(dirs):
                     s = " ".join(stmt.split())
                     if not s or "typedef" in s or "static" in s or "=" in s:
                         continue
+                    if re.match(r"(return|else|case|goto)\b", s):
+                        continue             # a statement in an inline function's body
                     m = re.match(r"^(?:extern\s+)?([\w\s\*]+?)\b(\w+)\s*\((.*)\)\s*(?:LV_\w+(?:\([^)]*\))?\s*)*$", s)
                     if not m or m.group(2) in ("if", "while", "for", "return", "sizeof"):
                         continue

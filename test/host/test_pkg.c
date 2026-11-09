@@ -535,6 +535,24 @@ static void test_manifest_other_fields(void)
     TEST_ASSERT_EQUAL(30, m.bg_max_seconds);
 }
 
+static void manifest_edit(char *text, size_t n, const char *from, const char *to);
+
+/* [shell]: the app bar and full screen at launch. */
+static void test_manifest_shell(void)
+{
+    t5_manifest_t m;
+    char err[160], text[1024];
+    TEST_ASSERT_EQUAL(T5_OK, t5_manifest_parse(DESIGN_EXAMPLE, strlen(DESIGN_EXAMPLE), &m, err, sizeof err));
+    TEST_ASSERT_FALSE(m.app_bar);              /* off unless asked */
+    TEST_ASSERT_FALSE(m.fullscreen);
+    TEST_ASSERT_EQUAL_STRING("", m.title);
+    manifest_edit(text, sizeof text, NULL, "[shell]\napp_bar = true\ntitle = \"CO2\"\nfullscreen = true\n");
+    TEST_ASSERT_EQUAL_MESSAGE(T5_OK, t5_manifest_parse(text, strlen(text), &m, err, sizeof err), err);
+    TEST_ASSERT_TRUE(m.app_bar);
+    TEST_ASSERT_TRUE(m.fullscreen);
+    TEST_ASSERT_EQUAL_STRING("CO2", m.title);
+}
+
 static void test_manifest_mbus_ports(void)
 {
     const char *t = "id = \"org.example.bus\"\nname = \"Bus\"\nversion = \"1.0.0\"\napi = 1\n"
@@ -564,6 +582,9 @@ static void manifest_edit(char *text, size_t n, const char *from, const char *to
 static const struct {
     const char *from, *to, *needle;
 } s_bad_manifests[] = {
+    { NULL, "[shell]\napp_bar = \"yes\"\n", "shell.app_bar: must be true or false" },
+    { NULL, "[shell]\ncolour = 1\n", "unknown key 'shell.colour'" },
+    { NULL, "[shell]\ntitle = \"\"\n", "shell.title: must not be empty" },
     { "id = \"com.kanishka.airlog\"\n", "", "id: missing" },
     { "com.kanishka.airlog", "airlog", "reverse-DNS" },
     { "com.kanishka.airlog", "Com.Kanishka.Airlog", "reverse-DNS" },
@@ -640,6 +661,8 @@ static void test_manifest_rules_match_t5pack(void)
         "id = \"org.example.bus\"\nname = \"Bus\"\nversion = \"1.0.0\"\napi = 1\n"
         "runtime = \"native\"\nentry = \"app.elf\"\norientation = \"portrait\"\n"
         "[permissions]\nports = [\"mbus.i2c\", \"mbus.g2\"]\n",
+        "id = \"org.example.bar\"\nname = \"Bar\"\nversion = \"1.0.0\"\napi = 1\n"
+        "runtime = \"native\"\nentry = \"app.elf\"\n[shell]\napp_bar = true\ntitle = \"Bars\"\nfullscreen = false\n",
     };
     for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
         TEST_ASSERT_EQUAL_MESSAGE(T5_OK, t5_manifest_parse(good[i], strlen(good[i]), &m, err, sizeof err), err);
@@ -1027,6 +1050,7 @@ int main(void)
     RUN_TEST(test_manifest_design_example);
     RUN_TEST(test_manifest_other_fields);
     RUN_TEST(test_manifest_mbus_ports);
+    RUN_TEST(test_manifest_shell);
     RUN_TEST(test_manifest_errors);
     RUN_TEST(test_manifest_rules_match_t5pack);
     RUN_TEST(test_perm_names_and_versions);

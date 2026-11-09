@@ -823,6 +823,15 @@ void t5_apps_current(char *id, size_t n)
     apps_unlock();
 }
 
+bool t5_apps_fg_manifest(t5_manifest_t *out)
+{
+    apps_lock();
+    bool ok = s_fg != NULL;
+    if (ok) *out = s_fg->man;
+    apps_unlock();
+    return ok;
+}
+
 int t5_apps_list(t5_app_entry_t *out, int max)
 {
     int n = 0;

@@ -107,6 +107,9 @@ T5_MUST_CHECK t5_err_t t5_apps_launch_wait(const char *id, uint32_t timeout_ms);
 T5_MUST_CHECK t5_err_t t5_apps_exit_wait(uint32_t timeout_ms);
 /* Copies the foreground app's id, "" if the launcher is showing. */
 void t5_apps_current(char *id, size_t n);
+/* The foreground app's manifest (a built-in app's has its name and the
+ * defaults); false if the launcher is showing. Valid from home->prepare on. */
+bool t5_apps_fg_manifest(t5_manifest_t *out);
 
 /* The foreground app's tracked resources. */
 typedef struct {

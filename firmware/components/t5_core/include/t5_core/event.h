@@ -72,6 +72,8 @@ typedef enum {
     T5_EV_UI_ROTATE = 900,          /* the screen orientation changed */
     T5_EV_UI_STALL,                 /* the UI task missed its watchdog (payload: none) */
     T5_EV_UI_INPUT_ADDED,           /* an input device (USB keyboard, mouse) joined LVGL (payload: none) */
+    T5_EV_UI_INSETS,                /* the shell's bars changed what they take from the app's screen:
+                                       t5_shell_get_insets() (payload: none) */
 
     /* Apps (payload: t5_ev_app_t) */
     T5_EV_APP_STARTED = 1000,

@@ -73,7 +73,7 @@ T5_APP(.on_create = on_create);
 | --- | --- |
 | `t5/app.h` | Lifecycle (`T5_APP`, `on_create`, `on_resume`, `on_suspend`, `on_destroy`, `on_rotate`, `on_alarm`), the app's screen and data directory, permissions, scheduled alarms, tasks and mutexes, events |
 | `t5/ui.h` | LVGL 9.6, the MD2 layer (`md_*`: theme, type, elevation, ripple, app bar, buttons, FAB, card, recycled list, dialog; and from Phase 6 text field, switch, slider, checkbox, chips, tabs, menu, static rows and pages, snackbar, navigation drawer), `T5_DP()`, `t5_ui_lock`/`t5_ui_async` |
-| `t5/shell.h` | Full screen (hide the status bar), snackbars from any task, quick settings, home, the on-screen keyboard |
+| `t5/shell.h` | The app bar (title, actions), the gesture bar, full screen and the insets they take; snackbars from any task, quick settings, home, the on-screen keyboard |
 | `t5/port.h` | Named ports (`grove`, `mbus.*`, `ext`, `rs485`, `stamp`), Modbus RTU, rails |
 | `t5/power.h` | Wake locks, power state, battery (read-only) |
 | `t5/sys.h` | Time (and local time with the zone from Settings), IMU, network status, FreeRTOS |
@@ -177,8 +177,31 @@ Microphone input (`t5_audio_in_open`) and the camera (`t5_camera_open`) need the
 - **LVGL timers** don't delete themselves when their repeat count runs out: they pause, and the OS deletes them on exit.
 - **Sizes** are in dp: `T5_DP(16)` is 32 px. The screen is 640 × 360 dp in landscape.
 - **Text input.** Tapping a text area shows the on-screen keyboard; with a USB keyboard attached, keys go to the focused text area instead. The keyboard pans the text area's container up if it would be covered.
-- **Full screen.** The status bar takes the top 24 dp of every app screen (as padding on `t5_app_screen()`); `t5_shell_set_fullscreen(true)` gives it back. Swiping up from the bottom edge goes home; swiping down from the top edge opens quick settings.
+- **Bars and full screen.** See [Shell bars](#shell-bars) below. Swiping up from the bottom edge goes home; swiping down from the top edge opens quick settings.
 - **Memory from `malloc` is yours.** Don't pass it to an OS function that frees it, and free memory from libc helpers (`strdup`) with `free()` as usual.
+
+## Shell bars
+
+The shell draws up to three bars around an app's screen, and pads `t5_app_screen()` clear of them, so anything built under it is never covered:
+
+| Bar | Size | When |
+| --- | --- | --- |
+| Status bar | 24 dp, top | Always, except in full screen |
+| App bar | 48 dp, under the status bar | When the manifest says `[shell] app_bar = true` or the app calls `t5_shell_set_app_bar(true)`. Shows the manifest's `title` (default: `name`); `t5_shell_set_title()` changes it |
+| Gesture bar | 16 dp, bottom | Always on app screens, except in full screen: a handle that shows where to swipe up to go home |
+
+```c
+static void on_create(t5_app_t *app) {
+    t5_shell_set_app_bar(true);                                     /* or [shell] app_bar = true */
+    md_appbar_add_action(t5_shell_app_bar(), MD_ICON_REFRESH, refresh_cb, app);
+    t5_shell_insets_t in;
+    t5_shell_get_insets(&in);    /* {top 72, bottom 16} dp: already taken off the screen's content area */
+}
+```
+
+`t5_shell_app_bar()` returns the bar on the UI task while it's shown; actions added to it are deleted with the app's screen. `t5_shell_get_insets()` reports what the bars take, in dp, and `T5_EV_UI_INSETS` is posted when that changes (the app bar toggled, full screen). Objects you place yourself on `lv_layer_top()` aren't padded: use the insets for them.
+
+**Full screen** (`t5_shell_set_fullscreen(true)`, or `[shell] fullscreen = true` to start that way) hides all three bars and the padding goes to 0. The gestures still work. So people can find the way out, the gesture bar's handle shows over the app for 2.5 s when full screen starts, and again whenever a finger touches the bottom 20 dp; a swipe up from there still goes home. `t5_shell_fullscreen()` says whether it's on. Everything resets when the app leaves the foreground. Python apps have `t5.ui.fullscreen()`, `t5.ui.app_bar()` and `t5.ui.title()`.
 
 ## Manifest
 
@@ -199,6 +222,11 @@ background_wake = true
 [background]
 entry = "on_alarm"
 max_seconds = 30
+
+[shell]                       # optional
+app_bar = true                # the shell's app bar with the title (default false)
+title = "Air Log"             # its text (default: name)
+fullscreen = false            # start in full screen
 ```
 
 Permission groups: `camera`, `mic`, `net`, `ble`, `ports`, `usb`, `storage`, `shared_read`, `shared_write`, `all_files`, `background_wake`, `system`. Calling a function whose group the manifest doesn't declare gets a stub that returns `T5_ERR_DENIED` (or `NULL`, `false`, `0`). Camera and mic also ask the person on first use (`t5_app_request_permission()`). **These are consent and correctness checks, not a security boundary:** a native app shares the OS address space and can reach the hardware directly. The installer says so.

@@ -56,6 +56,15 @@ bool shell_sys_safe_mode(char *why, size_t n);
 /* Restart normally (leaves safe mode). */
 void shell_sys_restart(void);
 void shell_sys_current(char *id, size_t n);
+/* What the foreground app's manifest asks of the shell ([shell]); title is
+ * its name when it set none. */
+typedef struct {
+    bool app_bar, fullscreen;
+    char title[T5_APP_NAME_LEN];
+} shell_chrome_t;
+void shell_sys_chrome(shell_chrome_t *out);
+/* The shell's bars changed what they take from the app's screen. */
+void shell_sys_insets_changed(void);
 void shell_sys_remove(const char *id);
 /* Where an app's data lives (kept when it is removed). */
 void shell_sys_data_dir(const char *id, char *out, size_t n);

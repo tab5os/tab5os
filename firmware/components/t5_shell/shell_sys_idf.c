@@ -98,6 +98,23 @@ void shell_sys_current(char *id, size_t n)
     t5_apps_current(id, n);
 }
 
+void shell_sys_chrome(shell_chrome_t *out)
+{
+    memset(out, 0, sizeof *out);
+    t5_manifest_t *m = malloc(sizeof *m);
+    if (m && t5_apps_fg_manifest(m)) {
+        out->app_bar = m->app_bar;
+        out->fullscreen = m->fullscreen;
+        snprintf(out->title, sizeof out->title, "%s", m->title[0] ? m->title : m->name);
+    }
+    free(m);
+}
+
+void shell_sys_insets_changed(void)
+{
+    T5_LOG_ON_ERR(TAG, t5_event_post(T5_EV_UI_INSETS, NULL, 0));
+}
+
 void shell_sys_remove(const char *id)
 {
     T5_LOG_ON_ERR(TAG, t5_apps_remove(id, true));

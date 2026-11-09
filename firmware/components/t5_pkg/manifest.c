@@ -36,6 +36,7 @@ static const char *const s_top_keys[] = {"id", "name", "version", "api", "runtim
 /* Top-level keys accepted but not stored (informational). */
 static const char *const s_info_keys[] = {"description", "author", "homepage", "license"};
 static const char *const s_bg_keys[] = {"entry", "max_seconds"};
+static const char *const s_shell_keys[] = {"app_bar", "title", "fullscreen"};
 static const char *const s_orients[] = {
     [T5_ORIENT_ANY] = "any",
     [T5_ORIENT_LANDSCAPE] = "landscape",
@@ -330,17 +331,37 @@ static t5_err_t check_keys(ctx_t *c, const t5_toml_doc_t *d)
             ok = strcmp(k + 12, "ports") == 0 || t5_perm_from_name(k + 12);
         } else if (strncmp(k, "background.", 11) == 0) {
             ok = listed(k + 11, s_bg_keys, COUNT(s_bg_keys));
+        } else if (strncmp(k, "shell.", 6) == 0) {
+            ok = listed(k + 6, s_shell_keys, COUNT(s_shell_keys));
         } else {
             ok = listed(k, s_top_keys, COUNT(s_top_keys)) || listed(k, s_info_keys, COUNT(s_info_keys));
         }
         if (!ok) return bad(c, "line %d: unknown key '%s'", d->kv[i].line, k);
     }
     for (int i = 0; i < d->ntables; i++) {
-        if (strcmp(d->tables[i], "permissions") != 0 && strcmp(d->tables[i], "background") != 0) {
+        if (strcmp(d->tables[i], "permissions") != 0 && strcmp(d->tables[i], "background") != 0 &&
+            strcmp(d->tables[i], "shell") != 0) {
             return bad(c, "unknown table [%s]", d->tables[i]);
         }
     }
     return T5_OK;
+}
+
+static t5_err_t get_bool(ctx_t *c, const t5_toml_doc_t *d, const char *key, bool *out)
+{
+    const t5_toml_value_t *v = t5_toml_get(d, key);
+    if (!v) return T5_OK;
+    if (v->type != T5_TOML_BOOL) return bad(c, "%s: must be true or false", key);
+    *out = v->b;
+    return T5_OK;
+}
+
+/* [shell]: app_bar, title, fullscreen. */
+static t5_err_t validate_shell(ctx_t *c, const t5_toml_doc_t *d, t5_manifest_t *m)
+{
+    T5_RETURN_ON_ERR(get_bool(c, d, "shell.app_bar", &m->app_bar));
+    T5_RETURN_ON_ERR(get_bool(c, d, "shell.fullscreen", &m->fullscreen));
+    return get_str(c, d, "shell.title", false, m->title, sizeof m->title, NULL);
 }
 
 static t5_err_t validate(ctx_t *c, const t5_toml_doc_t *d, t5_manifest_t *m)
@@ -439,7 +460,7 @@ static t5_err_t validate(ctx_t *c, const t5_toml_doc_t *d, t5_manifest_t *m)
         T5_RETURN_ON_ERR(get_int(c, d, "background.max_seconds", 1, T5_MANIFEST_BG_MAX_SECONDS, &secs, &present));
         if (present) m->bg_max_seconds = (uint32_t)secs;
     }
-    return T5_OK;
+    return validate_shell(c, d, m);
 }
 
 t5_err_t t5_manifest_parse(const char *text, size_t len, t5_manifest_t *out, char *err, size_t errlen)
