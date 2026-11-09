@@ -1375,7 +1375,16 @@ static void art_for_track(void)
 
 static void ctl_prev(lv_event_t *e) { (void)e; player_prev(); }
 static void ctl_next(lv_event_t *e) { (void)e; player_next(); }
-static void ctl_toggle(lv_event_t *e) { (void)e; player_toggle(); }
+/* Play/pause; with nothing queued, play the library (in the shuffle mode it's in). */
+static void ctl_toggle(lv_event_t *e)
+{
+    (void)e;
+    if (!ui.ps.qlen && ui.lib && ui.lib->n) {
+        play_tracks(ui.lib->by_title, ui.lib->n, ui.ps.shuffle ? rand() % ui.lib->n : 0, ui.ps.shuffle);
+        return;
+    }
+    player_toggle();
+}
 static void ctl_shuffle(lv_event_t *e) { (void)e; player_set_shuffle(!ui.ps.shuffle); }
 static void ctl_queue(lv_event_t *e) { (void)e; open_queue(); }
 
@@ -1655,12 +1664,20 @@ typedef struct {
     lib_t *lib;
 } scan_done_t;
 
+/* A queued file the library has (the scan just looked at the card). */
+static bool in_library(const char *path)
+{
+    int i = lib_find(ui.lib, path);
+    return i >= 0 && !tag_casecmp(ui.lib->t[i].path, path);
+}
+
 static void scan_finished(void *arg)
 {
     scan_done_t *d = arg;
     ui.scanning = false;
     if (d->lib) {
         set_lib(d->lib);
+        player_retain(in_library);                     /* a queue from before, with files since removed */
         char p[200];
         data_path(p, sizeof p, "library.bin");
         if (!lib_save_cache(ui.lib, p)) remove(p);     /* past the data folder's 1 MB: rescan next time */
@@ -1852,6 +1869,17 @@ static void build_mini(lv_obj_t *root)
     icon_btn(m, MD_ICON_SKIP_NEXT, false, ctl_next, NULL);
 }
 
+/* Headphones unplugged: pause, rather than play on through the speaker. */
+static void route_changed(t5_event_id_t id, const void *data, size_t len, void *arg)
+{
+    (void)id;
+    (void)arg;
+    static bool had = true;
+    bool hp = len >= sizeof(t5_ev_audio_t) ? ((const t5_ev_audio_t *)data)->headphones : t5_audio_headphones();
+    if (had && !hp) player_pause();
+    had = hp;
+}
+
 static void on_create(t5_app_t *app)
 {
     ui.app = app;
@@ -1900,6 +1928,7 @@ static void on_create(t5_app_t *app)
     lists_from_lib();
     lv_timer_create(tick, 250, NULL);
     tick(NULL);
+    T5_IGNORE(t5_event_subscribe(T5_EV_AUDIO_ROUTE, route_changed, NULL));   /* without it: no auto pause */
     ask_read(NULL);
 }
 

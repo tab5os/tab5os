@@ -37,6 +37,8 @@ void player_set_queue(const char *const *paths, int n, int start, bool shuffle);
 /* After the current track (next), or at the end. */
 void player_add(const char *path, bool next);
 void player_remove(int qpos);
+/* Drop what keep() says is gone (a rescan found the files missing). */
+void player_retain(bool (*keep)(const char *path));
 void player_jump(int qpos);
 
 void player_play(void);

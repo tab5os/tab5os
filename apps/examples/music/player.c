@@ -431,6 +431,48 @@ void player_remove(int qpos)
     unlock();
 }
 
+void player_retain(bool (*keep)(const char *path))
+{
+    lock();
+    int playing = s.cur >= 0 && s.cur < s.n ? s.order[s.cur] : -1;
+    int *map = malloc((size_t)(s.n ? s.n : 1) * sizeof *map);   /* old index -> new, or -1 */
+    if (!map) {
+        unlock();
+        return;
+    }
+    int n = 0;
+    for (int i = 0; i < s.n; i++) {
+        if (keep(s.paths[i])) {
+            map[i] = n;
+            s.paths[n++] = s.paths[i];
+        } else {
+            map[i] = -1;
+            free(s.paths[i]);
+        }
+    }
+    if (n != s.n) {
+        /* the play order without the dropped ones; the current one, or the next still there */
+        int o = 0, cur = -1;
+        for (int i = 0; i < s.n; i++) {
+            int m = map[s.order[i]];
+            if (m < 0) continue;
+            if (cur < 0 && i >= s.cur) cur = o;
+            s.order[o++] = m;
+        }
+        bool moved = playing < 0 || map[playing] < 0;
+        s.n = n;
+        s.cur = n ? (cur >= 0 ? cur : 0) : -1;
+        if (moved) {
+            s.loaded = false;
+            s.want_load = s.cur >= 0;
+            if (s.cur < 0) s.want_play = false;
+        }
+        changed();
+    }
+    free(map);
+    unlock();
+}
+
 void player_jump(int qpos)
 {
     lock();
