@@ -11,7 +11,7 @@
 #include "t5_battery/battery.h"
 #include "t5_camera/camera.h"
 #include "t5_display/t5_display.h"
-#include "t5_net/ble.h"
+#include "t5_net/ble_sys.h"
 #include "t5_net/download.h"
 #include "t5_net/net.h"
 #include "t5_net/sock.h"
@@ -136,7 +136,7 @@ void shell_sys_status(shell_status_t *o)
     o->wifi_rssi = n.rssi;
     snprintf(o->ssid, sizeof o->ssid, "%s", n.ssid);
     o->ble_on = t5_ble_ready();
-    o->ble_connected = t5_ble_connected();
+    o->ble_connected = t5_ble_links() > 0;
     o->rotation_locked = !t5_ui_follows_board();
     o->brightness = t5_display_brightness();
     o->volume = t5_audio_volume();

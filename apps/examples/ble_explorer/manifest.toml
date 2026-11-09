@@ -1,0 +1,13 @@
+id = "com.t5.example.ble"
+name = "BLE Explorer"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+description = "Scan for Bluetooth LE devices, read them, and act as a battery-level peripheral"
+
+[permissions]
+ble = true
+
+[shell]
+app_bar = true

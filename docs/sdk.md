@@ -82,6 +82,7 @@ T5_APP(.on_create = on_create);
 | `t5/usb.h` | USB-A devices: list, CDC serial, MIDI, UVC cameras (`usb`); a USB drive is mounted at `/usb` |
 | `t5/storage.h` | SD and `/data` state, atomic writes, safe eject (`storage`) |
 | `t5/system.h` | App list, launching, app info, per-app power, charge history (`system`) |
+| `t5/ble.h` | Bluetooth LE (`ble`): scan, connect, a GATT client with notifications, advertising and a GATT server ([guide](wiki/Bluetooth.md)) |
 | `t5/net.h` | Networking (`net`): DNS, TCP and TLS clients, TCP servers, UDP with broadcast and multicast, poll, an HTTP/1.1 client and a WebSocket client |
 
 Plus the C library functions listed in `api_v1.sym` (`malloc`, `snprintf`, `fopen`, `sinf`…) and BSD sockets (`<sys/socket.h>`, `select`, `fcntl`, `getaddrinfo`...: lwIP) for apps with the `net` permission. Sockets an app leaves open are closed when it exits, like everything else. `errno` works as usual: apps build with `-D__PICOLIBC_ERRNO_FUNCTION=t5_errno`, because picolibc keeps it thread-local and the app loader can't relocate that. lwIP reports a refused connect as `ECONNRESET`.
@@ -150,6 +151,20 @@ if (t5_httpd_next(srv, 1000, &req) == T5_OK) {
 ```
 
 The CA bundle is Mozilla's full list, with cross-signed chains supported. `ca_pem` (in each config) trusts one PEM CA instead of the bundle, for a server with a private certificate. `T5_TCP_TLS_NO_VERIFY` / `T5_HTTP_TLS_NO_VERIFY` / `T5_MQTT_TLS_NO_VERIFY` skip the certificate check: use them for testing only. `cert_pem`/`key_pem` give a client certificate for mutual TLS. While any handle is open the OS holds a `T5_LOCK_NET` wake lock ("net.io"), so Sleep keeps Wi-Fi connected and transfers continue with the screen off; with none open, Sleep powers the radio down unless the app holds its own `T5_LOCK_NET` lock (`t5/power.h`). Plain BSD sockets don't count: take the lock yourself if you use them across Sleep. The `net handles` console command lists every open handle and its owner. `test/hil/net_stack.py` and `test/hil/net_compat.py` check the whole stack against servers on your computer (`--external` adds public ones), and `test/apps/netleak` checks that an app's handles are freed when it exits.
+
+## Bluetooth LE
+
+`t5/ble.h` needs the `ble` permission and follows the networking conventions above: handles (scanner, link, advertiser, server) close when the app exits, an app holds at most 6, timeouts are in milliseconds, events are pulled with `*_next()` calls. The radio is the ESP32-C6, which is Bluetooth LE only, and it is up while Wi-Fi and Bluetooth are both on in Settings (`t5_ble_ready()`). Up to 3 links at once in either role. See the [Bluetooth guide](wiki/Bluetooth.md) for the hardware's limits and examples of each role.
+
+```c
+t5_ble_conn_t *c;
+t5_ble_conn_open(addr, addr_type, 10000, &c);
+t5_ble_gatt_discover(c, 10000);
+t5_ble_chr_t ch;
+t5_ble_gatt_find(c, "0x180f", "0x2a19", &ch);
+t5_ble_gatt_subscribe(c, ch.val_handle, true, 5000);
+int n = t5_ble_gatt_notification(c, &handle, buf, sizeof buf, 30000);
+```
 
 ## Session restore and launch arguments
 

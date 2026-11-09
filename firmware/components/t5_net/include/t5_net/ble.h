@@ -1,12 +1,30 @@
 /* SPDX-License-Identifier: Apache-2.0
- * BLE central basics (plan 3.6) on NimBLE, with the controller on the C6
- * (HCI over the esp_hosted SDIO link). One connection at a time.
+ * Bluetooth LE for apps (needs ble; in the SDK through t5/ble.h): scan,
+ * connect, a GATT client with notifications, advertising, and a GATT server
+ * (the peripheral role).
  *
- * BLE lives and dies with the C6: when t5_net powers the C6 down (Sleep with
- * no net lock, radio off, C6 reset) the stack stops and any connection is
- * lost (T5_EV_BLE_DISCONNECTED); it starts again when the C6 comes back.
- * While connected, BLE holds a T5_LOCK_NET wake lock so Sleep keeps the C6 up.
- * HID keyboards over BLE come later.
+ * The radio: the controller runs on the ESP32-C6 (HCI over the esp_hosted
+ * SDIO link) and NimBLE runs here. Bluetooth LE only: no Classic Bluetooth
+ * (no audio profiles, no SPP). It works while the C6 is up, which needs
+ * Wi-Fi and Bluetooth both on in Settings (they share the chip):
+ * t5_ble_ready() says so, and calls return T5_ERR_STATE otherwise. When the
+ * C6 goes down (either turned off, a C6 reset) links drop, a scan ends and
+ * reads fail; an advertiser and a server stay open and come back on the air
+ * by themselves when it is up again.
+ *
+ * Conventions are t5/net.h's: every handle closes itself when the app exits
+ * or crashes; an app holds at most T5_BLE_APP_MAX handles; timeouts are in
+ * ms (0 doesn't wait, T5_BLE_FOREVER waits); calls that move bytes return a
+ * count or a negative t5_err_t. While an app has a handle open the OS holds
+ * a T5_LOCK_NET wake lock, so Sleep keeps the C6 up. Events reach the app
+ * through *_next() calls on its own task: no callbacks run behind its back.
+ * Any task. At most T5_BLE_MAX_LINKS links at once, every app's and the
+ * system's together, in either role.
+ *
+ * Addresses are 6 bytes, least significant first as on the air; as text,
+ * "aa:bb:cc:dd:ee:ff" is the usual most-significant-first order
+ * (t5_ble_parse_addr, t5_ble_format_addr). UUIDs are text: "0x180f" for
+ * 16-bit ones, "6e400001-b5a3-f393-e0a9-e50e24dcca9e" for 128-bit ones.
  */
 #pragma once
 #include <stdbool.h>
@@ -18,51 +36,142 @@
 extern "C" {
 #endif
 
-#define T5_BLE_MAX_SCAN 32
-#define T5_BLE_MAX_CHARS 48
+#define T5_BLE_APP_MAX 6          /* handles per app: scanners, links, advertisers, servers */
+#define T5_BLE_MAX_LINKS 3
+#define T5_BLE_FOREVER UINT32_MAX
 #define T5_BLE_NAME_LEN 30
+#define T5_BLE_UUID_LEN 40        /* text, with its NUL */
+#define T5_BLE_MAX_CHARS 48       /* characteristics kept per link by t5_ble_gatt_discover */
+#define T5_BLE_VALUE_MAX 244      /* bytes of one notification or server value */
+#define T5_BLE_SERVER_MAX_CHARS 8
 
-typedef struct {
-    uint8_t addr[6];          /* little-endian, as NimBLE stores it */
-    uint8_t addr_type;
-    int8_t rssi;
-    char name[T5_BLE_NAME_LEN];
-} t5_ble_dev_t;
+/* Characteristic properties (the Bluetooth Core values). */
+#define T5_BLE_PROP_READ 0x02
+#define T5_BLE_PROP_WRITE_NR 0x04 /* write without response */
+#define T5_BLE_PROP_WRITE 0x08
+#define T5_BLE_PROP_NOTIFY 0x10
+#define T5_BLE_PROP_INDICATE 0x20
 
-typedef struct {
-    char svc_uuid[40];
-    char uuid[40];
-    uint16_t val_handle;
-    uint16_t def_handle;
-    uint8_t props;            /* BLE_GATT_CHR_PROP_* */
-} t5_ble_chr_t;
-
-/* Turn BLE on or off (saved with the network settings). On needs the C6. */
-t5_err_t t5_ble_enable(bool on);
+/* The C6 is up and the stack is in sync (no permission needed). */
 bool t5_ble_ready(void);
 
-t5_err_t t5_ble_scan(uint32_t ms);                 /* -> T5_EV_BLE_SCAN_DONE */
-int t5_ble_scan_results(t5_ble_dev_t *out, int max);
+/* ---- scanning ------------------------------------------------------------- */
+typedef struct t5_ble_scanner t5_ble_scanner_t;
+typedef struct {
+    uint32_t duration_ms;     /* 0: until stopped */
+    bool active;              /* ask for scan responses, which often hold the name */
+    bool duplicates;          /* every advertisement, not one per device */
+} t5_ble_scan_cfg_t;
+typedef struct {
+    uint8_t addr[6];
+    uint8_t addr_type;        /* 0 public, 1 random: pass it to t5_ble_conn_open */
+    int8_t rssi;              /* dBm */
+    bool connectable;
+    bool scan_rsp;            /* data is a scan response */
+    char name[T5_BLE_NAME_LEN];   /* "" when this packet has none */
+    uint8_t data_len;
+    uint8_t data[31];         /* the advertising data as sent */
+} t5_ble_report_t;
+/* One scan at a time on the radio (T5_ERR_BUSY while another runs). */
+t5_err_t t5_ble_scan_start(const t5_ble_scan_cfg_t *cfg, t5_ble_scanner_t **out);
+/* The next report: T5_OK, T5_ERR_TIMEOUT, or T5_ERR_STATE once the scan has
+ * ended and every report has been taken. Reports that came while the queue
+ * (32) was full are dropped. */
+t5_err_t t5_ble_scan_next(t5_ble_scanner_t *s, t5_ble_report_t *out, uint32_t timeout_ms);
+t5_err_t t5_ble_scan_stop(t5_ble_scanner_t *s);
 
-t5_err_t t5_ble_connect(const uint8_t addr[6], uint8_t addr_type);   /* -> T5_EV_BLE_CONNECTED */
-t5_err_t t5_ble_disconnect(void);
-bool t5_ble_connected(void);
+/* ---- connections and the GATT client -------------------------------------- */
+typedef struct t5_ble_conn t5_ble_conn_t;
+typedef struct {
+    char svc_uuid[T5_BLE_UUID_LEN];
+    char uuid[T5_BLE_UUID_LEN];
+    uint16_t val_handle;      /* what read, write and subscribe take */
+    uint16_t def_handle;
+    uint16_t cccd_handle;     /* the descriptor subscribe writes; 0 if it has none */
+    uint8_t props;            /* T5_BLE_PROP_* */
+} t5_ble_chr_t;
 
-/* Discover every service and characteristic of the peer (blocks, up to 10 s). */
-t5_err_t t5_ble_discover(void);
-int t5_ble_chars(t5_ble_chr_t *out, int max);
+/* Connect as the central. Blocks until connected or timeout_ms. */
+t5_err_t t5_ble_conn_open(const uint8_t addr[6], uint8_t addr_type, uint32_t timeout_ms, t5_ble_conn_t **out);
+/* False once the link has dropped (the handle stays valid until closed). */
+bool t5_ble_conn_up(t5_ble_conn_t *c);
+/* The ATT MTU: a write or notification carries up to mtu - 3 bytes. */
+uint16_t t5_ble_conn_mtu(t5_ble_conn_t *c);
+t5_err_t t5_ble_conn_close(t5_ble_conn_t *c);
 
-t5_err_t t5_ble_read(uint16_t handle, uint8_t *buf, size_t cap, size_t *len);
-t5_err_t t5_ble_write(uint16_t handle, const uint8_t *data, size_t len, bool response);
-/* Enable notifications by writing the CCCD at val_handle + 1. */
-t5_err_t t5_ble_subscribe(uint16_t val_handle, bool on);
-typedef void (*t5_ble_notify_cb_t)(uint16_t handle, const uint8_t *data, size_t len, void *arg);
-void t5_ble_set_notify_cb(t5_ble_notify_cb_t cb, void *arg);
+/* Find every service, characteristic and notification descriptor. */
+t5_err_t t5_ble_gatt_discover(t5_ble_conn_t *c, uint32_t timeout_ms);
+int t5_ble_gatt_chars(t5_ble_conn_t *c, t5_ble_chr_t *out, int max);
+/* One characteristic by UUIDs (svc_uuid NULL: any service). T5_ERR_NOT_FOUND. */
+t5_err_t t5_ble_gatt_find(t5_ble_conn_t *c, const char *svc_uuid, const char *chr_uuid, t5_ble_chr_t *out);
+/* Returns the bytes read (cut to cap), or a negative t5_err_t. */
+int t5_ble_gatt_read(t5_ble_conn_t *c, uint16_t handle, void *buf, size_t cap, uint32_t timeout_ms);
+/* response false: write without response (returns once queued). */
+t5_err_t t5_ble_gatt_write(t5_ble_conn_t *c, uint16_t handle, const void *data, size_t len, bool response,
+                           uint32_t timeout_ms);
+/* Notifications (or indications, if that is all the characteristic has)
+ * for the characteristic whose value handle is val_handle, after
+ * t5_ble_gatt_discover found its descriptor. */
+t5_err_t t5_ble_gatt_subscribe(t5_ble_conn_t *c, uint16_t val_handle, bool on, uint32_t timeout_ms);
+/* The next notification or indication: its bytes (cut to cap; may be 0)
+ * and the value handle it came from, T5_ERR_TIMEOUT, or T5_ERR_STATE once
+ * the link is down and nothing is queued (16 are queued). */
+int t5_ble_gatt_notification(t5_ble_conn_t *c, uint16_t *handle, void *buf, size_t cap, uint32_t timeout_ms);
 
-/* Pure helpers (host-tested). */
-bool t5_ble_parse_addr(const char *s, uint8_t out[6]);           /* "aa:bb:cc:dd:ee:ff" -> LE bytes */
+/* ---- advertising ---------------------------------------------------------- */
+typedef struct t5_ble_advertiser t5_ble_advertiser_t;
+typedef struct {
+    const char *name;         /* the local name, NULL for none */
+    const uint8_t *mfr_data;  /* manufacturer data: the company id (2 bytes, LSB first), then yours */
+    uint8_t mfr_len;
+    const char *svc_uuid;     /* one service UUID to list, NULL for none */
+    uint32_t interval_ms;     /* 20..10240, 0 = 100 */
+    bool connectable;         /* centrals may connect, to reach a t5_ble_server */
+} t5_ble_adv_cfg_t;
+/* One advertiser at a time on the radio (T5_ERR_BUSY). What doesn't fit the
+ * 31-byte packet (the name first) goes in the scan response;
+ * T5_ERR_INVALID_ARG if it doesn't fit there either. A connectable
+ * advertiser goes back on the air after each link closes. */
+t5_err_t t5_ble_adv_start(const t5_ble_adv_cfg_t *cfg, t5_ble_advertiser_t **out);
+t5_err_t t5_ble_adv_stop(t5_ble_advertiser_t *a);
+
+/* ---- GATT server ---------------------------------------------------------- */
+typedef struct t5_ble_server t5_ble_server_t;
+typedef struct {
+    const char *uuid;
+    uint8_t props;            /* T5_BLE_PROP_*: READ, WRITE, WRITE_NR, NOTIFY, INDICATE */
+} t5_ble_server_chr_t;
+typedef enum {
+    T5_BLE_SERVER_CONNECTED,      /* a central connected (peer, addr) */
+    T5_BLE_SERVER_DISCONNECTED,
+    T5_BLE_SERVER_WRITE,          /* a central wrote chr: the bytes are in buf */
+    T5_BLE_SERVER_SUBSCRIBED,     /* a central turned chr's notifications on (on) or off */
+} t5_ble_server_ev_type_t;
+typedef struct {
+    t5_ble_server_ev_type_t type;
+    int chr;                  /* index into the characteristics given to open */
+    uint16_t peer;            /* which central: the same number for one link */
+    uint8_t addr[6];
+    bool on;
+} t5_ble_server_ev_t;
+/* One service with up to T5_BLE_SERVER_MAX_CHARS characteristics, added to
+ * the device's GATT database (UUIDs copied). Reads get the value last set
+ * (empty at first). Advertise with a connectable t5_ble_adv_start so
+ * centrals can reach it. T5_ERR_BUSY if a service with that UUID is open. */
+t5_err_t t5_ble_server_open(const char *svc_uuid, const t5_ble_server_chr_t *chrs, int n, t5_ble_server_t **out);
+/* Set chr's value (up to T5_BLE_VALUE_MAX bytes). If it notifies or
+ * indicates, every subscribed central gets it. */
+t5_err_t t5_ble_server_set(t5_ble_server_t *s, int chr, const void *data, size_t len);
+/* The next event; for a write, its bytes go to buf (cut to cap) and the
+ * count is returned. 0 for other events, T5_ERR_TIMEOUT, or a negative
+ * error. 16 events are queued. */
+int t5_ble_server_next(t5_ble_server_t *s, t5_ble_server_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
+t5_err_t t5_ble_server_close(t5_ble_server_t *s);
+
+/* ---- helpers (no permission, pure) ---------------------------------------- */
+bool t5_ble_parse_addr(const char *s, uint8_t out[6]);           /* "aa:bb:cc:dd:ee:ff" */
 void t5_ble_format_addr(const uint8_t addr[6], char out[18]);
-/* Pull the device name out of advertising data (0x09 complete / 0x08 short). */
+/* The name in advertising data (0x09 complete, else 0x08 shortened). */
 bool t5_ble_adv_name(const uint8_t *adv, size_t len, char *out, size_t cap);
 
 #ifdef __cplusplus

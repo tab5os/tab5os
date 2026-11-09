@@ -26,6 +26,7 @@
 #include "lwip/sockets.h"
 #include "t5/app.h"
 #include "t5/audio.h"
+#include "t5/ble.h"
 #include "t5/camera.h"
 #include "t5/net.h"
 #include "t5/port.h"

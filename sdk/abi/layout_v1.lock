@@ -96,6 +96,7 @@ enum T5_ANT_INTERNAL = size=4
 enum T5_AUDIO_FMT_UNKNOWN = size=4
 enum T5_AUDIO_PLAYER_PLAYING = size=4
 enum T5_AUDIO_USAGE_MEDIA = size=4
+enum T5_BLE_SERVER_CONNECTED = size=4
 enum T5_CHG_NO_USB = size=4
 enum T5_DIS_ACT_WARN = size=4
 enum T5_EV_ANY = size=4
@@ -1069,6 +1070,10 @@ enumerator T5_AUDIO_PLAYER_PLAYING = 0
 enumerator T5_AUDIO_USAGE_ALERT = 1
 enumerator T5_AUDIO_USAGE_MEDIA = 0
 enumerator T5_AUDIO_USAGE_SPEECH = 2
+enumerator T5_BLE_SERVER_CONNECTED = 0
+enumerator T5_BLE_SERVER_DISCONNECTED = 1
+enumerator T5_BLE_SERVER_SUBSCRIBED = 3
+enumerator T5_BLE_SERVER_WRITE = 2
 enumerator T5_CHG_CHARGING = 1
 enumerator T5_CHG_FULL = 2
 enumerator T5_CHG_NO_USB = 0
@@ -2862,6 +2867,19 @@ macro T5_BAT_HIST_LEN = 288
 macro T5_BAT_HIST_PERIOD_S = 300
 macro T5_BAT_HIST_USB = 0x02
 macro T5_BAT_HIST_VERSION = 1
+macro T5_BLE_APP_MAX = 6
+macro T5_BLE_FOREVER = UINT32_MAX
+macro T5_BLE_MAX_CHARS = 48
+macro T5_BLE_MAX_LINKS = 3
+macro T5_BLE_NAME_LEN = 30
+macro T5_BLE_PROP_INDICATE = 0x20
+macro T5_BLE_PROP_NOTIFY = 0x10
+macro T5_BLE_PROP_READ = 0x02
+macro T5_BLE_PROP_WRITE = 0x08
+macro T5_BLE_PROP_WRITE_NR = 0x04
+macro T5_BLE_SERVER_MAX_CHARS = 8
+macro T5_BLE_UUID_LEN = 40
+macro T5_BLE_VALUE_MAX = 244
 macro T5_CAMERA_FPS = 30
 macro T5_CAMERA_H = 720
 macro T5_CAMERA_PHOTO_H = 900
@@ -3528,6 +3546,13 @@ typedef t5_audio_stats_t = struct{ready@+0:_Bool; out_running@+1:_Bool; in_runni
 typedef t5_audio_usage_t = enum{T5_AUDIO_USAGE_MEDIA}
 typedef t5_bat_hist_pt_t = struct{t@+0:uint32_t; pct@+4:int8_t; flags@+5:uint8_t; mv@+6:uint16_t; ma@+8:int16_t}
 typedef t5_battery_status_t = struct{ready@+0:_Bool; mv@+2:uint16_t; ma10@+4:int32_t; mw@+8:int32_t; percent@+12:int; minutes_left@+16:int32_t; capacity_mah@+20:int32_t; charge_mah@+24:int32_t; usb@+28:_Bool; charge@+32:t5_charge_state_t; chg_en@+36:_Bool; fast@+37:_Bool; chg_stat@+38:_Bool; chg_stat_hi_charging@+40:uint32_t; chg_stat_hi_discharging@+44:uint32_t; chg_stat_lo_charging@+48:uint32_t; chg_stat_lo_discharging@+52:uint32_t; imu_c10@+56:int16_t; chip_c10@+58:int16_t; low_power@+60:_Bool; swapped@+61:_Bool; samples@+64:uint32_t; invalid_samples@+68:uint32_t; read_errors@+72:uint32_t; cycles@+76:uint16_t}
+typedef t5_ble_adv_cfg_t = struct{name@+0:const char *; mfr_data@+4:const uint8_t *; mfr_len@+8:uint8_t; svc_uuid@+12:const char *; interval_ms@+16:uint32_t; connectable@+20:_Bool}
+typedef t5_ble_chr_t = struct{svc_uuid@+0:char[40]; uuid@+40:char[40]; val_handle@+80:uint16_t; def_handle@+82:uint16_t; cccd_handle@+84:uint16_t; props@+86:uint8_t}
+typedef t5_ble_report_t = struct{addr@+0:uint8_t[6]; addr_type@+6:uint8_t; rssi@+7:int8_t; connectable@+8:_Bool; scan_rsp@+9:_Bool; name@+10:char[30]; data_len@+40:uint8_t; data@+41:uint8_t[31]}
+typedef t5_ble_scan_cfg_t = struct{duration_ms@+0:uint32_t; active@+4:_Bool; duplicates@+5:_Bool}
+typedef t5_ble_server_chr_t = struct{uuid@+0:const char *; props@+4:uint8_t}
+typedef t5_ble_server_ev_t = struct{type@+0:t5_ble_server_ev_type_t; chr@+4:int; peer@+8:uint16_t; addr@+10:uint8_t[6]; on@+16:_Bool}
+typedef t5_ble_server_ev_type_t = enum{T5_BLE_SERVER_CONNECTED}
 typedef t5_camera_stats_t = struct{open@+0:_Bool; streaming@+1:_Bool; recording@+2:_Bool; frames@+4:uint32_t; dropped@+8:uint32_t; preview_frames@+12:uint32_t; fps@+16:uint32_t; preview_fps@+20:uint32_t; rec_frames@+24:uint32_t; rec_dropped@+28:uint32_t; rec_bytes@+32:uint64_t; rec_ms@+40:uint32_t; encode_us_max@+44:uint32_t; write_buffer_peak@+48:uint32_t; photos@+52:uint32_t; sensor@+56:char[16]}
 typedef t5_charge_state_t = enum{T5_CHG_NO_USB}
 typedef t5_energy_rec_t = struct{id@+0:char[48]; mj@+48:uint64_t; ms@+56:uint32_t; last_seen@+60:uint32_t}

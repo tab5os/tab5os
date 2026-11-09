@@ -21,6 +21,7 @@
 **Hardware**
 - [Storage](Storage.md)
 - [Networking](Networking.md)
+- [Bluetooth LE](Bluetooth.md)
 - [Ports and sensors](Ports-and-Sensors.md)
 - [Media and USB](Media-and-USB.md)
 

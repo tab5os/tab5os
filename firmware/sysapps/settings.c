@@ -22,6 +22,7 @@
 #include "sysapp_system.h"
 #include "t5/usb.h"
 #include "t5_dev/dev.h"
+#include "t5_net/ble_sys.h"
 #include "t5_ota/ota.h"
 #include "sysapps_priv.h"
 
@@ -294,7 +295,7 @@ static void ble_scan_clicked(lv_event_t *e)
         md_snackbar_show("Turn Bluetooth on first", NULL, NULL, NULL);
         return;
     }
-    if (t5_ble_scan(5000) == T5_OK) md_snackbar_show("Scanning for 5 s...", NULL, NULL, NULL);
+    if (t5_ble_sys_scan(5000) == T5_OK) md_snackbar_show("Scanning for 5 s...", NULL, NULL, NULL);
 }
 
 static void ble_dev_clicked(lv_event_t *e)
@@ -302,12 +303,12 @@ static void ble_dev_clicked(lv_event_t *e)
     ble_page_t *b = s_nav.lv[s_nav.depth - 1].arg;
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     if (i < 0 || i >= b->n) return;
-    if (t5_ble_connected()) {
-        t5_ble_disconnect();
+    if (t5_ble_sys_connected()) {
+        t5_ble_sys_disconnect();
         md_snackbar_show("Disconnected", NULL, NULL, NULL);
         return;
     }
-    t5_err_t err = t5_ble_connect(b->devs[i].addr, b->devs[i].addr_type);
+    t5_err_t err = t5_ble_sys_connect(b->devs[i].addr, b->devs[i].addr_type);
     md_snackbar_show(err == T5_OK ? "Connecting..." : "Couldn't connect", NULL, NULL, NULL);
 }
 
@@ -317,8 +318,8 @@ static void ble_refresh(sa_nav_t *nav, void *arg)
     ble_page_t *b = arg;
     bool on = t5_ble_ready();
     set_switch(b->sw, on);
-    sa_set_text(b->status, !on ? "Bluetooth is off" : t5_ble_connected() ? "Connected to a device" : "On, not connected");
-    b->n = t5_ble_scan_results(b->devs, T5_BLE_MAX_SCAN);
+    sa_set_text(b->status, !on ? "Bluetooth is off" : t5_ble_sys_connected() ? "Connected to a device" : "On, not connected");
+    b->n = t5_ble_sys_scan_results(b->devs, T5_BLE_MAX_SCAN);
     if (b->n == b->shown) return;
     b->shown = b->n;
     lv_obj_clean(b->list);
