@@ -3,6 +3,8 @@
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "t5_bsp/xpin.h"
 #include "t5_core/log.h"
 #include "t5_i2c/t5_i2c.h"
@@ -57,6 +59,11 @@ static i2s_chan_handle_t s_tx, s_rx;
 static const audio_codec_data_if_t *s_data;
 static esp_codec_dev_handle_t s_out, s_in;
 static bool s_out_open, s_in_open;
+/* Idle: the ES8388 stays powered with its outputs muted (soft ramp) and the
+ * I2S clocks stopped. Powering its DACs or output drivers down and up again
+ * steps the headphone line: a click at every pause and play. */
+static bool s_out_standby;
+#define STANDBY_RAMP_MS 30            /* the DAC's soft mute: 0.5 dB per 4 LRCK, to -96 dB in 16 ms */
 static t5_rail_hold_t *s_spk;
 
 static void ctrl_init(t5_ctrl_t *t, t5_i2c_dev_t *dev)
@@ -186,9 +193,9 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
     if (s_out) {
         esp_codec_dev_sample_info_t f = fs();
         if (esp_codec_dev_open(s_out, &f) == ESP_CODEC_DEV_OK) {
-            es8388_tune();          /* the ADC side off while idle too */
-            esp_codec_dev_close(s_out);
-            es8388_set(0x04, 0, 0xfc);   /* outputs biased from boot: no pop at the first sound */
+            es8388_tune();          /* the ADC side off */
+            s_out_open = true;
+            audio_hw_out_close(true);   /* idle from boot: the first sound doesn't click either */
         }
     }
     if (s_in) {
@@ -202,6 +209,13 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
 t5_err_t audio_hw_out_open(int volume, bool muted)
 {
     if (!s_out) return T5_ERR_NOT_FOUND;
+    if (s_out_open && s_out_standby) {                 /* clocks on, then the soft unmute */
+        if (i2s_channel_enable(s_tx) != ESP_OK) return T5_ERR_IO;
+        s_out_standby = false;
+        esp_codec_dev_set_out_vol(s_out, volume);
+        esp_codec_dev_set_out_mute(s_out, muted);
+        return T5_OK;
+    }
     if (s_out_open) return T5_OK;
     esp_codec_dev_sample_info_t f = fs();
     if (esp_codec_dev_open(s_out, &f) != ESP_CODEC_DEV_OK) return T5_ERR_IO;
@@ -216,14 +230,26 @@ void audio_hw_out_close(bool keep_outputs)
 {
     if (!s_out_open) return;
     audio_hw_speaker(false);
+    if (keep_outputs) {
+        if (s_out_standby) return;
+        /* mute with the soft ramp while the clocks still run, then stop them */
+        esp_codec_dev_set_out_mute(s_out, true);
+        vTaskDelay(pdMS_TO_TICKS(STANDBY_RAMP_MS));
+        i2s_channel_disable(s_tx);
+        s_out_standby = true;
+        return;
+    }
+    if (s_out_standby) {                               /* a full close wants the clocks for its sequence */
+        if (i2s_channel_enable(s_tx) == ESP_OK) s_out_standby = false;
+    }
     esp_codec_dev_close(s_out);
-    if (keep_outputs) es8388_set(0x04, 0, 0xfc);   /* DACPOWER: DACs down, LOUT/ROUT on */
     s_out_open = false;
+    s_out_standby = false;
 }
 
 t5_err_t audio_hw_write(const int16_t *pcm, size_t bytes)
 {
-    if (!s_out_open) return T5_ERR_STATE;
+    if (!s_out_open || s_out_standby) return T5_ERR_STATE;
     return esp_codec_dev_write(s_out, (void *)pcm, (int)bytes) == ESP_CODEC_DEV_OK ? T5_OK : T5_ERR_IO;
 }
 
@@ -258,7 +284,7 @@ void audio_hw_set_volume(int pct)
 
 void audio_hw_set_mute(bool on)
 {
-    if (s_out_open) esp_codec_dev_set_out_mute(s_out, on);
+    if (s_out_open && !s_out_standby) esp_codec_dev_set_out_mute(s_out, on);   /* idle: on the next open */
 }
 
 void audio_hw_set_in_gain(float db)
