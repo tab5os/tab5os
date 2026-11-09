@@ -170,6 +170,18 @@ static void load_settings(void)
     s_saved = s_set;
 }
 
+/* A stream buffer for PCM that only ever holds whole frames. A static
+ * stream buffer (which xStreamBufferCreateWithCaps makes) keeps one byte of
+ * its storage unused: 9600 bytes hold 9599. With an odd capacity a writer
+ * that times out on a full buffer (the reader paused) writes the odd byte,
+ * and every sample after it is made of the wrong two bytes: loud noise.
+ * So: a whole number of frames, plus that byte. */
+static StreamBufferHandle_t pcm_buffer(uint32_t rate, size_t frame_bytes, uint32_t ms)
+{
+    size_t frames = (size_t)rate * ms / 1000;
+    return xStreamBufferCreateWithCaps(frames * frame_bytes + 1, 1, MALLOC_CAP_SPIRAM);
+}
+
 static void wake_out(void)
 {
     int v = -1;
@@ -612,8 +624,7 @@ t5_err_t t5_audio_out_open_usage(const t5_audio_out_cfg_t *cfg, t5_audio_usage_t
     o->duck_q15 = UNITY_Q15;
     if (!o->cfg.buffer_ms) o->cfg.buffer_ms = 200;
     o->frame_bytes = cfg->channels * sizeof(int16_t);
-    size_t sz = (size_t)cfg->rate * o->frame_bytes * o->cfg.buffer_ms / 1000;
-    o->sb = xStreamBufferCreateWithCaps(sz, 1, MALLOC_CAP_SPIRAM);
+    o->sb = pcm_buffer(cfg->rate, o->frame_bytes, o->cfg.buffer_ms);
     if (!o->sb) {
         free(o);
         return T5_ERR_NO_MEM;
@@ -771,8 +782,7 @@ t5_err_t t5_audio_in_open(const t5_audio_in_cfg_t *cfg, t5_audio_in_t **out)
         free(in);
         return T5_ERR_NO_MEM;
     }
-    size_t sz = (size_t)cfg->rate * cfg->channels * 2 * in->cfg.buffer_ms / 1000;
-    in->sb = xStreamBufferCreateWithCaps(sz, 1, MALLOC_CAP_SPIRAM);
+    in->sb = pcm_buffer(cfg->rate, cfg->channels * sizeof(int16_t), in->cfg.buffer_ms);
     if (!in->sb) {
         if (in->aec) t5_aec_free(&in->a);
         free(in);
