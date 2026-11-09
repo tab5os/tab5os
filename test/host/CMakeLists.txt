@@ -54,6 +54,12 @@ foreach(t test_pins test_core test_i2c test_xpin test_time test_imu test_storage
     target_link_libraries(${t} PRIVATE t5_host)
     add_test(NAME ${t} COMMAND ${t})
 endforeach()
+# The Calculator example's engine is plain C: tested here as it is.
+set(CALC ${CMAKE_CURRENT_LIST_DIR}/../../apps/examples/calculator)
+add_executable(test_calc test_calc.c ${CALC}/calc.c)
+target_include_directories(test_calc PRIVATE ${CALC})
+target_link_libraries(test_calc PRIVATE unity m)
+add_test(NAME test_calc COMMAND test_calc)
 # Tests of a component's internals see its private directory.
 target_include_directories(test_app PRIVATE ${FW}/t5_app)
 target_include_directories(test_display_touch PRIVATE ${FW}/t5_display)

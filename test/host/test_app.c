@@ -307,14 +307,14 @@ static void test_elfsym_rejects_garbage(void)
     uint8_t *copy = malloc(sizeof app_elf_fixture);
     for (size_t cut = 0; cut < sizeof app_elf_fixture; cut += 97) {
         s_nundef = 0;
-        (void)t5_elfsym_undefined(app_elf_fixture, cut, collect, NULL);
+        T5_IGNORE(t5_elfsym_undefined(app_elf_fixture, cut, collect, NULL));   /* any result; it must not crash */
     }
     srand(7);
     for (int round = 0; round < 300; round++) {
         memcpy(copy, app_elf_fixture, sizeof app_elf_fixture);
         for (int k = 0; k < 8; k++) copy[rand() % sizeof app_elf_fixture] = (uint8_t)rand();
         s_nundef = 0;
-        (void)t5_elfsym_undefined(copy, sizeof app_elf_fixture, collect, NULL);
+        T5_IGNORE(t5_elfsym_undefined(copy, sizeof app_elf_fixture, collect, NULL));
         (void)t5_elfsym_defines(copy, sizeof app_elf_fixture, "t5_app_entry");
     }
     free(copy);

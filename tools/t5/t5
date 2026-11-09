@@ -92,7 +92,8 @@ const() { python3 "$ROOT/tools/t5/t5const.py" "$@"; }
 fits() {
     [ -f "$1" ] || { echo "no $1" >&2; exit 1; }
     local size
-    size=$(stat -f %z "$1" 2>/dev/null || stat -c %s "$1")
+    # wc, not stat: GNU stat -f succeeds too, printing the file system's details.
+    size=$(wc -c < "$1" | tr -d '[:space:]')
     echo "$(basename "$1"): $size bytes, $3 $(($2))"
     [ "$size" -le $(($2)) ] || { echo "$(basename "$1") is over $3" >&2; exit 1; }
 }

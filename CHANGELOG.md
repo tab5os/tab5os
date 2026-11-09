@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Calculator example:** a basic and a scientific calculator (trigonometry in degrees or radians, inverse trig, logarithms, powers, roots, factorial, π, e, Ans, brackets) with the result shown live as you type. Its engine is plain C with host tests (`test/host/test_calc.c`), and it brings its own font for the maths symbols the OS fonts lack.
+
 ## 0.1.0 (pre-release), Nov 9, 2026
 
 The first public release of Tab5 OS, an operating system for the M5Stack Tab5 built on ESP-IDF v6.1.

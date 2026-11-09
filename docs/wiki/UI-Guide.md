@@ -126,7 +126,7 @@ Sizes: `LV_PCT(100)`, `LV_SIZE_CONTENT` or `T5_DP(n)`. Positions are only known 
 
 **Coverage:** ASCII, Latin-1 (`é`, `°`, `ü`...) and a little punctuation: en and em dashes, curly quotes, bullet, ellipsis and euro. Other characters don't render, and that includes CJK, Cyrillic, Greek, Arabic and emoji.
 
-For other scripts, compile a font with `lv_font_conv` into your app as a `const lv_font_t` and set it with `lv_obj_set_style_text_font`. It takes app memory and loses the role styling, so subset it.
+For other scripts, compile a font with `lv_font_conv` into your app as a `const lv_font_t` and set it with `lv_obj_set_style_text_font`. It takes app memory and loses the role styling, so subset it. `apps/examples/calculator` does this for maths symbols (−, √, π, superscripts): its `gen_fonts.py` builds two Roboto sizes from the same pinned source and converter settings as the OS fonts, about 125 KB together.
 
 For dynamic text, `lv_label_set_text_fmt` and `snprintf` work. Set text only when it changes, because every set redraws the label ([Performance](Performance.md#updating-widgets)). Uppercase roles need `md_label_set_text(label, text, role)`, which upper-cases for you.
 

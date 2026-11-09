@@ -1,0 +1,8 @@
+id = "com.t5.example.calculator"
+name = "Calculator"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+orientation = "any"
+description = "A basic and a scientific calculator, with live results"
