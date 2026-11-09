@@ -88,6 +88,8 @@ Every hard number an app can run into, with where it's defined. API level 1.
 | Portrait | 360 x 640 dp, 720 x 1280 px |
 | px per dp | 2 |
 | Status bar | 24 dp |
+| App bar (when on) | 48 dp |
+| Gesture bar | 16 dp (none in full screen) |
 | Icons | 160 glyphs |
 | Text fonts | ASCII, Latin-1, some punctuation |
 | Icon sizes | 18, 24, 40 dp |

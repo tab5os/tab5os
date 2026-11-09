@@ -94,6 +94,17 @@ max_seconds = 30        # 1..300, default 30
 
 The section needs `background_wake = true`. See [Power and background](Power-and-Background.md#scheduled-wakes).
 
+## Shell section
+
+```toml
+[shell]
+app_bar = true          # the shell's 48 dp app bar with the title (default false)
+title = "Air Log"       # its text, at most 47 bytes (default: name)
+fullscreen = false      # start in full screen (default false)
+```
+
+All optional; unknown keys are errors. The app can change each at run time ([UI guide](UI-Guide.md#shell-bars)).
+
 ## Package contents
 
 ```text

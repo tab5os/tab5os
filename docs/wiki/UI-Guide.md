@@ -11,7 +11,7 @@ Apps use LVGL 9.6 with a Material Design 2 layer (`md_*`) that already matches t
 
 Density is fixed at 2 px per dp. Always write `T5_DP(n)`, so a size means the same thing everywhere. A literal `1` is right only for a one-pixel hairline.
 
-The status bar takes the top 24 dp, as padding on `t5_app_screen()`. `t5_shell_set_fullscreen(true)` gives it back until you leave the foreground. Keep important content away from the edges, since two system gestures start there: swipe down from the top for quick settings and swipe up from the bottom to go home.
+The shell's bars take space from your screen, as padding on `t5_app_screen()`: the status bar the top 24 dp, the app bar (if you turn it on) the next 48, and the gesture bar the bottom 16. `t5_shell_get_insets()` says how much, `T5_EV_UI_INSETS` when it changes, and `t5_shell_set_fullscreen(true)` gives it all back until you leave the foreground. Keep important content away from the edges, since two system gestures start there: swipe down from the top for quick settings and swipe up from the bottom to go home. See [Shell bars](#shell-bars).
 
 Touch targets are at least 48 dp. The `md_*` controls already are.
 
@@ -196,3 +196,84 @@ Tapping a text area brings up the on-screen keyboard, and the container pans if 
 ## Motion
 
 Follow MD2's timing: `md_anim_set_curve(&a, MD_CURVE_STANDARD)`, 150 to 300 ms. Animate small things. Respect `t5_ui_low_power()` and skip decorative motion when it's true: the OS already drops ripples and caps the display at 30 fps. See [what's cheap in motion](Performance.md#animation).
+
+## Two ways to build a UI
+
+Everything under `t5_app_screen()` is ordinary LVGL 9.6, so you can mix freely:
+
+| Path | Use it for | Example |
+| --- | --- | --- |
+| MD2 components (`md_*`) | Anything a phone app has: app bars, lists, buttons, switches, sliders, chips, text fields, cards, tabs, dialogs, snackbars, drawers. They follow the theme, the accent colour and dp sizing for you | The Material tab of `apps/examples/ui_gallery` |
+| Raw LVGL (`lv_*`) | Whatever MD2 doesn't have (arcs, charts, meters, spinners, rollers, tables), or a look of your own: create LVGL objects and style them with `lv_obj_set_style_*` | The Custom tab |
+| Your own widget class | A reusable control that draws itself | The gauge in the Custom tab (below) |
+| A canvas | Free drawing into a pixel buffer: plots, sketches, generated images | The Canvas tab |
+
+Take colours from `md_scheme()` and sizes from `T5_DP()` in raw LVGL too, so it matches the rest of the device in both themes.
+
+## Custom widgets
+
+`lv_obj_class_t` is part of the ABI (its layout is locked) and `lv_obj_class` (the base class), `lv_obj_class_create_obj`, `lv_obj_class_init_obj` and `lv_obj_event_base` are exported, so an app can define a widget class. One rule: **leave `instance_size` at 0** and keep your data outside the object. `lv_obj_t`'s own layout isn't part of the ABI, so a struct that embeds it could break on a later OS.
+
+```c
+typedef struct { int32_t value; } gauge_t;
+static lv_obj_class_t gauge_class;               /* filled in at run time */
+
+static void gauge_ctor(const lv_obj_class_t *c, lv_obj_t *obj) { lv_obj_set_user_data(obj, calloc(1, sizeof(gauge_t))); }
+static void gauge_dtor(const lv_obj_class_t *c, lv_obj_t *obj) { free(lv_obj_get_user_data(obj)); }
+static void gauge_event(const lv_obj_class_t *c, lv_event_t *e)
+{
+    if (lv_obj_event_base(&gauge_class, e) != LV_RESULT_OK) return;   /* the base class first */
+    if (lv_event_get_code(e) == LV_EVENT_DRAW_MAIN) {
+        lv_layer_t *layer = lv_event_get_layer(e);
+        /* lv_draw_arc / lv_draw_rect / lv_draw_label / lv_draw_line into layer,
+         * inside lv_obj_get_content_coords(obj) */
+    }
+}
+
+static void on_create(t5_app_t *app)
+{
+    gauge_class.base_class = &lv_obj_class;
+    gauge_class.constructor_cb = gauge_ctor;
+    gauge_class.destructor_cb = gauge_dtor;
+    gauge_class.event_cb = gauge_event;
+    gauge_class.width_def = gauge_class.height_def = T5_DP(160);
+    gauge_class.instance_size = 0;               /* lv_obj_t's size: the rule above */
+    lv_obj_t *g = lv_obj_class_create_obj(&gauge_class, t5_app_screen(app));
+    lv_obj_class_init_obj(g);
+}
+```
+
+Call `lv_obj_invalidate(obj)` when the data changes so it redraws. The user data is the widget's, so don't also use it for something else on that object. Objects of your class are deleted with your screen like any other, which runs the destructor. The full gauge is in `apps/examples/ui_gallery/main.c`.
+
+## Canvas
+
+```c
+lv_draw_buf_t *buf = lv_draw_buf_create(T5_DP(300), T5_DP(160), LV_COLOR_FORMAT_RGB565, 0);
+lv_obj_t *cv = lv_canvas_create(t5_app_screen(app));
+lv_canvas_set_draw_buf(cv, buf);
+lv_canvas_fill_bg(cv, md_color(md_scheme()->c.surface), LV_OPA_COVER);
+lv_layer_t layer;
+lv_canvas_init_layer(cv, &layer);
+lv_draw_line_dsc_t ln;
+lv_draw_line_dsc_init(&ln);
+ln.p1 = (lv_point_precise_t){ 0, 0 };
+ln.p2 = (lv_point_precise_t){ 100, 80 };
+lv_draw_line(&layer, &ln);                       /* any lv_draw_* call */
+lv_canvas_finish_layer(cv, &layer);
+```
+
+The buffer is your app's memory (freed at exit). RGB565 at 300 × 160 dp is 192 KB; keep canvases to the size you show. Redraw from an `lv_timer`, not a task, or take `t5_ui_lock()` first.
+
+## Shell bars
+
+The shell can draw an **app bar** for you: `[shell] app_bar = true` in the manifest (or `t5_shell_set_app_bar(true)`) shows a 48 dp MD2 app bar with your app's name, or `title = "..."`. `t5_shell_set_title()` changes it at run time, and `t5_shell_app_bar()` gives you the bar to add actions to with `md_appbar_add_action()`. It belongs to the shell and is deleted with your screen. If you build your own app bar (an `md_page`, say) leave the shell's off.
+
+The **gesture bar** is a handle in a 16 dp strip at the bottom of every app screen, showing where to swipe up to go home. In **full screen** all bars go and your content gets the whole panel; the handle shows over your app for 2.5 s when full screen starts, and whenever a finger rests on the bottom edge (until 2.5 s after it lifts), so people can always find the way out. Design full-screen UIs so the bottom 16 dp can carry a brief overlay.
+
+| Call | Does |
+| --- | --- |
+| `t5_shell_set_fullscreen(on)`, `t5_shell_fullscreen()` | Full screen on or off (`[shell] fullscreen = true` starts that way) |
+| `t5_shell_set_app_bar(shown)`, `t5_shell_set_title(text)`, `t5_shell_app_bar()` | The app bar |
+| `t5_shell_get_insets(&in)` | What the bars take, in dp; `T5_EV_UI_INSETS` when it changes |
+| `t5_shell_activity_start/update/end` | An ongoing activity in the status bar and quick settings ([SDK guide](../sdk.md#status-bar-and-activities)) |
+
