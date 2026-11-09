@@ -188,6 +188,7 @@ t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok)
         if (esp_codec_dev_open(s_out, &f) == ESP_CODEC_DEV_OK) {
             es8388_tune();          /* the ADC side off while idle too */
             esp_codec_dev_close(s_out);
+            es8388_set(0x04, 0, 0xfc);   /* outputs biased from boot: no pop at the first sound */
         }
     }
     if (s_in) {
@@ -211,11 +212,12 @@ t5_err_t audio_hw_out_open(int volume, bool muted)
     return T5_OK;
 }
 
-void audio_hw_out_close(void)
+void audio_hw_out_close(bool keep_outputs)
 {
     if (!s_out_open) return;
     audio_hw_speaker(false);
     esp_codec_dev_close(s_out);
+    if (keep_outputs) es8388_set(0x04, 0, 0xfc);   /* DACPOWER: DACs down, LOUT/ROUT on */
     s_out_open = false;
 }
 

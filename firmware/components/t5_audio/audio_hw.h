@@ -19,7 +19,9 @@
 /* Probe both codecs and create the I2S channels (codecs stay powered down). */
 t5_err_t audio_hw_init(bool *dac_ok, bool *adc_ok);
 t5_err_t audio_hw_out_open(int volume, bool muted);
-void audio_hw_out_close(void);
+/* keep_outputs: power the DACs down but leave the output drivers biased, so
+ * the headphone line doesn't step (a pop) now and when it opens again. */
+void audio_hw_out_close(bool keep_outputs);
 /* Blocking: returns once the DMA has taken the block. */
 t5_err_t audio_hw_write(const int16_t *pcm, size_t bytes);
 t5_err_t audio_hw_in_open(float gain_db);
