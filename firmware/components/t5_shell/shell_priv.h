@@ -63,6 +63,7 @@ bool qs_is_open(void);
 /* launcher.c */
 lv_obj_t *launcher_get(void);
 void launcher_reload(void);
+void launcher_restyle(void);   /* after an accent change */
 void launcher_tick(void);
 /* The app drawer over the home screen. */
 void launcher_drawer_open(void);

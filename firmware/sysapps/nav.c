@@ -118,7 +118,8 @@ void sa_fmt_bytes(char *out, size_t n, uint64_t b)
 
 void sa_fmt_duration(char *out, size_t n, uint32_t s)
 {
-    if (s >= 3600) snprintf(out, n, "%u h %u min", (unsigned)(s / 3600), (unsigned)(s % 3600 / 60));
+    if (s >= 3600 && s % 3600 < 60) snprintf(out, n, "%u h", (unsigned)(s / 3600));
+    else if (s >= 3600) snprintf(out, n, "%u h %u min", (unsigned)(s / 3600), (unsigned)(s % 3600 / 60));
     else if (s >= 60) snprintf(out, n, "%u min", (unsigned)(s / 60));
     else snprintf(out, n, "%u s", (unsigned)s);
 }

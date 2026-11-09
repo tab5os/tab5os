@@ -118,9 +118,9 @@ Sizes: `LV_PCT(100)`, `LV_SIZE_CONTENT` or `T5_DP(n)`. Positions are only known 
 | `MD_TYPE_SUBTITLE1` | 16 | `subtitle1` | List primary text |
 | `MD_TYPE_BODY1` | 16 | `body1` | Body text |
 | `MD_TYPE_BODY2` | 14 | `body2` | Secondary text |
-| `MD_TYPE_BUTTON` | 14, uppercase | `button` | Button labels |
+| `MD_TYPE_BUTTON` | 14, medium | `button` | Button labels |
 | `MD_TYPE_CAPTION` | 12 | `caption` | Small print |
-| `MD_TYPE_OVERLINE` | 12, uppercase | `overline` | Section labels |
+| `MD_TYPE_OVERLINE` | 12, medium | `overline` | Section labels |
 
 `md_font_mono()` is Roboto Mono at 12 dp for code and logs.
 
@@ -128,7 +128,7 @@ Sizes: `LV_PCT(100)`, `LV_SIZE_CONTENT` or `T5_DP(n)`. Positions are only known 
 
 For other scripts, compile a font with `lv_font_conv` into your app as a `const lv_font_t` and set it with `lv_obj_set_style_text_font`. It takes app memory and loses the role styling, so subset it. `apps/examples/calculator` does this for maths symbols (−, √, π, superscripts): its `gen_fonts.py` builds two Roboto sizes from the same pinned source and converter settings as the OS fonts, about 125 KB together.
 
-For dynamic text, `lv_label_set_text_fmt` and `snprintf` work. Set text only when it changes, because every set redraws the label ([Performance](Performance.md#updating-widgets)). Uppercase roles need `md_label_set_text(label, text, role)`, which upper-cases for you.
+For dynamic text, `lv_label_set_text_fmt` and `snprintf` work. Set text only when it changes, because every set redraws the label ([Performance](Performance.md#updating-widgets)). Every role is sentence case: write labels the way they should appear ("Save changes", not "SAVE CHANGES").
 
 ## Colour
 

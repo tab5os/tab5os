@@ -1,10 +1,10 @@
 /* BLE Explorer: the Bluetooth LE API (t5/ble.h) in both roles.
  *
- *   Scan (the button at the top): lists nearby devices with their
- *   signal, newest names filled in as scan responses arrive.
+ *   Scan (the search action in the app bar): lists nearby devices with
+ *   their signal, newest names filled in as scan responses arrive.
  *   Tap a device: connects, discovers its GATT database, reads its name
  *   (0x2a00) and battery level (0x2a19) if it has them, and disconnects.
- *   Serve (the button next to it): serves the battery service (0x180f)
+ *   Share battery level (the switch): serves the battery service (0x180f)
  *   with the Tab5's own level, notified every 5 s, and advertises as
  *   "Tab5 Explorer" so a phone can connect.
  *
@@ -33,7 +33,7 @@ typedef enum { JOB_NONE, JOB_SCAN, JOB_PROBE, JOB_SERVE } job_t;
 
 static struct {
     t5_app_t *app;
-    lv_obj_t *status, *list;
+    lv_obj_t *status, *list, *share;
     t5_mutex_t mx;
     peer_t devs[MAX_DEVS];
     int ndevs;
@@ -67,8 +67,8 @@ static void bind(md_list_row_t *row, uint32_t i, void *ud)
     t5_mutex_unlock(s.mx);
     char a[18], sub[48];
     t5_ble_format_addr(d.addr, a);
-    snprintf(sub, sizeof sub, "%s  ·  %d dBm", a, d.rssi);
-    lv_label_set_text(row->primary, d.name[0] ? d.name : "(no name)");
+    snprintf(sub, sizeof sub, "%s, signal %d dBm", a, d.rssi);
+    lv_label_set_text(row->primary, d.name[0] ? d.name : "Unnamed device");
     if (row->secondary) lv_label_set_text(row->secondary, sub);
 }
 
@@ -86,7 +86,7 @@ static void clicked(uint32_t i, void *ud)
 {
     (void)ud;
     if (s.job != JOB_NONE) {
-        T5_IGNORE(t5_shell_toast("Busy: wait for the scan to finish"));   /* a toast failing is harmless */
+        T5_IGNORE(t5_shell_toast("Wait for the scan to finish"));   /* a toast failing is harmless */
         return;
     }
     s.probe = (int)i;
@@ -97,17 +97,31 @@ static void scan_clicked(lv_event_t *e)
 {
     (void)e;
     if (!t5_ble_ready()) {
-        T5_IGNORE(t5_shell_toast("Turn on Bluetooth in Settings"));
+        T5_IGNORE(t5_shell_toast("Turn on Bluetooth in Settings first"));
         return;
     }
     if (s.job == JOB_NONE) s.job = JOB_SCAN;
 }
 
-static void serve_clicked(lv_event_t *e)
+static void share_set_ui(void *on)
 {
-    (void)e;
-    if (s.serving) s.serving = false;               /* the worker stops it */
-    else if (s.job == JOB_NONE) s.job = JOB_SERVE;
+    lv_obj_set_state(s.share, LV_STATE_CHECKED, on != NULL);
+}
+
+static void share_changed(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target_obj(e), LV_STATE_CHECKED);
+    if (!on) {
+        s.serving = false;                          /* the worker stops it */
+    } else if (!t5_ble_ready()) {
+        T5_IGNORE(t5_shell_toast("Turn on Bluetooth in Settings first"));
+        share_set_ui(NULL);
+    } else if (s.job == JOB_NONE) {
+        s.job = JOB_SERVE;
+    } else {
+        T5_IGNORE(t5_shell_toast("Wait for the scan to finish"));
+        share_set_ui(NULL);
+    }
 }
 
 /* ---- the worker's jobs ------------------------------------------------------- */
@@ -139,9 +153,9 @@ static void do_scan(void)
     t5_ble_scanner_t *sc;
     t5_err_t e = t5_ble_scan_start(&(t5_ble_scan_cfg_t){ .duration_ms = 6000, .active = true }, &sc);
     if (e != T5_OK) {
-        status("Can't scan: %s", t5_err_str(e));
+        status("Couldn't scan (%s)", t5_err_str(e));
     } else {
-        status("Scanning...", NULL);
+        status("Scanning for 6 seconds…", NULL);
         t5_ble_report_t r;
         uint32_t last = 0;
         while (t5_app_running(s.app) && t5_ble_scan_next(sc, &r, 500) != T5_ERR_STATE) {
@@ -156,7 +170,9 @@ static void do_scan(void)
         T5_IGNORE(t5_ui_async(refresh_ui, NULL));
         char n[8];
         snprintf(n, sizeof n, "%d", s.ndevs);
-        status("%s devices. Tap one to read it.", n);
+        if (!s.ndevs) status("No devices found. Check that they're advertising, then scan again.", NULL);
+        else if (s.ndevs == 1) status("Found 1 device. Tap it to read its name and battery level.", NULL);
+        else status("Found %s devices. Tap one to read its name and battery level.", n);
     }
     if (act) T5_IGNORE(t5_shell_activity_end(act));
 }
@@ -167,11 +183,11 @@ static void do_probe(void)
     t5_mutex_lock(s.mx);
     d = s.devs[s.probe];
     t5_mutex_unlock(s.mx);
-    status("Connecting to %s...", d.name[0] ? d.name : "the device");
+    status("Connecting to %s…", d.name[0] ? d.name : "the device");
     t5_ble_conn_t *c;
     t5_err_t e = t5_ble_conn_open(d.addr, d.type, 8000, &c);
     if (e != T5_OK) {
-        status("Couldn't connect: %s", t5_err_str(e));
+        status("Couldn't connect (%s)", t5_err_str(e));
         return;
     }
     char msg[160];
@@ -208,13 +224,14 @@ static void do_serve(void)
                              &adv);
     }
     if (e != T5_OK) {
-        status("Can't serve: %s", t5_err_str(e));
+        status("Couldn't share the battery level (%s)", t5_err_str(e));
         if (srv) T5_IGNORE(t5_ble_server_close(srv));
+        T5_IGNORE(t5_ui_async(share_set_ui, NULL));
         return;
     }
     s.serving = true;
     T5_IGNORE(t5_shell_activity_start(MD_ICON_BLUETOOTH, "Serving the battery level", &act));
-    status("Advertising as \"Tab5 Explorer\" with the battery service", NULL);
+    status("Advertising as \"Tab5 Explorer\". Connect from a phone to read the battery level.", NULL);
     uint32_t next = 0;
     while (s.serving && t5_app_running(s.app)) {
         t5_ble_server_ev_t ev;
@@ -223,7 +240,7 @@ static void do_serve(void)
             char a[18];
             t5_ble_format_addr(ev.addr, a);
             if (ev.type == T5_BLE_SERVER_CONNECTED) status("%s connected", a);
-            if (ev.type == T5_BLE_SERVER_DISCONNECTED) status("%s left; still advertising", a);
+            if (ev.type == T5_BLE_SERVER_DISCONNECTED) status("%s disconnected. Still advertising.", a);
         }
         uint32_t now = (uint32_t)(t5_time_us() / 1000);
         if (now >= next) {
@@ -236,7 +253,8 @@ static void do_serve(void)
     T5_IGNORE(t5_ble_server_close(srv));
     if (act) T5_IGNORE(t5_shell_activity_end(act));
     s.serving = false;
-    status("Peripheral off", NULL);
+    T5_IGNORE(t5_ui_async(share_set_ui, NULL));
+    status("Stopped sharing the battery level.", NULL);
 }
 
 static void worker(void *arg)
@@ -255,31 +273,41 @@ static void worker(void *arg)
     }
 }
 
+static void back(lv_event_t *e)
+{
+    (void)e;
+    t5_app_exit(t5_app_self());
+}
+
 static void on_create(t5_app_t *app)
 {
     s.app = app;
     s.mx = t5_mutex_create();
     lv_obj_t *scr = t5_app_screen(app);
     lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
-    /* No title bar: the status line and the two actions share one row. */
-    lv_obj_t *row = lv_obj_create(scr);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_hor(row, T5_DP(8), 0);
-    s.status = md_label_create(row, t5_ble_ready() ? "Tap Scan to look for devices." : "Bluetooth is off: turn it on in Settings.",
+    lv_obj_set_style_pad_gap(scr, 0, 0);
+    lv_obj_t *bar = md_appbar_create(scr, "BLE Explorer", MD_ICON_ARROW_BACK, back, NULL);
+    md_appbar_add_action(bar, MD_ICON_SEARCH, scan_clicked, NULL);   /* scan */
+
+    lv_obj_t *share = md_row_create(scr, MD_ICON_BLUETOOTH, "Share battery level",
+                                    "Lets a phone connect to \"Tab5 Explorer\"");
+    s.share = md_row_switch(share, false);
+    lv_obj_add_event_cb(s.share, share_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    md_section_create(scr, "Nearby devices");
+    s.status = md_label_create(scr, t5_ble_ready() ? "Tap the search button to scan for devices."
+                                                   : "Bluetooth is off. Turn it on in Settings, then scan.",
                                MD_TYPE_BODY2);
-    lv_obj_set_style_pad_all(s.status, T5_DP(8), 0);
-    lv_obj_set_flex_grow(s.status, 1);
-    lv_label_set_long_mode(s.status, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_add_event_cb(md_button_create(row, "Scan", MD_BUTTON_TEXT), scan_clicked, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(md_button_create(row, "Serve", MD_BUTTON_TEXT), serve_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_width(s.status, LV_PCT(100));
+    lv_obj_set_style_pad_hor(s.status, T5_DP(16), 0);
+    lv_obj_set_style_pad_ver(s.status, T5_DP(4), 0);
+    lv_obj_set_style_text_opa(s.status, md_scheme()->on_surface.medium, 0);
+    lv_label_set_long_mode(s.status, LV_LABEL_LONG_MODE_WRAP);
     s.list = md_list_create(scr, 0, 72, bind, clicked, NULL);
     lv_obj_set_width(s.list, LV_PCT(100));
     lv_obj_set_flex_grow(s.list, 1);
     if (t5_task_create("ble.worker", worker, NULL, 6144, 2, T5_CORE_ANY, &s.worker) != T5_OK) {
-        lv_label_set_text(s.status, "Out of memory");
+        lv_label_set_text(s.status, "Couldn't start: not enough memory. Close other apps and try again.");
     }
 }
 

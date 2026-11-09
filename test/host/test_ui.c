@@ -285,10 +285,11 @@ static void test_fbt_pick(void)
 static void test_tokens_density_and_type(void)
 {
     TEST_ASSERT_EQUAL(34, md_type(MD_TYPE_HEADLINE4)->size_dp);
-    TEST_ASSERT_TRUE(md_type(MD_TYPE_BUTTON)->uppercase);
+    /* Sentence case throughout: no role shouts. */
+    for (int r = 0; r < MD_TYPE_COUNT; r++) TEST_ASSERT_FALSE(md_type((md_type_role_t)r)->uppercase);
     TEST_ASSERT_EQUAL(MD_WEIGHT_MEDIUM, md_type(MD_TYPE_HEADLINE6)->weight);
-    /* Button tracking 0.089 em at 14 dp (28 px) = 2.49 px -> 2. */
-    TEST_ASSERT_EQUAL(2, md_type_tracking_px(MD_TYPE_BUTTON));
+    /* Button tracking 0.018 em at 14 dp (28 px) = 0.5 px -> 1. */
+    TEST_ASSERT_EQUAL(1, md_type_tracking_px(MD_TYPE_BUTTON));
     TEST_ASSERT_EQUAL(0, md_type_tracking_px(MD_TYPE_HEADLINE5));
 }
 

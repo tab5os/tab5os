@@ -80,7 +80,7 @@ static struct {
     lv_style_t list, list_btn;
     lv_style_t dropdown, dropdown_list, dropdown_sel;
     lv_style_t tab_btn, tab_btn_on;
-    lv_style_t kb, kb_btn;
+    lv_style_t kb, kb_btn, kb_btn_fn, kb_btn_pr;
     lv_style_t arc_main, arc_ind;
     lv_style_t no_press;
     lv_style_t elev[MD_ELEV_LEVELS];
@@ -194,7 +194,7 @@ static void build_styles(void)
 
     lv_style_set_border_color(&s.btn_outlined, md_color(c->on_surface));
     lv_style_set_border_opa(&s.btn_outlined, e->divider);
-    lv_style_set_border_width(&s.btn_outlined, 1 /* px: hairline */);
+    lv_style_set_border_width(&s.btn_outlined, T5_DP(1));
 
     lv_style_set_bg_color(&s.btn_disabled, md_color(c->on_surface));
     lv_style_set_bg_opa(&s.btn_disabled, e->divider);
@@ -337,6 +337,12 @@ static void build_styles(void)
     lv_style_set_text_font(&s.kb_btn, kb_font());
     lv_style_set_border_width(&s.kb_btn, 0);
     lv_style_set_shadow_width(&s.kb_btn, 0);
+    /* Shift, backspace, the mode keys and Enter (LVGL marks them checked)
+     * sit a step darker than the letters, so the letter block reads as one
+     * shape, as on a phone keyboard. A press lightens any key. */
+    lv_style_set_bg_color(&s.kb_btn_fn, md_color(md_surface_at(&s_scheme, 2)));
+    lv_style_set_text_color(&s.kb_btn_fn, md_color(c->on_surface));
+    lv_style_set_bg_color(&s.kb_btn_pr, md_color(md_mix(c->on_surface, md_surface_at(&s_scheme, 24), 61)));
 
     lv_style_set_color_filter_opa(&s.no_press, LV_OPA_TRANSP);
     lv_style_set_transform_width(&s.no_press, 0);
@@ -438,6 +444,8 @@ static void apply_cb(lv_theme_t *th, lv_obj_t *obj)
     else if (lv_obj_check_type(obj, &lv_keyboard_class)) {
         lv_obj_add_style(obj, &s.kb, 0);
         lv_obj_add_style(obj, &s.kb_btn, LV_PART_ITEMS);
+        lv_obj_add_style(obj, &s.kb_btn_fn, LV_PART_ITEMS | LV_STATE_CHECKED);
+        lv_obj_add_style(obj, &s.kb_btn_pr, LV_PART_ITEMS | LV_STATE_PRESSED);
     }
 #endif
 #if LV_USE_BUTTONMATRIX

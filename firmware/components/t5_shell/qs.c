@@ -12,6 +12,7 @@
 #include "shell_priv.h"
 
 #define QS_MAX_W_DP 560
+#define QS_RADIUS_DP 16          /* the sheet's bottom corners */
 
 typedef enum { TILE_WIFI, TILE_BLE, TILE_ROTATE, TILE_SAVER, TILE_MUTE, TILE_COUNT } tile_id_t;
 
@@ -64,14 +65,16 @@ static void update(void)
     shell_show_time(s.time, s.date);
     char buf[64];
     if (st.battery_pct < 0) {
-        snprintf(buf, sizeof buf, "Battery: measuring");
+        snprintf(buf, sizeof buf, "Measuring battery");
     } else if (st.charging) {
-        snprintf(buf, sizeof buf, "%d%% · charging", st.battery_pct);
+        snprintf(buf, sizeof buf, "%d%%, charging", st.battery_pct);
     } else if (st.usb_power) {
-        snprintf(buf, sizeof buf, "%d%% · on USB power", st.battery_pct);
-    } else if (st.minutes_left > 0) {
-        snprintf(buf, sizeof buf, "%d%% · about %d h %d min left", st.battery_pct, (int)(st.minutes_left / 60),
+        snprintf(buf, sizeof buf, "%d%%, on USB power", st.battery_pct);
+    } else if (st.minutes_left >= 60) {
+        snprintf(buf, sizeof buf, "%d%%, about %d h %d min left", st.battery_pct, (int)(st.minutes_left / 60),
                  (int)(st.minutes_left % 60));
+    } else if (st.minutes_left > 0) {
+        snprintf(buf, sizeof buf, "%d%%, about %d min left", st.battery_pct, (int)st.minutes_left);
     } else {
         snprintf(buf, sizeof buf, "%d%%", st.battery_pct);
     }
@@ -107,7 +110,8 @@ static void act_row(lv_obj_t *parent, const shell_activity_t *a)
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, T5_DP(12), 0);
     lv_obj_set_clickable(row, false);
-    md_icon_create(row, a->icon, 18);
+    lv_obj_t *ic = md_icon_create(row, a->icon, MD_ICON_DP);
+    lv_obj_set_style_text_opa(ic, sc->on_surface.medium, 0);
     lv_obj_t *col = lv_obj_create(row);
     lv_obj_remove_style_all(col);
     lv_obj_set_height(col, LV_SIZE_CONTENT);
@@ -115,9 +119,15 @@ static void act_row(lv_obj_t *parent, const shell_activity_t *a)
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(col, T5_DP(2), 0);
     lv_obj_set_clickable(col, false);
-    char text[T5_APP_NAME_LEN + SHELL_ACTIVITY_TEXT_LEN + 8];
-    snprintf(text, sizeof text, "%s%s%s", a->who, a->who[0] ? " · " : "", a->text);
-    lv_obj_t *l = md_label_create(col, text, MD_TYPE_BODY2);
+    /* Who on the first line, what on the second; the system's own
+     * activities have no who and take one line. */
+    if (a->who[0]) {
+        lv_obj_t *w = md_label_create(col, a->who, MD_TYPE_BODY2);
+        lv_obj_set_width(w, LV_PCT(100));
+        lv_label_set_long_mode(w, LV_LABEL_LONG_MODE_DOTS);
+    }
+    lv_obj_t *l = md_label_create(col, a->text, a->who[0] ? MD_TYPE_CAPTION : MD_TYPE_BODY2);
+    if (a->who[0]) lv_obj_set_style_text_opa(l, sc->on_surface.medium, 0);
     lv_obj_set_width(l, LV_PCT(100));
     lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
     if (a->percent >= 0) {
@@ -283,17 +293,20 @@ void qs_open(void)
     lv_obj_t *p = lv_obj_create(s.catcher);
     s.panel = p;
     md_set_elevation(p, MD_ELEV_MENU, false);
-    lv_obj_set_style_radius(p, 0, 0);
+    /* Rounded at the bottom only: the sheet rests QS_RADIUS_DP above the
+     * screen's top edge, with that much more padding, so its top corners
+     * stay off screen. */
+    lv_obj_set_style_radius(p, T5_DP(QS_RADIUS_DP), 0);
     lv_obj_set_width(p, LV_PCT(100));
     lv_obj_set_style_max_width(p, T5_DP(QS_MAX_W_DP), 0);
     lv_obj_set_height(p, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_hor(p, T5_DP(16), 0);
-    lv_obj_set_style_pad_top(p, T5_DP(12), 0);
+    lv_obj_set_style_pad_top(p, T5_DP(12 + QS_RADIUS_DP), 0);
     lv_obj_set_style_pad_bottom(p, T5_DP(8), 0);
     lv_obj_set_style_pad_row(p, T5_DP(8), 0);
     lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollable(p, false);
-    lv_obj_align(p, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_align(p, LV_ALIGN_TOP_MID, 0, -T5_DP(QS_RADIUS_DP));
     lv_obj_add_event_cb(p, panel_gesture, LV_EVENT_GESTURE, NULL);
 
     /* Header: time and date, battery, Settings. */
@@ -313,7 +326,7 @@ void qs_open(void)
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_clickable(col, false);
     s.date = md_label_create(col, "", MD_TYPE_BODY2);
-    s.battery = md_label_create(col, "", MD_TYPE_CAPTION);
+    s.battery = md_label_create(col, "", MD_TYPE_BODY2);
     lv_obj_set_style_text_opa(s.battery, sc->on_surface.medium, 0);
     md_appbar_add_action(hdr, MD_ICON_SETTINGS, settings_clicked, NULL);
 
@@ -343,6 +356,7 @@ void qs_open(void)
         s.tile_icon[i] = md_icon_create(circle, s_tile_def[i].icon_on, MD_ICON_DP);
         lv_obj_center(s.tile_icon[i]);
         s.tile_label[i] = md_label_create(t, s_tile_def[i].label, MD_TYPE_CAPTION);
+        lv_obj_set_style_text_letter_space(s.tile_label[i], 0, 0);
         lv_obj_set_width(s.tile_label[i], LV_PCT(100));
         lv_obj_set_style_text_align(s.tile_label[i], LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(s.tile_label[i], LV_LABEL_LONG_MODE_DOTS);
@@ -390,7 +404,7 @@ void qs_open(void)
     lv_anim_init(&a);
     lv_anim_set_var(&a, p);
     lv_anim_set_exec_cb(&a, shell_anim_y);
-    lv_anim_set_values(&a, -h, 0);
+    lv_anim_set_values(&a, -h, -T5_DP(QS_RADIUS_DP));
     lv_anim_set_duration(&a, MD_DUR_DRAWER_IN_MS);
     md_anim_set_curve(&a, MD_CURVE_DECELERATION);
     lv_anim_start(&a);

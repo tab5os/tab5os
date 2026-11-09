@@ -20,7 +20,7 @@
 
 #define DOCK_N 5
 #define CELL_MIN_W_DP 96
-#define CELL_H_DP 100
+#define CELL_H_DP 116            /* badge plus a two-line name */
 #define BADGE_DP 56
 #define DOCK_BADGE_DP 52
 #define PULL_CLOSE_DP 48
@@ -37,16 +37,20 @@ static int s_napps;
 static char s_shown_recents[SHELL_RECENTS][T5_APP_ID_LEN];
 static char s_dock_ids[DOCK_N][T5_APP_ID_LEN];
 
-/* A stable colour per app from its id: the accents' 700 tones, which carry
- * white icons on the dark theme. */
-static md_rgb_t badge_color(const char *id)
+/* A stable hue per app from its id. Badges are tonal: the accent's soft
+ * 200 tone for the glyph on a dark circle tinted with the same hue, so a
+ * row of unrelated hues still reads as one set, and each app keeps its
+ * colour. Full-strength 700 discs side by side were loud and clashed. */
+#define BADGE_TINT_OPA 72        /* 28% of the hue over the surface */
+
+static const md_accent_def_t *badge_accent(const char *id)
 {
     static const md_accent_t pick[] = { MD_ACCENT_BLUE, MD_ACCENT_TEAL, MD_ACCENT_INDIGO, MD_ACCENT_GREEN,
                                         MD_ACCENT_ORANGE, MD_ACCENT_PINK, MD_ACCENT_CYAN, MD_ACCENT_PURPLE,
                                         MD_ACCENT_RED, MD_ACCENT_AMBER };
     uint32_t h = 2166136261u;
     for (const char *p = id; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
-    return md_accent(pick[h % (sizeof pick / sizeof pick[0])])->dark_variant;
+    return md_accent(pick[h % (sizeof pick / sizeof pick[0])]);
 }
 
 static const shell_app_t *find(const char *id)
@@ -63,9 +67,11 @@ static lv_obj_t *badge(lv_obj_t *parent, const shell_app_t *a, int size_dp, int 
     lv_obj_remove_style_all(b);
     lv_obj_set_size(b, T5_DP(size_dp), T5_DP(size_dp));
     lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(b, md_color(badge_color(a->id)), 0);
+    const md_accent_def_t *ac = badge_accent(a->id);
+    md_rgb_t base = md_surface_at(md_scheme(), MD_ELEV_CARD);
+    lv_obj_set_style_bg_color(b, md_color(md_mix(ac->dark, base, BADGE_TINT_OPA)), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(b, lv_color_white(), 0);
+    lv_obj_set_style_text_color(b, md_color(ac->dark), 0);
     lv_obj_set_clickable(b, false);
     lv_obj_t *i = md_icon_create(b, a->icon[0] ? a->icon : MD_ICON_EXTENSION, icon_dp);
     lv_obj_center(i);
@@ -115,7 +121,8 @@ static lv_obj_t *cell(lv_obj_t *parent, const shell_app_t *a, const char *id)
     make_tappable(c, id);
     badge(c, a, BADGE_DP, 40);
     lv_obj_t *l = md_label_create(c, shell_app_name(a), MD_TYPE_BODY2);
-    lv_obj_set_size(l, LV_PCT(100), T5_DP(20));   /* one line, cut with dots */
+    lv_obj_set_style_text_letter_space(l, 0, 0);
+    lv_obj_set_size(l, LV_PCT(100), T5_DP(40));   /* up to two lines, then dots */
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
     return c;
@@ -259,20 +266,45 @@ static void grid_released(lv_event_t *e)
     if (lv_obj_get_scroll_y(s_grid) < -T5_DP(PULL_CLOSE_DP)) launcher_drawer_close(true);
 }
 
-static lv_obj_t *chevron(lv_obj_t *parent, const char *icon, lv_event_cb_t cb)
+/* The drawer's handle: a chevron, with a word under it on the home screen
+ * so the swipe up is discoverable without being taught. */
+static lv_obj_t *chevron(lv_obj_t *parent, const char *icon, const char *text, lv_event_cb_t cb)
 {
     lv_obj_t *b = lv_obj_create(parent);
     lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, T5_DP(64), T5_DP(32));
+    lv_obj_set_size(b, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_width(b, T5_DP(64), 0);
+    lv_obj_set_style_min_height(b, T5_DP(32), 0);
+    lv_obj_set_style_pad_hor(b, T5_DP(16), 0);
+    lv_obj_set_style_pad_ver(b, text ? T5_DP(4) : 0, 0);
     lv_obj_set_style_radius(b, T5_DP(16), 0);
+    lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollable(b, false);
     lv_obj_set_clickable(b, true);
     md_ripple_attach(b);
     lv_obj_t *i = md_icon_create(b, icon, 24);
     lv_obj_set_style_text_opa(i, md_scheme()->on_surface.medium, 0);
-    lv_obj_center(i);
+    lv_obj_set_clickable(i, false);
+    if (text) {
+        lv_obj_t *l = md_label_create(b, text, MD_TYPE_CAPTION);
+        lv_obj_set_style_text_opa(l, md_scheme()->on_surface.medium, 0);
+        lv_obj_set_style_text_letter_space(l, 0, 0);
+        lv_obj_set_clickable(l, false);
+    }
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
     return b;
+}
+
+static lv_obj_t *s_headers[2];
+static int s_nheaders;
+
+static void drawer_header(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *l = md_section_create(parent, text);
+    if (s_nheaders < 2) s_headers[s_nheaders++] = l;
+    lv_obj_set_style_pad_left(l, T5_DP(4), 0);
+    lv_obj_set_style_pad_top(l, T5_DP(8), 0);
 }
 
 static void build_drawer(void)
@@ -290,7 +322,7 @@ static void build_drawer(void)
     lv_obj_set_clickable(s_drawer, true);   /* taps never fall through to home */
     lv_obj_set_hidden(s_drawer, true);
 
-    chevron(s_drawer, MD_ICON_EXPAND_MORE, close_clicked);
+    chevron(s_drawer, MD_ICON_EXPAND_MORE, NULL, close_clicked);
 
     s_recent_row = lv_obj_create(s_drawer);
     lv_obj_remove_style_all(s_recent_row);
@@ -298,18 +330,17 @@ static void build_drawer(void)
     lv_obj_set_style_pad_hor(s_recent_row, T5_DP(MD_MARGIN_DP), 0);
     lv_obj_set_flex_flow(s_recent_row, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollable(s_recent_row, false);
+    /* Named groups, so the recent apps read as shortcuts rather than as
+     * the list repeating itself. Both headers go when there are no
+     * recents: the grid alone needs no title. */
+    drawer_header(s_recent_row, "Recent");
     s_recent_box = lv_obj_create(s_recent_row);
     lv_obj_remove_style_all(s_recent_box);
     lv_obj_set_size(s_recent_box, LV_PCT(100), T5_DP(CELL_H_DP));
     lv_obj_set_flex_flow(s_recent_box, LV_FLEX_FLOW_ROW);
     lv_obj_set_scrollable(s_recent_box, false);   /* one row: the extra ones are clipped */
     lv_obj_set_style_clip_corner(s_recent_box, false, 0);
-    lv_obj_t *div = lv_obj_create(s_recent_row);
-    lv_obj_remove_style_all(div);
-    lv_obj_set_size(div, LV_PCT(100), 1); /* px */
-    lv_obj_set_style_margin_ver(div, T5_DP(8), 0);
-    lv_obj_set_style_bg_color(div, md_color(sc->c.on_surface), 0);
-    lv_obj_set_style_bg_opa(div, 31, 0);   /* 12% */
+    drawer_header(s_recent_row, "All apps");
     lv_obj_set_hidden(s_recent_row, true);
 
     s_grid = lv_obj_create(s_drawer);
@@ -381,15 +412,28 @@ static void scr_resized(lv_event_t *e)
     size_cells();
 }
 
+/* The colours taken from the accent. Local styles don't follow
+ * md_set_accent(), so the accent code calls this after changing it. */
+void launcher_restyle(void)
+{
+    if (!s_scr) return;
+    const md_scheme_t *sc = md_scheme();
+    lv_obj_set_style_bg_color(s_scr, md_color(sc->c.background), 0);
+    lv_obj_set_style_bg_grad_color(s_scr, md_color(md_mix(sc->c.primary_variant, sc->c.background, 112)), 0);
+    for (int i = 0; i < s_nheaders; i++) lv_obj_set_style_text_color(s_headers[i], md_color(sc->c.primary), 0);
+}
+
 lv_obj_t *launcher_get(void)
 {
     if (s_scr) return s_scr;
     const md_scheme_t *sc = md_scheme();
     s_scr = lv_obj_create(NULL);
-    /* The wallpaper: a wash of the primary colour fading into the background. */
-    lv_obj_set_style_bg_color(s_scr, md_color(md_mix(sc->c.primary_variant, sc->c.background, 96)), 0);
-    lv_obj_set_style_bg_grad_color(s_scr, md_color(sc->c.background), 0);
+    /* The wallpaper: plain background under the status bar and the clock,
+     * warming into the primary colour behind the dock. Starting dark means
+     * no hard edge where the opaque status bar meets it, and the colour
+     * sits where the hands go. */
     lv_obj_set_style_bg_grad_dir(s_scr, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(s_scr, 64, 0);
     lv_obj_set_scrollable(s_scr, false);
     lv_obj_add_event_cb(s_scr, scr_resized, LV_EVENT_SIZE_CHANGED, NULL);
 
@@ -411,6 +455,7 @@ lv_obj_t *launcher_get(void)
     lv_obj_set_flex_flow(glance, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollable(glance, false);
     s_time = md_label_create(glance, "", MD_TYPE_HEADLINE4);
+    lv_obj_set_style_text_letter_space(s_time, -T5_DP(1), 0);   /* display figures set tight */
     s_date = md_label_create(glance, "", MD_TYPE_SUBTITLE1);
     lv_obj_set_style_text_opa(s_date, sc->on_surface.medium, 0);
 
@@ -422,7 +467,7 @@ lv_obj_t *launcher_get(void)
     lv_obj_set_width(space, 1); /* px: flex grow sets the real width */
     lv_obj_set_flex_grow(space, 1);
 
-    chevron(home, MD_ICON_EXPAND_LESS, open_clicked);
+    chevron(home, MD_ICON_EXPAND_LESS, "All apps", open_clicked);
 
     s_dock = lv_obj_create(home);
     lv_obj_remove_style_all(s_dock);
@@ -437,6 +482,7 @@ lv_obj_t *launcher_get(void)
     lv_obj_set_scrollable(s_dock, false);
 
     build_drawer();
+    launcher_restyle();
     launcher_reload();
     launcher_tick();
     return s_scr;
@@ -445,6 +491,7 @@ lv_obj_t *launcher_get(void)
 void launcher_reset(void)
 {
     s_scr = s_time = s_date = s_dock = NULL;
+    s_nheaders = 0;
     s_drawer = s_recent_row = s_recent_box = s_grid = NULL;
     s_drawer_open = false;
     s_napps = 0;

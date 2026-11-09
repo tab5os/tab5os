@@ -101,9 +101,10 @@ bool sa_photo_open(lv_obj_t *screen, const char *path, void (*on_close)(void))
     if (!sa_photo_can_open(path)) return false;
     photo_t *p = calloc(1, sizeof *p);
     if (!p) return false;
-    if (decode_jpeg(p, path) != T5_OK) {
+    t5_err_t err = decode_jpeg(p, path);
+    if (err != T5_OK) {
         free(p);
-        md_snackbar_show("Can't show this photo", NULL, NULL, NULL);
+        sa_report(err, "open this photo");
         return false;
     }
     p->on_close = on_close;
@@ -119,18 +120,21 @@ bool sa_photo_open(lv_obj_t *screen, const char *path, void (*on_close)(void))
     lv_image_set_src(p->img, &p->photo);
     lv_obj_center(p->img);
 
+    /* Back, top left, in the Camera's round-button style: the viewer is a
+     * page the user returns from, not a dialog to dismiss. A dark disc so it
+     * reads over bright photos. */
     lv_obj_t *b = lv_button_create(p->root);
     lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, T5_DP(48), T5_DP(48));
+    lv_obj_set_size(b, T5_DP(44), T5_DP(44));
     lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(b, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_50, 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_80, LV_STATE_PRESSED);
-    lv_obj_t *l = md_icon_create(b, MD_ICON_CLOSE, MD_ICON_DP);
+    lv_obj_t *l = md_icon_create(b, MD_ICON_ARROW_BACK, MD_ICON_DP);
     lv_obj_set_style_text_color(l, lv_color_white(), 0);
     lv_obj_center(l);
     lv_obj_add_event_cb(b, close_clicked, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -T5_DP(16), T5_DP(16));
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, T5_DP(12), T5_DP(12));
 
     lv_obj_update_layout(p->root);
     fit(p);

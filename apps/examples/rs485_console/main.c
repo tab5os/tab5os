@@ -120,7 +120,7 @@ static void open_clicked(lv_event_t *e)
     if (c->port) {
         close_port(c);
         lv_label_set_text(lv_obj_get_child(c->open_btn, 0), "Open");
-        log_add(c, "-- closed\n");
+        log_add(c, "-- port closed\n");
         return;
     }
     t5_port_uart_cfg_t cfg = { .baud = s_bauds[c->baud_i], .data_bits = 8, .stop_bits = 1, .rx_buf = 2048 };
@@ -128,16 +128,26 @@ static void open_clicked(lv_event_t *e)
     t5_err_t err = t5_port_open_ex("rs485", T5_MODE_RS485, &cfg, 0, &c->port, why, sizeof why);
     char msg[120];
     if (err != T5_OK) {
-        snprintf(msg, sizeof msg, "-- can't open rs485: %s\n", why[0] ? why : t5_err_str(err));
+        snprintf(msg, sizeof msg, "-- couldn't open the RS-485 port: %s\n", why[0] ? why : t5_err_str(err));
         log_add(c, msg);
         return;
     }
     t5_modbus_init(&c->mb, c->port);
-    snprintf(msg, sizeof msg, "-- open at %u baud, 8N1\n", (unsigned)cfg.baud);
+    snprintf(msg, sizeof msg, "-- port open at %u baud, 8N1\n", (unsigned)cfg.baud);
     log_add(c, msg);
     lv_label_set_text(lv_obj_get_child(c->open_btn, 0), "Close");
     c->reading = true;
     c->reader_up = t5_task_create("rs485_rx", reader, c, 4096, 4, T5_CORE_ANY, &c->task) == T5_OK;
+}
+
+static const char *const s_baud_names[] = { "9600 baud", "19200 baud", "38400 baud", "57600 baud", "115200 baud" };
+
+static void baud_picked(int item, void *arg)
+{
+    con_t *c = arg;
+    if (item < 0 || item >= (int)NBAUD) return;
+    c->baud_i = item;
+    lv_label_set_text(lv_obj_get_child(c->baud_btn, 0), s_baud_names[item]);
 }
 
 static void baud_clicked(lv_event_t *e)
@@ -147,8 +157,7 @@ static void baud_clicked(lv_event_t *e)
         t5_shell_toast("Close the port to change the speed");
         return;
     }
-    c->baud_i = (c->baud_i + 1) % (int)NBAUD;
-    lv_label_set_text_fmt(lv_obj_get_child(c->baud_btn, 0), "%u baud", (unsigned)s_bauds[c->baud_i]);
+    md_menu_show(c->baud_btn, s_baud_names, (int)NBAUD, baud_picked, c);
 }
 
 static void modbus(con_t *c, const char *cmd)
@@ -167,9 +176,9 @@ static void modbus(con_t *c, const char *cmd)
         }
     } else if (sscanf(cmd, "write %u %u %u", &slave, &addr, &v) == 3) {
         t5_err_t err = t5_modbus_write_register(&c->mb, (uint8_t)slave, (uint16_t)addr, (uint16_t)v);
-        snprintf(out, sizeof out, "modbus %u: write %u=%u %s", slave, addr, v, t5_err_str(err));
+        snprintf(out, sizeof out, "modbus %u: write %u=%u, %s", slave, addr, v, t5_err_str(err));
     } else {
-        snprintf(out, sizeof out, "-- read SLAVE ADDR COUNT (1-16) | write SLAVE ADDR VALUE");
+        snprintf(out, sizeof out, "-- Modbus commands: read SLAVE ADDR COUNT (1-16), write SLAVE ADDR VALUE");
     }
     t5_mutex_unlock(c->lock);
     strncat(out, "\n", sizeof out - strlen(out) - 1);
@@ -219,7 +228,8 @@ static void on_create(t5_app_t *app)
     lv_obj_t *page = md_page_create(t5_app_screen(app), "RS-485 Console", back, NULL, &bar);
     lv_obj_t *b = md_page_body(page);
     lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(b, T5_DP(8), 0);
+    lv_obj_set_style_pad_hor(b, T5_DP(16), 0);
+    lv_obj_set_style_pad_ver(b, T5_DP(8), 0);
     lv_obj_set_style_pad_row(b, T5_DP(8), 0);
     lv_obj_set_scrollable(b, false);
     lv_obj_t *row = lv_obj_create(b);
@@ -234,18 +244,24 @@ static void on_create(t5_app_t *app)
     lv_obj_t *box = lv_obj_create(b);
     lv_obj_set_width(box, LV_PCT(100));
     lv_obj_set_flex_grow(box, 1);
-    lv_obj_set_style_bg_color(box, md_color(md_scheme()->c.background), 0);
+    /* The log reads as a pane: one step up from the background, small radius. */
+    lv_obj_set_style_bg_color(box, md_color(md_surface_at(md_scheme(), 1)), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_shadow_width(box, 0, 0);
+    lv_obj_set_style_radius(box, T5_DP(MD_SHAPE_SMALL_DP), 0);
+    lv_obj_set_style_pad_all(box, T5_DP(12), 0);
     c->log = lv_label_create(box);
     lv_obj_set_width(c->log, LV_PCT(100));
     lv_label_set_long_mode(c->log, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_style_text_font(c->log, md_font_mono(), 0);
     lv_obj_set_style_text_color(c->log, md_color(md_scheme()->c.on_surface), 0);
     lv_label_set_text(c->log, c->text);
-    c->field = md_textfield_create(b, "Text to send, or read/write SLAVE ADDR N", false);
+    c->field = md_textfield_create(b, "Text to send", false);
     lv_obj_set_width(c->field, LV_PCT(100));
+    md_textfield_set_helper(c->field, "Sent with CR LF. Modbus: read 1 0 4, or write 1 0 100", false);
     lv_obj_add_event_cb(md_textfield_ta(c->field), send_ready, LV_EVENT_READY, c);
-    log_add(c, "-- RS-485 on the HC1.25 connector. Pick a speed and open the port.\n");
+    log_add(c, "-- RS-485 on the HC1.25 connector. Pick a speed, then open the port.\n");
 }
 
 static void on_destroy(t5_app_t *app)

@@ -130,6 +130,12 @@ static struct {
     lv_timer_t *act_timer;
 } s;
 
+/* A section header inside a page that already has the 16 dp margins. */
+static void section(lv_obj_t *page, const char *title)
+{
+    lv_obj_set_style_pad_left(md_section_create(page, title), 0, 0);
+}
+
 /* ---- Material tab ----------------------------------------------------------- */
 static void snack_clicked(lv_event_t *e)
 {
@@ -142,7 +148,7 @@ static void build_material(lv_obj_t *page)
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(page, T5_DP(16), 0);
     lv_obj_set_style_pad_row(page, T5_DP(12), 0);
-    md_section_create(page, "Buttons");
+    section(page, "Buttons");
     lv_obj_t *row = lv_obj_create(page);
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -151,7 +157,7 @@ static void build_material(lv_obj_t *page)
     lv_obj_add_event_cb(md_button_create(row, "Contained", MD_BUTTON_CONTAINED), snack_clicked, LV_EVENT_CLICKED, NULL);
     md_button_create(row, "Outlined", MD_BUTTON_OUTLINED);
     md_button_create(row, "Text", MD_BUTTON_TEXT);
-    md_section_create(page, "Controls");
+    section(page, "Controls");
     md_switch_create(page, true);
     md_slider_create(page, 0, 100, 40);
     md_checkbox_create(page, "Keep the screen on", false);
@@ -167,7 +173,8 @@ static void build_material(lv_obj_t *page)
     lv_obj_t *card = md_card_create(page);
     lv_obj_set_size(card, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(card, T5_DP(16), 0);
-    lv_obj_t *txt = md_label_create(card, "A card holds related content at 1 dp elevation.", MD_TYPE_BODY2);
+    lv_obj_t *txt = md_label_create(card, "A card groups related content, one step above the background.",
+                                    MD_TYPE_BODY2);
     lv_obj_set_width(txt, LV_PCT(100));
     lv_label_set_long_mode(txt, LV_LABEL_LONG_MODE_WRAP);
 }
@@ -242,7 +249,7 @@ static void build_canvas(lv_obj_t *page)
     lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(page, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_all(page, T5_DP(16), 0);
-    lv_obj_t *cap = md_label_create(page, "Drawn into a pixel buffer with lv_draw_line, 30 times a second",
+    lv_obj_t *cap = md_label_create(page, "Drawn into a pixel buffer with lv_draw_line, 30 times a second.",
                                     MD_TYPE_CAPTION);
     lv_obj_set_width(cap, LV_PCT(100));
     lv_label_set_long_mode(cap, LV_LABEL_LONG_MODE_WRAP);
@@ -260,8 +267,8 @@ static void show_insets(void)
     t5_shell_insets_t in;
     char buf[96];
     if (t5_shell_get_insets(&in) == T5_OK) {
-        snprintf(buf, sizeof buf, "The shell's bars take %d dp at the top and %d dp at the bottom%s.", (int)in.top,
-                 (int)in.bottom, t5_shell_fullscreen() ? " (full screen)" : "");
+        snprintf(buf, sizeof buf, "The shell's bars take %d dp at the top and %d dp at the bottom.%s", (int)in.top,
+                 (int)in.bottom, t5_shell_fullscreen() ? " Full screen is on." : "");
         lv_label_set_text(s.insets, buf);
     }
 }
@@ -318,22 +325,33 @@ static void build_shell(lv_obj_t *page)
     lv_obj_set_width(s.insets, LV_PCT(100));
     lv_label_set_long_mode(s.insets, LV_LABEL_LONG_MODE_WRAP);
     show_insets();
-    lv_obj_add_event_cb(md_button_create(page, "Full screen on or off", MD_BUTTON_OUTLINED), fullscreen_clicked,
+    lv_obj_add_event_cb(md_button_create(page, "Turn full screen on or off", MD_BUTTON_OUTLINED), fullscreen_clicked,
                         LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(md_button_create(page, "Post a 10 s activity", MD_BUTTON_OUTLINED), activity_clicked,
+    lv_obj_add_event_cb(md_button_create(page, "Show a 10-second activity", MD_BUTTON_OUTLINED), activity_clicked,
                         LV_EVENT_CLICKED, NULL);
-    lv_obj_t *hint = md_label_create(page, "In full screen, touch the bottom edge to see the handle; swipe up from "
-                                           "it to leave.", MD_TYPE_CAPTION);
+    lv_obj_t *hint = md_label_create(page, "In full screen, touch the bottom edge to show the handle, then swipe "
+                                           "up from it to leave.", MD_TYPE_CAPTION);
     lv_obj_set_width(hint, LV_PCT(100));
     lv_label_set_long_mode(hint, LV_LABEL_LONG_MODE_WRAP);
+}
+
+static void back(lv_event_t *e)
+{
+    (void)e;
+    t5_app_exit(t5_app_self());
 }
 
 static void on_create(t5_app_t *app)
 {
     s.app = app;
     gauge_class_init();
-    lv_obj_t *tabs = md_tabs_create(t5_app_screen(app));
-    lv_obj_set_size(tabs, LV_PCT(100), LV_PCT(100));
+    lv_obj_t *scr = t5_app_screen(app);
+    lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(scr, 0, 0);
+    md_appbar_create(scr, "UI Gallery", MD_ICON_ARROW_BACK, back, NULL);
+    lv_obj_t *tabs = md_tabs_create(scr);
+    lv_obj_set_width(tabs, LV_PCT(100));
+    lv_obj_set_flex_grow(tabs, 1);
     build_material(md_tabs_add(tabs, "Material"));
     build_custom(md_tabs_add(tabs, "Custom"));
     build_canvas(md_tabs_add(tabs, "Canvas"));

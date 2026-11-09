@@ -340,8 +340,12 @@ lv_obj_t *md_row_create(lv_obj_t *parent, const char *icon, const char *primary,
     lv_obj_remove_style_all(row);
     lv_obj_set_user_data(row, r);
     lv_obj_add_event_cb(row, free_ud, LV_EVENT_DELETE, r);
-    lv_obj_set_size(row, LV_PCT(100), T5_DP(secondary ? MD_LIST_ROW_2_DP : MD_LIST_ROW_1_DP));
+    /* Grows when the secondary line wraps, instead of clipping it: two short
+     * lines plus 8 dp above and below come to exactly the spec's 64 dp. */
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_min_height(row, T5_DP(secondary ? MD_LIST_ROW_2_DP : MD_LIST_ROW_1_DP), 0);
     lv_obj_set_style_pad_hor(row, T5_DP(16), 0);
+    lv_obj_set_style_pad_ver(row, T5_DP(8), 0);
     lv_obj_set_style_pad_column(row, T5_DP(16), 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -364,7 +368,7 @@ lv_obj_t *md_row_create(lv_obj_t *parent, const char *icon, const char *primary,
     lv_label_set_long_mode(r->primary, LV_LABEL_LONG_MODE_DOTS);
     r->secondary = md_label_create(text, secondary ? secondary : "", MD_TYPE_BODY2);
     lv_obj_set_width(r->secondary, LV_PCT(100));
-    lv_label_set_long_mode(r->secondary, LV_LABEL_LONG_MODE_DOTS);
+    lv_label_set_long_mode(r->secondary, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_style_text_opa(r->secondary, sc->on_surface.medium, 0);
     lv_obj_set_hidden(r->secondary, !secondary);
     return row;
@@ -418,10 +422,15 @@ lv_obj_t *md_row_trailing_text(lv_obj_t *row, const char *text)
 
 lv_obj_t *md_section_create(lv_obj_t *parent, const char *title)
 {
+    /* A group header: body2 size, medium weight, accent colour, sentence
+     * case, on the 16 dp margin. */
     lv_obj_t *l = md_label_create(parent, title ? title : "", MD_TYPE_OVERLINE);
+    lv_obj_set_style_text_font(l, md_font(MD_TYPE_BUTTON), 0);
+    lv_obj_set_style_text_letter_space(l, 0, 0);
     lv_obj_set_style_text_color(l, md_color(md_scheme()->c.primary), 0);
     lv_obj_set_style_pad_left(l, T5_DP(16), 0);
-    lv_obj_set_style_pad_top(l, T5_DP(16), 0);
+    lv_obj_set_style_pad_top(l, T5_DP(20), 0);
+    lv_obj_set_style_pad_bottom(l, T5_DP(4), 0);
     return l;
 }
 
