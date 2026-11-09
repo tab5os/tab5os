@@ -26,7 +26,7 @@ An app compiles with the firmware's own flags for its ABI table (the generated `
 The release's `tab5os-sdk-<version>.tar.gz` needs no firmware sources or build: only the ESP-IDF v6.1 RISC-V toolchain (`riscv32-esp-elf`, GCC 15.2.0; a full ESP-IDF install has it, or install the toolchain alone), CMake 3.22+, Ninja and Python 3.11+.
 
 ```sh
-tar xzf tab5os-sdk-0.0.1.tar.gz && cd tab5os-sdk-0.0.1
+tar xzf tab5os-sdk-0.1.0.tar.gz && cd tab5os-sdk-0.1.0
 . tools/env.sh                       # with ESP-IDF v6.1 installed; or put riscv32-esp-elf-gcc on PATH yourself
 tools/t5/t5 new "Hello"              # an app from sdk/templates/c
 tools/t5/t5 app-build hello          # hello/build/com.example.hello.t5app
@@ -41,7 +41,7 @@ The build stops if the compiler isn't GCC 15.2.0, since the flags use Espressif'
 Developer mode (Settings > Developer mode) is off by default; while it's off nothing listens on the network. When it's on, the Tab5 serves a small HTTP API on port 8350 to computers you pair:
 
 ```sh
-t5 pair 192.168.88.10                # the Tab5 shows a six-digit code; type it here
+t5 pair 192.168.1.50                 # the Tab5 shows a six-digit code; type it here
 t5 devices                           # paired Tab5s (tokens live in ~/.config/t5/devices.json)
 t5 run [DIR] | t5 push FILE.t5app | t5 launch ID | t5 stop | t5 rm ID | t5 ls
 t5 logs [--grep TEXT]                # the device log, live
