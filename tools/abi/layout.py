@@ -13,7 +13,8 @@ library macros with the compiler, and records them all:
     layout.py check FIRMWARE_BUILD        fail if anything recorded changed
 
 Only the recorded items are promised: new types, enumerators and macros are
-fine. See docs/abi-stability.md. Needs the RISC-V compiler on PATH and
+fine. Once api_v1.lock says "released", gen only adds new items and refuses
+to rewrite a recorded one (--force overrides). See docs/abi-stability.md. Needs the RISC-V compiler on PATH and
 pyelftools (both come with ESP-IDF: `. tools/env.sh`).
 """
 import argparse
@@ -54,7 +55,12 @@ EXTRA_ROOTS = re.compile(
 # left out. LIBRARY_TEXT_MACROS were locked as text before values were
 # probed; they stay that way so their lock entries don't change.
 CONFIG_MACROS = re.compile(
-    r"^(CONFIG_LV_USE_\w+|CONFIG_LV_COLOR_DEPTH\w*|CONFIG_LV_DRAW_BUF_\w+|CONFIG_LV_FONT_\w+|CONFIG_FREERTOS_HZ)$")
+    r"^(?!CONFIG_LV_USE_(PPA\w*|DRAW_SW_ASM)$)"
+    r"(CONFIG_LV_USE_\w+|CONFIG_LV_COLOR_DEPTH\w*|CONFIG_LV_DRAW_BUF_\w+|CONFIG_LV_FONT_\w+|CONFIG_FREERTOS_HZ)$")
+# Left out above: the renderer's backends (the PPA, the software blender's
+# assembly). They change how LVGL draws, not anything an app compiles in or
+# calls (no lv_draw_ppa_* or lv_draw_sw_* symbol is exported), so rendering
+# can be tuned within an API level.
 LIBRARY_TEXT_MACROS = re.compile(
     r"^(LV_VERSION_\w+|portTICK_PERIOD_MS|portMAX_DELAY|pdTRUE|pdFALSE|pdPASS|pdFAIL|tskNO_AFFINITY)$")
 # Where each library's headers are, as staged in the SDK sysroot
@@ -481,8 +487,40 @@ def read_lock():
     return items
 
 
+def api_status():
+    """The level's status, from the first line of api_v1.lock (abi.py owns
+    it): "candidate", "released", or None before the first freeze."""
+    path = os.path.join(SDK, "abi", "api_v1.lock")
+    if not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        m = re.match(r"# status: (candidate|released)\s*$", fh.readline())
+    return m.group(1) if m else None
+
+
+def diff(locked, now):
+    """Print each locked item that is gone or different; return the count."""
+    errs = 0
+    for k, v in sorted(locked.items()):
+        if k not in now:
+            print(f"removed from the ABI: {k}\n  was: {v}", file=sys.stderr)
+            errs += 1
+        elif now[k] != v:
+            print(f"changed in the ABI: {k}\n  was: {v}\n  now: {now[k]}", file=sys.stderr)
+            errs += 1
+    return errs
+
+
 def cmd_gen(a):
     items = snapshot(a.build)
+    locked = read_lock()
+    if api_status() == "released" and locked is not None and not a.force:
+        # Once released, the lock only grows: new items are added, and a
+        # change to a recorded one is refused rather than written over.
+        errs = diff(locked, items)
+        if errs:
+            sys.exit(f"{LOCK}: API level 1 is released and {errs} recorded items changed; "
+                     "apps already built would break (docs/abi-stability.md). --force overrides")
     with open(LOCK, "w") as fh:
         fh.write("# Struct layouts, enum values and macros that apps compile in, API level 1.\n"
                  "# Do not edit: tools/abi/layout.py gen. See docs/abi-stability.md.\n")
@@ -496,14 +534,7 @@ def cmd_check(a):
     if locked is None:
         sys.exit(f"{LOCK}: missing; run layout.py gen")
     now = snapshot(a.build)
-    errs = 0
-    for k, v in sorted(locked.items()):
-        if k not in now:
-            print(f"removed from the ABI: {k}\n  was: {v}", file=sys.stderr)
-            errs += 1
-        elif now[k] != v:
-            print(f"changed in the ABI: {k}\n  was: {v}\n  now: {now[k]}", file=sys.stderr)
-            errs += 1
+    errs = diff(locked, now)
     if errs:
         sys.exit(f"{errs} ABI layout changes: apps already built would break (docs/abi-stability.md)")
     print(f"layout: {len(locked)} items match, {len(now) - len(locked)} new")
@@ -513,6 +544,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("cmd", choices=["gen", "check"])
     p.add_argument("build", nargs="?", default=os.path.join(ROOT, "firmware", "build"), help="firmware build directory")
+    p.add_argument("--force", action="store_true", help="gen: rewrite recorded items even when the level is released")
     a = p.parse_args()
     {"gen": cmd_gen, "check": cmd_check}[a.cmd](a)
 
