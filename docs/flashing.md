@@ -38,4 +38,4 @@ tools/t5/t5 build && tools/t5/t5 flash          # bootloader, partition table, O
 tools/t5/t5 recovery-build && tools/t5/t5 recovery-flash
 ```
 
-`tools/release.sh [--sign key.pem]` builds everything above into `dist/`.
+`tools/release.sh [--sign key.pem]` builds everything above into `dist/`. Maintainers publish a release with the `release` GitHub Actions workflow (Actions > release > Run workflow, on `main`). It releases the version in `VERSION`, takes its notes from that version's section of `CHANGELOG.md`, and refuses to run until `ci` has passed on that commit.
