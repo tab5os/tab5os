@@ -145,17 +145,19 @@ void shell_sys_insets_changed(void)
 {
 }
 
-/* The standby screen's content in screenshots: a song playing, a weather card. */
+/* The standby screen's content in screenshots: a song playing and three
+ * cards, the newest (Weather) first, as ambient_list gives them. */
 int shell_sys_cards(shell_card_t *out, int max)
 {
-    if (max < 1) return 0;
-    memset(out, 0, sizeof *out);
-    snprintf(out->icon, sizeof out->icon, "%s", MD_ICON_WB_CLOUDY);
-    snprintf(out->title, sizeof out->title, "Weather");
-    snprintf(out->value, sizeof out->value, "21\xc2\xb0");
-    snprintf(out->detail, sizeof out->detail, "Cloudy, high 24\xc2\xb0, low 14\xc2\xb0");
-    snprintf(out->who, sizeof out->who, "Weather");
-    return 1;
+    static const shell_card_t demo[] = {
+        { MD_ICON_WB_CLOUDY, "Weather", "21\xc2\xb0", "Cloudy, high 24\xc2\xb0, low 14\xc2\xb0", "Weather" },
+        { MD_ICON_SENSORS, "Greenhouse", "612 ppm", "CO2, humidity 41%", "Air Log" },
+        { MD_ICON_CALENDAR_TODAY, "Next", "15:00", "Design review, room 2", "Calendar" },
+    };
+    int n = (int)(sizeof demo / sizeof demo[0]);
+    if (n > max) n = max;
+    memcpy(out, demo, (size_t)n * sizeof *out);
+    return n;
 }
 
 bool shell_sys_media(shell_media_t *out)

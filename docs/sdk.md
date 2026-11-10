@@ -300,7 +300,7 @@ At most `T5_SHELL_ACTIVITY_MAX` (4) per app; the icon is one `MD_ICON_*` glyph.
 
 ## Standby
 
-When the device is on USB power and dims, the shell shows the **standby screen** in front of whatever is open: a large clock and the date, the music card for the active [media session](#media-sessions), and the newest app card. The app under it keeps running. The backlight is capped at 20%, and from 22:00 to 07:00 at 5% with everything in dim red. A tap leaves it, and so does unplugging. It also gives way to a dialog, menu or sheet that opens over it. A toast shows on top without leaving. People can turn it off under Settings > Display > Standby.
+When the device is on USB power and dims, the shell shows the **standby screen** in front of whatever is open. One half holds a large clock and the date (the left half in landscape, the top in portrait). The other holds the app cards as a stack, scrolled a card at a time with a dot per card, and under it the music bar for the active [media session](#media-sessions), pinned. The app under it keeps running. The backlight is capped at 20%, and from 22:00 to 07:00 at 5% with everything in dim red. A tap leaves it (a drag on the stack scrolls it instead), and so does unplugging. It also gives way to a dialog, menu or sheet that opens over it. A toast shows on top without leaving. People can turn it off under Settings > Display > Standby.
 
 An app with `ambient = true` in `[permissions]` can post one card there, for weather, a calendar entry, an alarm and so on:
 
@@ -314,7 +314,7 @@ t5_ambient_set(&card);       /* any task; replaces this app's card */
 t5_ambient_clear();          /* takes it down */
 ```
 
-The card is copied and kept after your app exits, and across a restart, until you clear it or it expires. It isn't shown once the app is removed. Set it when what it shows changes; there's no need to keep the app running. The OS keeps 8 cards (the least recently set goes when a ninth arrives), and standby shows the newest. Without the permission, `t5_ambient_set` returns `T5_ERR_DENIED`.
+The card is copied and kept after your app exits, and across a restart, until you clear it or it expires. It isn't shown once the app is removed. Set it when what it shows changes; there's no need to keep the app running. The OS keeps 8 cards (the least recently set goes when a ninth arrives), and standby shows them all. The stack keeps them in order by app name, so they don't move when one updates. It opens on the newest card, and when a card changes it turns to it, unless the person scrolled the stack in the last two minutes. Without the permission, `t5_ambient_set` returns `T5_ERR_DENIED`.
 
 To keep the card current while standby shows, even with another app open, add `standby_refresh_minutes = 60` to `[background]`. The OS then runs your `on_alarm` headless about that often during standby. See [Standby refreshes](wiki/Power-and-Background.md#standby-refreshes).
 
