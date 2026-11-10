@@ -1,9 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (pre-release), Nov 10, 2026
+
+App API level 1 is frozen in this release, and it fixes a reboot, a handle leak and stale USB devices. Weather and Music now live in their own repos.
+
+**Before you install**
+
+- It runs only on Tab5 units with ESP32-P4 silicon v1.x. `t5 chip`, or `esptool chip-id`, tells you which you have. Newer v3.x silicon isn't supported.
+- Apps built against API level 1 from now on keep running on later releases. Apps built with the 0.1.0 SDK need one rebuild with this SDK, because the app bar functions were removed.
+- This build still trusts no update signing key, so updates from 0.1.0 install only with developer mode on. Turn it on in Settings, then install `tab5os-0.1.1.t5os` from the SD card (Settings > Updates) or with `t5 ota`. Or flash over USB-C with `firmware/flash_all.sh`. Settings and files in `/data` are kept either way. See [installing and updating](docs/flashing.md).
+
+**What changed**
 
 - **Finished animations no longer use up an app's handles.** The OS recognised an app's animations by their target object and callback. Starting a new animation on the same object made every finished one on it look like it was still running, so none were cleared. A game that animates its tiles reached the 256-handle limit after about 100 moves, and files it opened after that went untracked. Each animation is now tracked by LVGL's own record of it and cleared once it ends. On exit the OS deletes exactly the app's running animations, where before an animation with no target object could delete every animation in the system. `app usage` counts only the animations still running. `test/apps/anims` in `t5 hil app_checks` covers it.
 - **Closing an app during a network request no longer reboots the Tab5.** Exiting Weather right after launch, while its worker was inside `t5_http_fetch`, deleted that task inside lwIP's `select()`. lwIP kept pointing at the task's freed semaphore, and the next packet on the socket made the network task panic. Now every lwIP socket call made on an app's task is counted, whether the app made it or the OS made it for the app. An exiting app's tasks get `ECANCELED` for new network waits, so OS requests end within 50 ms. The app's own sockets are closed first, which wakes `recv()`, `accept()` or `select()` calls blocked on them. A task inside lwIP isn't stopped there: it's stopped once it's out, or, if it is still inside when the exit can't wait any longer, it ends itself when the call returns. The app ABI is unchanged. `test/apps/netexit` and `t5 hil net_exit` cover it.
+- **Unplugged USB devices leave the device list.** Drives, keyboards and other devices stayed in the status bar and Settings after they were removed, because the OS only listened for removal of devices it still held open. It now drops a device on either removal event.
 - **Weather and Music have their own repos:** [tab5os/weather](https://github.com/tab5os/weather) and [tab5os/music](https://github.com/tab5os/music), with their history. They build against the SDK like any other app (`t5 app-build .`), and Music's host test went with it. They're no longer built by `t5 examples` or shipped in the release's `apps/` folder.
 - **An app template:** [tab5os/app-template](https://github.com/tab5os/app-template) is a GitHub template for an app in its own repo. `./build.sh` fetches the SDK and builds the `.t5app`, and its CI builds every push and publishes a release for each version tag. Weather and Music use it.
 - **App API level 1 is frozen.** Apps built against it keep running on every later release without a rebuild ([ABI stability](docs/abi-stability.md)). Apps built with the 0.1.0 SDK need one rebuild, because the app bar functions were removed after 0.1.0. From now on, `layout.py gen` only adds to the layout lock and refuses to rewrite a recorded struct, enum or macro (`--force` overrides). The renderer's backend settings (`CONFIG_LV_USE_PPA*`, `CONFIG_LV_USE_DRAW_SW_ASM`) are left out of the lock, so rendering can still be tuned. Notifications are planned for level 2.
@@ -12,6 +23,18 @@
 - **Music is a real player now.** It plays MP3, FLAC (up to 192 kHz) and WAV from the SD card's `music` folder, with the decoders in the app. The library is browsable by song, album and artist from the files' tags (ID3v1 and v2, Vorbis comments, WAV INFO), with album art from the files or a `cover.jpg` in the album folder. It reads M3U playlists and makes and edits its own in `music/playlists`. Playback has a queue with play next, shuffle and repeat, a seekable progress bar, no gap between tracks of the same format, and it resumes where it left off. The standby screen's music card controls it.
 - **Calculator example:** a basic and a scientific calculator (trigonometry in degrees or radians, inverse trig, logarithms, powers, roots, factorial, π, e, Ans, brackets) with the result shown live as you type. Its engine is plain C with host tests (`test/host/test_calc.c`), and it brings its own font for the maths symbols the OS fonts lack.
 - **The shell no longer draws an app bar.** Apps get the whole screen under the status bar. An app that wants a title, a back arrow or actions draws its own with `md_appbar_create()` or `md_page_create()`. `t5_shell_set_app_bar()`, `t5_shell_set_title()` and `t5_shell_app_bar()` are gone from API level 1 (a candidate then), and so are `t5.ui.app_bar()` and `t5.ui.title()` in Python. `t5 pack` refuses `[shell] app_bar` and `title`; packages built with them still install, without the bar. Music, BLE Explorer and UI Gallery no longer use it.
+
+**Downloads**
+
+| File | What it is |
+| --- | --- |
+| `tab5os-0.1.1.zip` | Everything below, plus `flash_all.sh` and the install guide |
+| `tab5os-0.1.1.t5os` | The OS as an update package |
+| `tab5os-sdk-0.1.1.tar.gz` | The app SDK |
+| `*.t5app` | The example apps, ready to install: BLE Explorer, Calculator, Logger, RS-485 Console, UI Gallery and UVC Monitor |
+| `SHA256SUMS` | Checksums |
+
+Weather and Music are released from [tab5os/weather](https://github.com/tab5os/weather/releases) and [tab5os/music](https://github.com/tab5os/music/releases).
 
 ## 0.1.0 (pre-release), Nov 9, 2026
 

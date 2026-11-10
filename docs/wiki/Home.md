@@ -1,6 +1,6 @@
 # Tab5 OS app developer wiki
 
-For Tab5 OS 0.1.0, API level 1 (frozen Nov 10, 2026), as of Nov 9, 2026. Written for people and for coding agents. Agents should start with the [Agent guide](Agent-Guide.md).
+For Tab5 OS 0.1.1, API level 1 (frozen Nov 10, 2026), as of Nov 10, 2026. Written for people and for coding agents. Agents should start with the [Agent guide](Agent-Guide.md).
 
 Tab5 OS runs on the M5Stack Tab5: an ESP32-P4 with a 1280 x 720 touch screen, 32 MB of PSRAM, and an ESP32-C6 for Wi-Fi and Bluetooth. One app is in front at a time, and services own the hardware. An app is either a native RISC-V ELF written in C or a MicroPython script. Both are packaged as a `.t5app` file and installed without reflashing.
 

@@ -30,7 +30,7 @@ An app compiles with the firmware's own flags for its ABI table (the generated `
 The release's `tab5os-sdk-<version>.tar.gz` needs no firmware sources or build: only the ESP-IDF v6.1 RISC-V toolchain (`riscv32-esp-elf`, GCC 15.2.0; a full ESP-IDF install has it, or install the toolchain alone), CMake 3.22+, Ninja and Python 3.11+.
 
 ```sh
-tar xzf tab5os-sdk-0.1.0.tar.gz && cd tab5os-sdk-0.1.0
+tar xzf tab5os-sdk-0.1.1.tar.gz && cd tab5os-sdk-0.1.1
 . tools/env.sh                       # with ESP-IDF v6.1 installed; or put riscv32-esp-elf-gcc on PATH yourself
 tools/t5/t5 new "Hello"              # an app from sdk/templates/c
 tools/t5/t5 app-build hello          # hello/build/com.example.hello.t5app
