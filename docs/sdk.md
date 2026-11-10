@@ -21,6 +21,10 @@ To install by hand instead: copy the `.t5app` (from `t5 app-build`, in `build/`)
 
 An app compiles with the firmware's own flags for its ABI table (the generated `t5_abi/abi_table.c`) and against the same header files, so it sees exactly the headers and LVGL configuration the OS was built with. `sdk/cmake/sysroot.py` copies the headers the public `t5/*.h` headers reach (the OS's, ESP-IDF's libc, FreeRTOS and lwIP ports, LVGL, the generated `sdkconfig.h`: about 370 files, with their licences) into one tree, keeping each file's relative path so every include resolves as it did in the firmware, and writes the flags with paths relative to that tree. In the source tree `t5_app.cmake` stages it into the app's build directory from `firmware/build`. The SDK release ships it as `sdk/sysroot/`.
 
+### In its own repo, with CI
+
+[tab5os/app-template](https://github.com/tab5os/app-template) is a GitHub template for an app that lives in its own repo. Its `./build.sh` fetches the SDK release named in `tab5os-sdk.txt`, checks it against the release's `SHA256SUMS`, and builds the `.t5app`. Its GitHub Actions workflow runs the same script on every push, keeps the package as an artifact, and on a tag that matches the manifest's version publishes a release with the package attached (signed, if you add a `T5_SIGNING_KEY` secret). [Weather](https://github.com/tab5os/weather) and [Music](https://github.com/tab5os/music) are built this way.
+
 ### From the SDK release, on any machine
 
 The release's `tab5os-sdk-<version>.tar.gz` needs no firmware sources or build: only the ESP-IDF v6.1 RISC-V toolchain (`riscv32-esp-elf`, GCC 15.2.0; a full ESP-IDF install has it, or install the toolchain alone), CMake 3.22+, Ninja and Python 3.11+.
