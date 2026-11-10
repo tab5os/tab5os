@@ -105,7 +105,7 @@ Every hard number an app can run into, with where it's defined. API level 1.
 | Camera | 1280 x 720, 30 fps; one owner |
 | Default H.264 bitrate | 4000 kbps |
 | Media sessions | 1 per app, 4 in all; 8 queued commands each |
-| Standby cards | 1 per app, 8 kept; title 31, value 23, detail 63 bytes |
+| Standby cards | 1 per app, 8 kept and shown in the stack; title 31, value 23, detail 63 bytes |
 | USB devices listed | 8 |
 | Python `t5.net.http_get` / `http_post` body | 512 KB |
 

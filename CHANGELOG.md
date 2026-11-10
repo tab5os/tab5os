@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.3 (pre-release), Nov 10, 2026
+
+The standby screen shows every app card in a stack you can scroll, beside a clock that fills half the screen.
+
+**Before you install**
+
+- It runs only on Tab5 units with ESP32-P4 silicon v1.x. `t5 chip`, or `esptool chip-id`, tells you which you have. Newer v3.x silicon isn't supported.
+- App API level 1 and the SDK are unchanged, so apps built with the 0.1.2 SDK keep running without a rebuild.
+- This build still trusts no update signing key, so updates install only with developer mode on. Turn it on in Settings, then install `tab5os-0.1.3.t5os` from the SD card (Settings > Updates) or with `t5 ota`. Or flash over USB-C with `firmware/flash_all.sh`. Settings and files in `/data` are kept either way. See [installing and updating](docs/flashing.md).
+
+**What changed**
+
+- **Standby shows every app card.** The standby screen is now two halves. One holds a much larger clock and the date (left in landscape, top in portrait). The other holds all the app cards (up to 8) as a stack you scroll a card at a time, with a dot per card, and the music bar pinned under it. Cards keep a fixed order by app name. Standby opens on the newest one and turns to a card when it changes, unless you scrolled in the last two minutes. With no cards and no music, the clock takes the whole screen. A tap still leaves standby. See [Standby](docs/sdk.md#standby).
+
+**Downloads**
+
+| File | What it is |
+| --- | --- |
+| `tab5os-0.1.3.zip` | Everything below, plus `flash_all.sh` and the install guide |
+| `tab5os-0.1.3.t5os` | The OS as an update package |
+| `tab5os-sdk-0.1.3.tar.gz` | The app SDK |
+| `*.t5app` | The example apps, ready to install: BLE Explorer, Calculator, Logger, RS-485 Console, UI Gallery and UVC Monitor |
+| `SHA256SUMS` | Checksums |
+
 ## 0.1.2 (pre-release), Nov 10, 2026
 
 Apps can keep their standby card current while another app is open, and the next Weather release uses it.

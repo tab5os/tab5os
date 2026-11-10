@@ -42,7 +42,7 @@ is checked against its pinned SHA-256.
 
 | Path | Contents |
 | --- | --- |
-| `firmware/components/md/assets/fonts/md_font_*.c` | 8 Roboto fonts and 3 icon fonts. LVGL `lv_font_fmt_txt`, bpp 4, uncompressed. |
+| `firmware/components/md/assets/fonts/md_font_*.c` | 8 Roboto fonts, the standby clock font (digits and `:` `-` only, 200 px) and 3 icon fonts. LVGL `lv_font_fmt_txt`, bpp 4, uncompressed. |
 | `firmware/components/md/include/md/md_fonts.h` | `LV_FONT_DECLARE` for each font, plus a table mapping fonts to MD2 type roles. |
 | `firmware/components/md/include/md/md_icons.h` | `MD_ICON_<NAME>` as a UTF-8 string literal for each icon in the subset. |
 | `firmware/components/md/assets/LICENSES/` | Roboto and Material Icons licence texts, plus a README naming each one's source and version. |
