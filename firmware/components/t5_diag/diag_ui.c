@@ -736,7 +736,7 @@ usage:
 
 void diag_register_ui(void)
 {
-    const esp_console_cmd_t c = { .command = "ui", .help = "Display pipeline, rotation, rendering gate",
-                                  .hint = "[rot|lock|auto|imu|stats|accent|gate]", .func = cmd_ui };
+    const esp_console_cmd_t c = { .command = "ui", .help = "Inject touch and keys; display pipeline, rotation, rendering gate",
+                                  .hint = "[tap|swipe|type|key|rot|lock|auto|imu|stats|accent|gate]", .func = cmd_ui };
     ESP_ERROR_CHECK(esp_console_cmd_register(&c));
 }
