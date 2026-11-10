@@ -38,6 +38,10 @@ typedef struct {
 } pyapp_t;
 
 static pyapp_t s_pa;    /* one Python app at a time (one VM) */
+/* A background run's own: it can start while a Python app is open (standby
+ * refreshes); the VM then says it's busy and the run ends without touching
+ * the open app's. */
+static pyapp_t s_bg;
 
 static void log_line(pyapp_t *p)
 {
@@ -159,7 +163,7 @@ static void alarm_done(t5_py_t *vm, t5_py_state_t how, void *arg)
 
 static void on_alarm(t5_app_t *app)
 {
-    pyapp_t *p = &s_pa;
+    pyapp_t *p = &s_bg;
     memset(p, 0, sizeof *p);
     p->app = app;
     const char *entry = t5_apps_entry_path(app);

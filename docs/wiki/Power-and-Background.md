@@ -110,6 +110,31 @@ Test without waiting: `app alarm <id>` on the console runs the job now.
 
 In Python, put the UI under `if __name__ == "__main__":`, so importing the module for `on_alarm()` doesn't build it.
 
+## Standby refreshes
+
+An app with a [standby card](../sdk.md#standby) can keep it current while the standby screen shows, even when another app is open under it. Add `standby_refresh_minutes` to `[background]` (15 to 1440, and `ambient = true` too):
+
+```toml
+[permissions]
+ambient = true
+background_wake = true
+
+[background]
+standby_refresh_minutes = 60
+max_seconds = 60
+```
+
+While standby shows, the OS runs your `on_alarm` headless when it's due, with the same rules as a scheduled wake: its own task with an 8 KB stack, no UI, and stopped after `max_seconds`. The open app keeps running. The device stays on afterwards, and a tap on standby goes back to the open app. Fetch, call `t5_ambient_set`, and return. TLS needs a 12 KB stack, so do the request on a worker task and wait for it.
+
+| Rule | Detail |
+| --- | --- |
+| When | Only while standby shows (on USB power). Checked once a minute, one app at a time |
+| Due | When neither a run nor your own `t5_ambient_set` happened in the last `standby_refresh_minutes`. Setting the card from the open app counts, so there's no run straight after you close it |
+| Skipped | Your app while it's open (it keeps its own card). A Python app while a Python app is open (one VM) |
+| Network | Usually connected already. Check `t5_net_status` and wait a few seconds, with a bound |
+
+Test without waiting: `app alarm <id>` on the console runs it now, also with another app open.
+
 ## Keeping time
 
 The RTC holds UTC. `t5_time_valid()` is false until the clock has been set by the RTC, NTP or a person. `t5_time_local(&tm)` gives local time in the zone from Settings. Use `t5_time_us()` for intervals, because it never goes backwards.

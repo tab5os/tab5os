@@ -92,9 +92,10 @@ Permissions are consent and correctness checks, not a security boundary, because
 [background]
 entry = "on_alarm"      # the function name, for Python; native apps use the T5_APP callback
 max_seconds = 30        # 1..300, default 30
+standby_refresh_minutes = 60   # optional, 15..1440: run the entry this often during standby
 ```
 
-The section needs `background_wake = true`. See [Power and background](Power-and-Background.md#scheduled-wakes).
+The section needs `background_wake = true`, and `standby_refresh_minutes` also needs `ambient = true`. OS releases before 0.1.2 refuse a manifest with `standby_refresh_minutes`. See [Power and background](Power-and-Background.md#scheduled-wakes) and [Standby refreshes](Power-and-Background.md#standby-refreshes).
 
 ## Shell section
 

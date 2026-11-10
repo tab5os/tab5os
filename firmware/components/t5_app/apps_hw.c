@@ -103,7 +103,10 @@ bool apps_hw_coredump_save(const char *path)
 }
 
 /* ---- ELF loading ---------------------------------------------------------------------- */
-/* One load at a time: launches run on the UI task, alarms at boot. */
+/* One load at a time (the symbol resolver is global): launches run on the UI
+ * task, headless runs on their caller's task, and the two can now overlap
+ * (standby refreshes with an app open). */
+static t5_mutex_t s_load_mx;
 static t5_app_t *s_loading;
 static uint32_t s_missing;
 
@@ -153,20 +156,24 @@ t5_err_t apps_hw_elf_load(t5_app_t *app, const char *path, void **handle, const 
         return T5_ERR_NO_MEM;
     }
     esp_elf_init(elf);
+    t5_mutex_t mx = t5_mutex_once(&s_load_mx);
+    if (mx) t5_mutex_lock(mx);
     s_loading = app;
     s_missing = 0;
     elf_set_symbol_resolver(resolve);
     int r = esp_elf_relocate(elf, img, len);
     elf_reset_symbol_resolver();
     s_loading = NULL;
+    uint32_t missing = s_missing;
+    if (mx) t5_mutex_unlock(mx);
     /* Relocation copied the segments into their own memory; img is freed
      * once its program headers are read. */
     if (r != 0) {
         free(img);
-        T5_LOGE(TAG, "relocate %s: %d (%u unresolved)", path, r, (unsigned)s_missing);
+        T5_LOGE(TAG, "relocate %s: %d (%u unresolved)", path, r, (unsigned)missing);
         esp_elf_deinit(elf);
         free(elf);
-        return s_missing ? T5_ERR_NOT_SUPPORTED : T5_ERR_IO;
+        return missing ? T5_ERR_NOT_SUPPORTED : T5_ERR_IO;
     }
     /* The executable PT_LOAD segments, as offsets into the loaded image
      * (fault blame, isolate.h). */

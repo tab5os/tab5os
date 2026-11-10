@@ -172,6 +172,19 @@ int ambient_list(shell_card_t *out, int max, bool (*name)(const char *id, char *
     return n;
 }
 
+int64_t ambient_set_at(const char *id)
+{
+    load();
+    int64_t at = 0;
+    t5_mutex_lock(s_mx);
+    for (int i = 0; i < MAX_CARDS; i++) {
+        if (!strcmp(s_st.e[i].app, id)) at = s_st.e[i].set_at;
+    }
+    t5_mutex_unlock(s_mx);
+    /* A time from before this boot (set_at counts from boot) says nothing. */
+    return at > 0 && at <= t5_time_us() ? at : 0;
+}
+
 bool t5_shell_standby_enabled(void)
 {
     load();

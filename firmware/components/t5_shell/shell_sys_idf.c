@@ -174,6 +174,7 @@ void shell_sys_standby_hold(bool on, int percent)
         s_standby_lock = NULL;
     }
     T5_LOG_ON_ERR(TAG, t5_display_standby_cap(on ? percent : -1));
+    standby_refresh_set(on);
 }
 
 bool shell_sys_standby_enabled(void)

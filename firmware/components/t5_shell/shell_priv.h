@@ -56,6 +56,10 @@ void standby_reset(void);
 /* Cards newest first; name() fills in the app's name and says whether it
  * is still installed (a removed app's card is left out). */
 int ambient_list(shell_card_t *out, int max, bool (*name)(const char *id, char *buf, size_t n));
+/* When the app last set its card this boot (t5_time_us), or 0. */
+int64_t ambient_set_at(const char *id);
+/* standby_refresh.c (device): standby is showing (called each second) or gone. */
+void standby_refresh_set(bool on);
 /* qs.c */
 void qs_open(void);
 void qs_close(void);
