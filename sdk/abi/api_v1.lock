@@ -1,4 +1,4 @@
-# status: candidate
+# status: released
 # The contract for this API level: do not edit (docs/abi-stability.md).
 # Written by tools/abi/abi.py freeze.
 __adddf3 |  | double __adddf3(double a, double b);

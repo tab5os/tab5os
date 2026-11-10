@@ -47,7 +47,7 @@ That covers errno values, socket and `fcntl` constants (`AF_*`, `SOCK_*`, `SOL_S
 - Changing a function's permission group.
 - Changing a struct's size, or a member's name, type or offset. That includes adding a member at the end: a struct an app allocated is the old size, and the OS would write past it.
 - Changing an enum value or a recorded macro.
-- Changing an LVGL feature setting that the locks record, or upgrading LVGL within a level.
+- Changing an LVGL feature setting that the locks record, or upgrading LVGL within a level. The renderer's backends (`CONFIG_LV_USE_PPA*`, `CONFIG_LV_USE_DRAW_SW_ASM`) aren't recorded: they change how LVGL draws, not what an app compiles in or calls, so they can be tuned within a level. Colour depth is recorded and stays at 16 bits for level 1.
 
 To extend a config or result struct, add a new function that takes a new struct, such as `t5_foo_open_ex()`.
 
@@ -59,23 +59,25 @@ The first line of `api_v1.lock` gives the status.
 
 | Status | New symbols | Locked symbols |
 | --- | --- | --- |
-| `candidate` (now) | Allowed in level 1 | Can't change without re-freezing |
-| `released` | Need `since=2` and a new API level | Can't change at all |
+| `candidate` | Allowed in level 1 | Can't change without re-freezing |
+| `released` (level 1, since Nov 10, 2026) | Need `since=2` and a new API level | Can't change at all |
 
-While level 1 is a candidate, a deliberate change is possible and visible: edit the symbol, run the commands below, and the diff of the lock file shows exactly what broke.
+Level 1 was released on Nov 10, 2026. Apps built with the 0.1.0 SDK, against the candidate, need one rebuild: the shell's app bar functions were removed after it.
+
+While a level is a candidate, a deliberate change is possible and visible: edit the symbol, run the commands below, and the diff of the lock file shows exactly what broke.
 
 ```sh
 python3 tools/abi/abi.py freeze sdk/abi/api_v1.sym
 python tools/abi/layout.py gen firmware/build
 ```
 
-**Releasing level 1 is the point of no return.** Do it when the first public SDK ships:
+**Releasing a level is the point of no return.** It was done for level 1 with:
 
 ```sh
 python3 tools/abi/abi.py freeze sdk/abi/api_v1.sym --release
 ```
 
-After that, `freeze` refuses to rewrite the lock.
+After that, `freeze` refuses to rewrite the lock, and `layout.py gen` only adds new items to the layout lock: it refuses to write over a recorded one.
 
 ## Adding to a released ABI
 
@@ -86,6 +88,10 @@ Additions after release raise the API level, because an app built against a new 
 3. A new callback in `t5_app_desc_t` is read only when `desc->api` is at least the level that added it. Older apps' descriptors are shorter, so reading past the end is a bug.
 
 The app's manifest `api` key says the level it needs, and an OS with a lower level refuses it at install.
+
+### Planned for level 2
+
+- **Notifications.** Only one app is in the foreground, so background work (alarm wakes, downloads, Bluetooth, MQTT) has nowhere to leave a message that waits until the person looks. Toasts vanish and activities end with their work. The plan: `t5_notify_post(id, icon, title, text, launch_arg)` and `t5_notify_cancel(id)`, where posting the same id replaces the notification. The shell lists notifications in quick settings with a dot in the status bar, keeps them across sleep and reboot, and opens the app with `launch_arg` when one is tapped. Each app gets a cap and a mute switch in App Manager. Options go in function arguments or a struct with a `size` field, so they can grow without `_ex()` functions.
 
 ## What isn't covered
 
