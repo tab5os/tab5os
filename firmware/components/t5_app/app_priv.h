@@ -80,6 +80,9 @@ t5_app_t *apps_fallback(void);
 /* wrappers.c: how many of the app's own mutexes and semaphores task holds
  * (apps lock held). */
 int t5_app_mutexes_held_by(t5_app_t *a, void *task);
+/* wrappers.c: drop the app's refs to animations that have finished (apps
+ * lock and UI lock held). */
+void t5_app_anims_prune(t5_app_t *app);
 /* perm.c */
 void perm_app_gone(t5_app_t *app);     /* UI task: close its open prompts */
 /* Installed as t5_core's permission check, which services call before using

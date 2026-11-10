@@ -726,7 +726,8 @@ static int cmd_ui(int argc, char **argv)
         return fails != 0;
     }
 usage:
-    printf("usage: ui [rot 0|90|180|270 | lock on|off | auto on|off | imu [s] | stats on|off | accent <name> |\n"
+    printf("usage: ui [tap x y [ms] | swipe x0 y0 x1 y1 [ms] | type <text> | key <name> |\n"
+           "           rot 0|90|180|270 | lock on|off | auto on|off | imu [s] | stats on|off | accent <name> |\n"
            "           gate [all|scroll|transition|dialog|show|stop] [s] | frames | mem [reset|check|heap] |\n"
            "           freeze [on|off|<mask>] | dialog open|close | slowmo N | ppafill on|off | ppascrim on|off |\n"
            "           ppatest | ppafilltest | eat <KB>|free]\n");

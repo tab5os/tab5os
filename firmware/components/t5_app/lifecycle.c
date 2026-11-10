@@ -911,12 +911,18 @@ int t5_apps_list(t5_app_entry_t *out, int max)
 
 t5_err_t t5_apps_usage(t5_app_usage_t *out)
 {
+    /* Finished animations are only swept on the next lv_anim_start; sweep
+     * now so the count is what is running. UI lock before apps lock, the
+     * order lv_anim_start's wrapper takes them in. */
+    bool ui = t5_ui_lock_timeout(1000);
     apps_lock();
     t5_app_t *a = s_fg;
     if (!a) {
         apps_unlock();
+        if (ui) t5_ui_unlock();
         return T5_ERR_STATE;
     }
+    if (ui) t5_app_anims_prune(a);
     out->heap_bytes = a->trk.heap_bytes;
     out->heap_peak = a->trk.heap_peak;
     out->heap_blocks = a->trk.heap_blocks;
@@ -924,6 +930,7 @@ t5_err_t t5_apps_usage(t5_app_usage_t *out)
     out->dropped = a->trk.dropped;
     out->denied_symbols = a->denied_symbols;
     apps_unlock();
+    if (ui) t5_ui_unlock();
     return T5_OK;
 }
 
