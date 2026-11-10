@@ -61,11 +61,6 @@ target_include_directories(test_calc PRIVATE ${CALC})
 target_link_libraries(test_calc PRIVATE unity m)
 add_test(NAME test_calc COMMAND test_calc)
 
-set(MUSIC ${CMAKE_CURRENT_LIST_DIR}/../../apps/examples/music)
-add_executable(test_music test_music.c ${MUSIC}/tags.c ${MUSIC}/m3u.c ${MUSIC}/library.c)
-target_include_directories(test_music PRIVATE ${MUSIC})
-target_link_libraries(test_music PRIVATE unity)
-add_test(NAME test_music COMMAND test_music)
 # Tests of a component's internals see its private directory.
 target_include_directories(test_app PRIVATE ${FW}/t5_app)
 target_include_directories(test_display_touch PRIVATE ${FW}/t5_display)

@@ -36,11 +36,9 @@ APPS = {
     "ble_explorer": ("BLUETOOTH", 0x283593, 0x1A237E, 0xC5CAE9),     # indigo
     "calculator": (None, 0xD84315, 0xBF360C, 0xFFCCBC),              # deep orange
     "logger": ("SENSORS", 0x2E7D32, 0x1B5E20, 0xC8E6C9),             # green
-    "music": ("MUSIC_NOTE", 0xAD1457, 0x880E4F, 0xF8BBD0),           # pink
     "rs485_console": ("CABLE", 0x00695C, 0x004D40, 0xB2DFDB),        # teal
     "ui_gallery": ("DASHBOARD", 0x4527A0, 0x311B92, 0xD1C4E9),       # deep purple
     "uvc_monitor": ("VIDEOCAM", 0xC62828, 0xB71C1C, 0xFFCDD2),       # red
-    "weather": ("WB_SUNNY", 0x0277BD, 0x01579B, 0xB3E5FC),           # light blue
 }
 
 

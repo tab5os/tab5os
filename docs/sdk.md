@@ -21,6 +21,10 @@ To install by hand instead: copy the `.t5app` (from `t5 app-build`, in `build/`)
 
 An app compiles with the firmware's own flags for its ABI table (the generated `t5_abi/abi_table.c`) and against the same header files, so it sees exactly the headers and LVGL configuration the OS was built with. `sdk/cmake/sysroot.py` copies the headers the public `t5/*.h` headers reach (the OS's, ESP-IDF's libc, FreeRTOS and lwIP ports, LVGL, the generated `sdkconfig.h`: about 370 files, with their licences) into one tree, keeping each file's relative path so every include resolves as it did in the firmware, and writes the flags with paths relative to that tree. In the source tree `t5_app.cmake` stages it into the app's build directory from `firmware/build`. The SDK release ships it as `sdk/sysroot/`.
 
+### In its own repo, with CI
+
+[tab5os/app-template](https://github.com/tab5os/app-template) is a GitHub template for an app that lives in its own repo. Its `./build.sh` fetches the SDK release named in `tab5os-sdk.txt`, checks it against the release's `SHA256SUMS`, and builds the `.t5app`. Its GitHub Actions workflow runs the same script on every push, keeps the package as an artifact, and on a tag that matches the manifest's version publishes a release with the package attached (signed, if you add a `T5_SIGNING_KEY` secret). [Weather](https://github.com/tab5os/weather) and [Music](https://github.com/tab5os/music) are built this way.
+
 ### From the SDK release, on any machine
 
 The release's `tab5os-sdk-<version>.tar.gz` needs no firmware sources or build: only the ESP-IDF v6.1 RISC-V toolchain (`riscv32-esp-elf`, GCC 15.2.0; a full ESP-IDF install has it, or install the toolchain alone), CMake 3.22+, Ninja and Python 3.11+.
@@ -201,7 +205,7 @@ for (int n; (n = t5_audio_dec_read(d, pcm, 480)) > 0;) process(pcm, n);
 t5_audio_dec_close(d);
 ```
 
-The decoder takes WAV: PCM 8, 16, 24 and 32-bit, 32 and 64-bit float, `WAVE_FORMAT_EXTENSIBLE`, any rate, up to 8 channels (it gives the first two). The player needs a rate the output takes, 8 to 48 kHz. MP3 is in the API (`T5_AUDIO_FMT_MP3`) but not in this OS build: `t5_audio_format_supported()` says false and the open calls return `T5_ERR_NOT_SUPPORTED`, because Espressif's decoder (`esp_audio_codec`, about 56 KB) doesn't fit the image's size budget. An app that needs MP3 can compile a decoder (minimp3, for example) into itself and play what it decodes through a stream: `apps/examples/music` does that for MP3 and FLAC. Files follow the app's file rules; decoders and players are closed when the app exits, at most 4 per app.
+The decoder takes WAV: PCM 8, 16, 24 and 32-bit, 32 and 64-bit float, `WAVE_FORMAT_EXTENSIBLE`, any rate, up to 8 channels (it gives the first two). The player needs a rate the output takes, 8 to 48 kHz. MP3 is in the API (`T5_AUDIO_FMT_MP3`) but not in this OS build: `t5_audio_format_supported()` says false and the open calls return `T5_ERR_NOT_SUPPORTED`, because Espressif's decoder (`esp_audio_codec`, about 56 KB) doesn't fit the image's size budget. An app that needs MP3 can compile a decoder (minimp3, for example) into itself and play what it decodes through a stream: [Music](https://github.com/tab5os/music) does that for MP3 and FLAC. Files follow the app's file rules; decoders and players are closed when the app exits, at most 4 per app.
 
 `T5_EV_AUDIO_ROUTE` is posted when headphones are plugged in or out, and `T5_EV_AUDIO_VOLUME` when the system volume or mute changes; both carry `t5_ev_audio_t` (volume, muted, headphones). Bluetooth audio isn't possible: the radio is an ESP32-C6, which has Bluetooth LE only (no Classic Bluetooth, so no A2DP or HFP), and LE Audio (isochronous channels, LC3) isn't available on the C6 with ESP-IDF v6.1's controller and NimBLE host.
 
@@ -232,7 +236,7 @@ while (t5_app_running(app)) {
 }
 ```
 
-The active session is the one most recently opened or set to `T5_MEDIA_PLAYING`; commands go to it. Up to 4 sessions are open at once, and 8 commands are queued per session. No permission is needed. Audio keeps playing under standby and with the screen off, because an open output stream holds an audio wake lock. `apps/examples/music` is a complete player.
+The active session is the one most recently opened or set to `T5_MEDIA_PLAYING`; commands go to it. Up to 4 sessions are open at once, and 8 commands are queued per session. No permission is needed. Audio keeps playing under standby and with the screen off, because an open output stream holds an audio wake lock. [Music](https://github.com/tab5os/music) is a complete player.
 
 ## Rules
 
