@@ -555,6 +555,10 @@ static void release_everything(t5_app_t *a)
     a->exiting = true;
     perm_app_gone(a);
     picker_app_gone(a);
+    /* Its network calls end: new ones are refused now that it is exiting
+     * (netguard.c), and closing its sockets wakes those blocked on them. */
+    int socks = app_close_sockets(a);
+    if (socks) T5_LOGI(TAG, "%s: closed %d socket(s)", a->id, socks);
     /* Tasks first, and politely: loops that check t5_app_running() get a
      * moment to finish (and release locks they hold) before the rest is
      * deleted. */

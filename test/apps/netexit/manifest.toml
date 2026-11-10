@@ -1,0 +1,9 @@
+id = "com.t5.test.netexit"
+name = "Net Exit"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"
+
+[permissions]
+net = true

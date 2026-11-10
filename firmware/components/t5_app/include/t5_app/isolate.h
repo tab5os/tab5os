@@ -115,6 +115,38 @@ bool t5_iso_mem_check(t5_iso_mem_t *s, size_t psram_free, uint32_t now_ms);
  * once the task has hogged a core for T5_ISO_HOG_STRIKES checks running. */
 bool t5_iso_hog(uint8_t *strikes, uint64_t ran_us, uint64_t wall_us);
 
+/* ---- network calls --------------------------------------------------------- */
+/* An app task must not be deleted inside lwIP. A select() waiter is linked
+ * into lwIP's list from the task's stack and points at the task's per-thread
+ * semaphore, which the task's deletion frees; netconn calls and DNS wait on
+ * that same semaphore. The tcpip thread signals it later and the device
+ * panics. So every lwIP socket call made on an app task is counted (the
+ * linker wraps them, netguard.c), whether the app made it or OS code made it
+ * for the app (t5_net, esp-tls, VFS read/write):
+ *   - a task inside one is not parked or deleted, as if it held a lock;
+ *   - once its app is exiting, calls that wait on the network are refused
+ *     (ECANCELED), so t5_net's waits end within a slice and unwind;
+ *   - a task still inside one when the exit has to go on is orphaned: it
+ *     leaves its app and ends itself when the call returns.
+ * The word is per task: calls in progress, and the orphan flag. */
+typedef uint32_t t5_iso_net_t;
+#define T5_ISO_NET_ORPHAN 0x80000000u
+
+/* Starting a call. waits: the call can wait on the network (not close,
+ * shutdown or an option); exiting: the task is its exiting app's own. False:
+ * refused, the word unchanged. */
+bool t5_iso_net_enter(t5_iso_net_t *w, bool waits, bool exiting);
+/* Leaving a call. True: the task was orphaned and is out of lwIP now; it
+ * must end itself without going back to the caller. */
+bool t5_iso_net_leave(t5_iso_net_t *w);
+/* The exit deleting the task. True: delete it. False: it is inside a call
+ * and is orphaned instead. */
+bool t5_iso_net_delete(t5_iso_net_t *w);
+static inline bool t5_iso_net_inside(t5_iso_net_t w)
+{
+    return (w & ~T5_ISO_NET_ORPHAN) != 0;
+}
+
 #ifdef __cplusplus
 }
 #endif

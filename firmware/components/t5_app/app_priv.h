@@ -48,6 +48,7 @@ struct t5_app {
     /* isolation (isolate.h) */
     uintptr_t text_lo, text_hi;     /* native code, for blaming faults */
     volatile int file_calls;        /* filesystem calls in progress (wrappers.c) */
+    volatile bool net_closed;       /* the exit closed its sockets (app_close_sockets) */
     volatile bool faulted;          /* a fault or a stopped hang ended it */
     volatile bool oom;              /* closed for memory */
     uint32_t instance;              /* unique among all launches since boot */
@@ -63,6 +64,8 @@ struct t5_app {
 /* Runtime-wide lock for trackers (app tasks allocate concurrently). */
 void apps_lock(void);
 void apps_unlock(void);
+/* At exit: close the app's own sockets, waking its tasks blocked on them. */
+int app_close_sockets(t5_app_t *a);
 void apps_fs_add_pick(t5_app_t *a, const char *path, bool write);
 void picker_app_gone(t5_app_t *app);
 bool picker_dismiss(void);

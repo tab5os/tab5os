@@ -7,5 +7,6 @@
 
 #define T5_TASK_TLS_APP_CTX    (CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS - 1)   /* t5_app_ctx_get() */
 #define T5_TASK_TLS_NET_CANCEL (CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS - 2)   /* t5_net's cancel flag */
+#define T5_TASK_TLS_NET_GUARD  (CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS - 3)   /* lwIP calls in progress (t5_app netguard.c) */
 
-_Static_assert(CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS >= 3, "need TLS slots for the app context and net");
+_Static_assert(CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS >= 4, "need TLS slots for the app context, net and pthread");

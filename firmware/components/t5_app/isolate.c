@@ -88,3 +88,23 @@ bool t5_iso_hog(uint8_t *strikes, uint64_t ran_us, uint64_t wall_us)
     if (*strikes < 255) (*strikes)++;
     return *strikes >= T5_ISO_HOG_STRIKES;
 }
+
+bool t5_iso_net_enter(t5_iso_net_t *w, bool waits, bool exiting)
+{
+    if (waits && exiting) return false;
+    (*w)++;
+    return true;
+}
+
+bool t5_iso_net_leave(t5_iso_net_t *w)
+{
+    if (t5_iso_net_inside(*w)) (*w)--;
+    return (*w & T5_ISO_NET_ORPHAN) && !t5_iso_net_inside(*w);
+}
+
+bool t5_iso_net_delete(t5_iso_net_t *w)
+{
+    if (!t5_iso_net_inside(*w)) return true;
+    *w |= T5_ISO_NET_ORPHAN;
+    return false;
+}

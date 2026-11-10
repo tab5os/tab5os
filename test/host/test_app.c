@@ -581,6 +581,36 @@ static void test_session_survives_power_off(void)
     TEST_ASSERT_EQUAL_STRING("", app_session_restored());
 }
 
+/* An exiting app's task in lwIP: counted, refused new waits, never deleted
+ * inside a call (orphaned instead, and ends when it leaves). */
+static void test_iso_net_guard(void)
+{
+    t5_iso_net_t w = 0;
+    TEST_ASSERT_TRUE(t5_iso_net_enter(&w, true, false));       /* running app: select() goes in */
+    TEST_ASSERT_TRUE(t5_iso_net_inside(w));
+    TEST_ASSERT_TRUE(t5_iso_net_enter(&w, false, true));       /* nested close while exiting: allowed */
+    TEST_ASSERT_EQUAL_UINT32(2, w);
+    TEST_ASSERT_FALSE(t5_iso_net_leave(&w));
+    TEST_ASSERT_FALSE(t5_iso_net_leave(&w));
+    TEST_ASSERT_FALSE(t5_iso_net_inside(w));
+    TEST_ASSERT_TRUE(t5_iso_net_delete(&w));                   /* outside: may be deleted */
+
+    TEST_ASSERT_FALSE(t5_iso_net_enter(&w, true, true));       /* exiting: a wait is refused... */
+    TEST_ASSERT_EQUAL_UINT32(0, w);                             /* ...and not counted */
+    TEST_ASSERT_TRUE(t5_iso_net_enter(&w, true, false));       /* a call from before the exit */
+    TEST_ASSERT_FALSE(t5_iso_net_delete(&w));                  /* inside: orphaned, not deleted */
+    TEST_ASSERT_TRUE(w & T5_ISO_NET_ORPHAN);
+    TEST_ASSERT_TRUE(t5_iso_net_inside(w));
+    TEST_ASSERT_TRUE(t5_iso_net_enter(&w, false, false));      /* its own close on the way out */
+    TEST_ASSERT_FALSE(t5_iso_net_leave(&w));                   /* still in the outer call */
+    TEST_ASSERT_TRUE(t5_iso_net_leave(&w));                    /* out: it ends itself now */
+    TEST_ASSERT_FALSE(t5_iso_net_inside(w));
+
+    t5_iso_net_t z = 0;
+    TEST_ASSERT_FALSE(t5_iso_net_leave(&z));                   /* unbalanced leave stays at zero */
+    TEST_ASSERT_EQUAL_UINT32(0, z);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -607,6 +637,7 @@ int main(void)
     RUN_TEST(test_tracker_drop_all);
     RUN_TEST(test_iso_mem_check);
     RUN_TEST(test_iso_hog);
+    RUN_TEST(test_iso_net_guard);
     RUN_TEST(test_session_survives_power_off);
     return UNITY_END();
 }

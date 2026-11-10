@@ -42,10 +42,15 @@ void apps_hw_task_set_prio(void *task, int prio);
 void apps_hw_task_pause(void *task, bool pause);
 
 /* app_held(task): how many of the app's own mutexes task holds, or -1.
- * park: suspend task where it holds no OS mutex; false (and left running)
- * if it holds one now. delete: stop it where it is and delete it (the exit
+ * park: suspend task where it holds no OS mutex and isn't inside lwIP;
+ * false (and left running) if it is now. delete: stop it where it is and delete it (the exit
  * parks every task first, lifecycle.c quiesce). */
 bool apps_hw_task_park(void *task, int (*app_held)(void *task));
 void apps_hw_task_delete(void *task);
+/* lwIP calls of app tasks (netguard.c, isolate.h). inside: task is in one
+ * now. orphan: if it is, mark it to end itself when the call returns (true);
+ * else false, and it may be deleted. */
+bool apps_hw_net_inside(void *task);
+bool apps_hw_net_orphan(void *task);
 void apps_hw_restart(void);
 void apps_hw_periodic(void (*fn)(void), uint32_t period_ms);
