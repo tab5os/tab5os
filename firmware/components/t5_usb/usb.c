@@ -127,6 +127,29 @@ static t5_usb_class_t guess_class(const usb_config_desc_t *cfg, const usb_device
     return best;
 }
 
+static void dev_removed(uint8_t addr)
+{
+    t5_ev_usb_t ev = { .addr = addr };
+    bool found = false;
+    t5_mutex_lock(s_mx);
+    for (int i = 0; i < s_ndevs; i++) {
+        if (s_devs[i].addr == addr) {
+            ev.cls = s_devs[i].cls;
+            ev.vid = s_devs[i].vid;
+            ev.pid = s_devs[i].pid;
+            memmove(&s_devs[i], &s_devs[i + 1], (size_t)(s_ndevs - i - 1) * sizeof s_devs[0]);
+            s_ndevs--;
+            found = true;
+            break;
+        }
+    }
+    t5_mutex_unlock(s_mx);
+    if (!found) return;
+    s_st.detached++;
+    T5_LOGI(TAG, "detached addr %u", addr);
+    t5_event_post(T5_EV_USB_DETACHED, &ev, sizeof ev);
+}
+
 static void client_event(const usb_host_client_event_msg_t *msg, void *arg)
 {
     (void)arg;
@@ -165,26 +188,15 @@ static void client_event(const usb_host_client_event_msg_t *msg, void *arg)
         t5_ev_usb_t ev = { .addr = addr, .cls = d.cls, .vid = d.vid, .pid = d.pid };
         t5_event_post(T5_EV_USB_ATTACHED, &ev, sizeof ev);
     } else if (msg->event == USB_HOST_CLIENT_EVENT_DEV_GONE) {
+        /* Only devices this client still holds open (MIDI) report DEV_GONE. */
         usb_device_info_t info;
         uint8_t addr = 0;
         if (usb_host_device_info(msg->dev_gone.dev_hdl, &info) == ESP_OK) addr = info.dev_addr;
         usb_midi_gone(msg->dev_gone.dev_hdl);
-        t5_ev_usb_t ev = { .addr = addr };
-        t5_mutex_lock(s_mx);
-        for (int i = 0; i < s_ndevs; i++) {
-            if (s_devs[i].addr == addr) {
-                ev.cls = s_devs[i].cls;
-                ev.vid = s_devs[i].vid;
-                ev.pid = s_devs[i].pid;
-                memmove(&s_devs[i], &s_devs[i + 1], (size_t)(s_ndevs - i - 1) * sizeof s_devs[0]);
-                s_ndevs--;
-                break;
-            }
-        }
-        t5_mutex_unlock(s_mx);
-        s_st.detached++;
-        T5_LOGI(TAG, "detached addr %u", addr);
-        t5_event_post(T5_EV_USB_DETACHED, &ev, sizeof ev);
+        dev_removed(addr);
+    } else if (msg->event == USB_HOST_CLIENT_EVENT_DEV_REMOVED) {
+        /* Everything else: the client closed it after reading descriptors. */
+        dev_removed(msg->dev_removed.address);
     }
 }
 
@@ -198,6 +210,7 @@ static void client_task(void *arg)
     (void)arg;
     usb_host_client_config_t cc = {
         .is_synchronous = false, .max_num_event_msg = 8,
+        .flags = { .notify_dev_removed = 1 },    /* we close most devices, so DEV_GONE never comes */
         .async = { .client_event_callback = client_event, .callback_arg = NULL },
     };
     if (usb_host_client_register(&cc, &s_client) != ESP_OK) {
