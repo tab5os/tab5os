@@ -1,0 +1,174 @@
+name: release
+
+# Publishes the release for VERSION from main, by hand: Actions > release >
+# Run workflow. Before it builds anything it checks that:
+#   - it was started on main,
+#   - v<VERSION> isn't tagged yet,
+#   - CHANGELOG.md has a "## <VERSION>" section (it becomes the release notes;
+#     "(pre-release)" in that heading makes a GitHub pre-release),
+#   - the ci workflow passed on this commit.
+# Then it runs tools/release.sh (unsigned, like 0.1.0 to 0.1.2), zips the
+# result, tags the commit v<VERSION> and publishes the release with the same
+# files as before: the zip, the .t5os, the SDK, SHA256SUMS and the example apps.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      idf: ${{ steps.v.outputs.idf }}
+      title: ${{ steps.notes.outputs.title }}
+      prerelease: ${{ steps.notes.outputs.prerelease }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run this from main, not ${GITHUB_REF}"
+          exit 1
+      - uses: actions/checkout@v4
+      - id: v
+        name: Version
+        run: |
+          ver="$(tr -d '[:space:]' < VERSION)"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "idf=$(tr -d '[:space:]' < firmware/idf_version.txt)" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$ver" >/dev/null; then
+            echo "::error::v$ver is already tagged. Bump VERSION (and add its CHANGELOG section) in a PR first."
+            exit 1
+          fi
+      - id: notes
+        name: Release notes from CHANGELOG.md
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          heading="$(grep -m1 -E "^## ${VER//./\\.}( |$)" CHANGELOG.md || true)"
+          if [ -z "$heading" ]; then
+            echo "::error::CHANGELOG.md has no '## $VER' section"
+            exit 1
+          fi
+          # The section's body, with links into the repo pinned to the tag.
+          awk -v h="$heading" '$0 == h {on = 1; next} on && /^## / {exit} on' CHANGELOG.md \
+            | sed -E "s#\]\((docs/[^)]*)\)#](https://github.com/${GITHUB_REPOSITORY}/blob/v$VER/\1)#g" > notes.md
+          [ -s notes.md ] || { echo "::error::the '## $VER' section is empty"; exit 1; }
+          if [[ "$heading" == *"(pre-release)"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "title=Tab5 OS $VER (pre-release)" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "title=Tab5 OS $VER" >> "$GITHUB_OUTPUT"
+          fi
+      - name: ci passed on this commit
+        run: |
+          result="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --branch main --event push \
+            --json status,conclusion -q '.[0] | "\(.status) \(.conclusion)"')"
+          echo "ci on ${GITHUB_SHA}: ${result:-no run}"
+          if [ "$result" != "completed success" ]; then
+            echo "::error::ci hasn't passed on ${GITHUB_SHA} (${result:-no run}). Wait for it, or fix it, then run this again."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    container: espressif/idf:${{ needs.check.outputs.idf }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true          # third_party/micropython (not recursive)
+      - name: Build the release (tools/release.sh)
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/third_party/micropython"
+          . "$IDF_PATH/export.sh"
+          tools/release.sh
+      # A tarball keeps flash_all.sh executable; artifacts drop file modes.
+      - name: Pack
+        shell: bash
+        run: tar -C dist -czf dist.tar.gz "tab5os-${{ needs.check.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist.tar.gz
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VER: ${{ needs.check.outputs.version }}
+      TITLE: ${{ needs.check.outputs.title }}
+      PRERELEASE: ${{ needs.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+          path: notes
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packed
+      - name: Unpack and zip
+        run: |
+          mkdir dist
+          tar -C dist -xzf packed/dist.tar.gz
+          d="dist/tab5os-$VER"
+          (cd "$d" && sha256sum -c SHA256SUMS --quiet)
+          (cd dist && zip -qr "tab5os-$VER.zip" "tab5os-$VER")
+          find dist -type f | sort
+      - name: Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VER" "$GITHUB_SHA" -m "Tab5 OS $VER"
+          git push origin "v$VER"
+      - name: Publish
+        run: |
+          d="dist/tab5os-$VER"
+          flags=()
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "v$VER" --verify-tag "${flags[@]}" --title "$TITLE" --notes-file notes/notes.md \
+            "dist/tab5os-$VER.zip" "$d/tab5os-$VER.t5os" "$d/tab5os-sdk-$VER.tar.gz" "$d/SHA256SUMS" "$d"/apps/*.t5app
+          echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/v$VER" >> "$GITHUB_STEP_SUMMARY"
+
+  # Moves tab5os/app-template to the new SDK: its sync-sdk workflow builds the
+  # template with it and commits tab5os-sdk.txt. Needs the secret
+  # APP_TEMPLATE_TOKEN, a fine-grained token for tab5os/app-template with
+  # "Actions: read and write".
+  template:
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.APP_TEMPLATE_TOKEN }}
+      VER: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Start app-template's sync-sdk
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::No APP_TEMPLATE_TOKEN secret, so app-template wasn't updated. Run its sync-sdk workflow by hand with version $VER."
+            exit 0
+          fi
+          gh workflow run sync-sdk.yml -R tab5os/app-template -f version="$VER"
+          echo "Started app-template's sync-sdk for $VER: https://github.com/tab5os/app-template/actions/workflows/sync-sdk.yml" >> "$GITHUB_STEP_SUMMARY"
