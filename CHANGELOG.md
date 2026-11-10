@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.2 (pre-release), Nov 10, 2026
+
+Apps can keep their standby card current while another app is open, and the next Weather release uses it.
+
+**Before you install**
+
+- It runs only on Tab5 units with ESP32-P4 silicon v1.x. `t5 chip`, or `esptool chip-id`, tells you which you have. Newer v3.x silicon isn't supported.
+- App API level 1 is unchanged, so apps built with the 0.1.1 SDK keep running. A manifest with `standby_refresh_minutes` needs this release: 0.1.1 and earlier refuse to install it. Build such apps with the 0.1.2 SDK.
+- This build still trusts no update signing key, so updates install only with developer mode on. Turn it on in Settings, then install `tab5os-0.1.2.t5os` from the SD card (Settings > Updates) or with `t5 ota`. Or flash over USB-C with `firmware/flash_all.sh`. Settings and files in `/data` are kept either way. See [installing and updating](docs/flashing.md).
+
+**What changed**
+
+- **Standby cards stay current with another app open.** An app can add `standby_refresh_minutes` (15 to 1440, with `ambient = true`) to `[background]`. While the standby screen shows, the OS then runs its `on_alarm` headless about that often, so a weather card updates every hour even with Files open underneath. A tap still returns to Files. A run is skipped when the app is the one open, or when it set its card recently itself. Making this safe with an app open fixed three things that assumed one app at a time: ELF loading is now serialised, the crash guard goes back to the open app after a headless run, and a Python background run no longer overwrites an open Python app's state. `app alarm <id>` now refuses to run a second copy of the open app, or two runs at once. See [Standby refreshes](docs/wiki/Power-and-Background.md#standby-refreshes).
+
+**Downloads**
+
+| File | What it is |
+| --- | --- |
+| `tab5os-0.1.2.zip` | Everything below, plus `flash_all.sh` and the install guide |
+| `tab5os-0.1.2.t5os` | The OS as an update package |
+| `tab5os-sdk-0.1.2.tar.gz` | The app SDK |
+| `*.t5app` | The example apps, ready to install: BLE Explorer, Calculator, Logger, RS-485 Console, UI Gallery and UVC Monitor |
+| `SHA256SUMS` | Checksums |
+
 ## 0.1.1 (pre-release), Nov 10, 2026
 
 App API level 1 is frozen in this release, and it fixes a reboot, a handle leak and stale USB devices. Weather and Music now live in their own repos.
@@ -11,8 +35,6 @@ App API level 1 is frozen in this release, and it fixes a reboot, a handle leak 
 - This build still trusts no update signing key, so updates from 0.1.0 install only with developer mode on. Turn it on in Settings, then install `tab5os-0.1.1.t5os` from the SD card (Settings > Updates) or with `t5 ota`. Or flash over USB-C with `firmware/flash_all.sh`. Settings and files in `/data` are kept either way. See [installing and updating](docs/flashing.md).
 
 **What changed**
-
-- **Standby cards stay current with another app open.** An app can add `standby_refresh_minutes` (15 to 1440, with `ambient = true`) to `[background]`. While the standby screen shows, the OS then runs its `on_alarm` headless about that often, so a weather card updates every hour even with Files open underneath. A tap still returns to Files. A run is skipped when the app is the one open, or when it set its card recently itself. Making this safe with an app open fixed three things that assumed one app at a time: ELF loading is now serialised, the crash guard goes back to the open app after a headless run, and a Python background run no longer overwrites an open Python app's state. `app alarm <id>` now refuses to run a second copy of the open app, or two runs at once. See [Standby refreshes](docs/wiki/Power-and-Background.md#standby-refreshes).
 
 - **Finished animations no longer use up an app's handles.** The OS recognised an app's animations by their target object and callback. Starting a new animation on the same object made every finished one on it look like it was still running, so none were cleared. A game that animates its tiles reached the 256-handle limit after about 100 moves, and files it opened after that went untracked. Each animation is now tracked by LVGL's own record of it and cleared once it ends. On exit the OS deletes exactly the app's running animations, where before an animation with no target object could delete every animation in the system. `app usage` counts only the animations still running. `test/apps/anims` in `t5 hil app_checks` covers it.
 - **Closing an app during a network request no longer reboots the Tab5.** Exiting Weather right after launch, while its worker was inside `t5_http_fetch`, deleted that task inside lwIP's `select()`. lwIP kept pointing at the task's freed semaphore, and the next packet on the socket made the network task panic. Now every lwIP socket call made on an app's task is counted, whether the app made it or the OS made it for the app. An exiting app's tasks get `ECANCELED` for new network waits, so OS requests end within 50 ms. The app's own sockets are closed first, which wakes `recv()`, `accept()` or `select()` calls blocked on them. A task inside lwIP isn't stopped there: it's stopped once it's out, or, if it is still inside when the exit can't wait any longer, it ends itself when the call returns. The app ABI is unchanged. `test/apps/netexit` and `t5 hil net_exit` cover it.
