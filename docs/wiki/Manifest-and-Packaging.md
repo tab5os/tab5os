@@ -11,6 +11,7 @@ version = "1.2.0"
 api = 1
 runtime = "native"
 entry = "app.elf"
+icon = "icon.png"
 orientation = "any"
 description = "Logs air quality"
 author = "You"
@@ -39,7 +40,7 @@ max_seconds = 30
 | `entry` | Yes | File in the package: `app.elf`, or `main.py` |
 | `orientation` | No | `"landscape"` (default), `"portrait"` or `"any"`. Only `"any"` gets `on_rotate` |
 | `min_heap_kb` or `min_heap_mb` | No, and not both | For Python: the GC heap. See below |
-| `icon` | No | A file that must exist in the package. The launcher currently draws a generic icon for installed apps |
+| `icon` | No | A PNG in the package, drawn in the launcher and App Manager. See [App icon](#app-icon). Without one, the app gets a puzzle-piece glyph |
 | `description`, `author`, `homepage`, `license` | No | Strings |
 
 `min_heap_kb` sets a Python app's GC heap. The default is 2 MB, the range is clamped to 64 KB through 8 MB, and it's taken from PSRAM when the app starts. Native apps grow their heap on demand, so they don't need it.
@@ -106,11 +107,29 @@ The shell doesn't draw a title bar. `app_bar` and `title`, from the first 0.1.0 
 
 All optional; unknown keys are errors. The app can change each at run time ([UI guide](UI-Guide.md#shell-bars)).
 
+## App icon
+
+```toml
+icon = "icon.png"
+```
+
+The launcher draws the icon as a 56 dp circle, which is 112 px. App Manager draws it at 40 dp.
+
+- **Size:** make it a square PNG of 112 x 112 px or larger. It's resized on the device, once per size, so a bigger one still works, up to 512 x 512 px and 512 KB.
+- **Shape:** the launcher crops it to a circle. Fill the whole square and keep anything important inside the middle circle, about 90% of the width.
+- **Transparency:** clear parts show the launcher's tinted disc behind them. A logo on a transparent background still sits on the same round badge as the built-in apps.
+- **Format:** any PNG colour type and bit depth works, but not interlaced PNGs. `t5 pack` refuses an icon the device can't draw. It warns about one that's not square or is smaller than 112 px.
+
+A C app lists the file in `t5_app(... ICON icon.png)`, which puts it at the package root. A Python app packs its folder, so the icon only has to be in it. The example apps' icons are drawn by `tools/assets/app_icons.py`.
+
+After an install or upgrade, the new icon shows the next time you're on the home screen. If an icon can't be read, the app gets the puzzle-piece glyph and the console logs why.
+
 ## Package contents
 
 ```text
 manifest.toml
 app.elf or main.py
+icon.png               (if the manifest names one)
 your assets...
 signature.t5sig        (only if signed)
 ```

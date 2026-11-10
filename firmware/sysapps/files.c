@@ -109,10 +109,14 @@ static void install_answer(int b, void *ud)
     install_t *in = ud;
     if (b == 0) {
         char err[128] = "";
-        t5_err_t e = t5_apps_install(in->path, T5_PKG_DEST_AUTO, NULL, err, sizeof err);
+        t5_manifest_t *man = calloc(1, sizeof *man);
+        t5_err_t e = t5_apps_install(in->path, T5_PKG_DEST_AUTO, man, err, sizeof err);
         char msg[192];
-        if (e == T5_OK) snprintf(msg, sizeof msg, "Installed. It's in the launcher.");
+        if (e == T5_OK && man && man->name[0])
+            snprintf(msg, sizeof msg, "%s installed. Find it in your apps.", man->name);
+        else if (e == T5_OK) snprintf(msg, sizeof msg, "Installed. Find it in your apps.");
         else snprintf(msg, sizeof msg, "Couldn't install: %s", err[0] ? err : t5_err_str(e));
+        free(man);
         md_snackbar_show(msg, NULL, NULL, NULL);
     }
     free(in);
@@ -123,7 +127,10 @@ static void ask_install(const char *path)
     install_t *in = calloc(1, sizeof *in);
     if (!in) return;
     snprintf(in->path, sizeof in->path, "%s", path);
-    md_dialog_show("Install this app?", T5_NATIVE_APP_WARNING, "Install", "Cancel", install_answer, in);
+    const char *base = strrchr(path, '/');
+    char title[96];
+    snprintf(title, sizeof title, "Install %s?", base ? base + 1 : path);
+    md_dialog_show(title, T5_NATIVE_APP_WARNING, "Install", "Cancel", install_answer, in);
 }
 
 /* ---- background jobs: delete and format ------------------------------------------
@@ -183,8 +190,8 @@ static void job_done(void *arg)
     s_busy = false;
     if (s_app && t5_app_running(s_app)) {
         static const char *ok[] = { "Deleted", "SD card formatted", "USB drive formatted" };
-        static const char *bad[] = { "Couldn't delete all of it", "Formatting the SD card failed",
-                                     "Formatting the USB drive failed" };
+        static const char *bad[] = { "Couldn't delete everything: some files are still there",
+                                     "Couldn't format the SD card", "Couldn't format the USB drive" };
         md_snackbar_show(j->err == T5_OK ? ok[j->kind] : bad[j->kind], NULL, NULL, NULL);
         if (j->kind == JOB_DELETE) reload_top();
         else sa_pop_to_root(&s_nav);
@@ -209,7 +216,7 @@ static void job_task(void *arg)
 static void start_job(job_kind_t kind, const char *path)
 {
     if (s_busy) {
-        md_snackbar_show("Still working on the last one", NULL, NULL, NULL);
+        md_snackbar_show("Wait for the current delete or format to finish", NULL, NULL, NULL);
         return;
     }
     job_t *j = calloc(1, sizeof *j);
@@ -261,7 +268,7 @@ static void format_answer(int b, void *ud)
 static void ask_format(bool usb)
 {
     if (usb ? !t5_usb_storage_mounted() : t5_storage_sd_state() != T5_SD_MOUNTED) {
-        md_snackbar_show(usb ? "No USB drive" : "No SD card", NULL, NULL, NULL);
+        md_snackbar_show(usb ? "No USB drive to format" : "No SD card to format", NULL, NULL, NULL);
         return;
     }
     md_dialog_show(usb ? "Format the USB drive?" : "Format the SD card?",
@@ -284,7 +291,7 @@ static void entry_menu_picked(int item, void *ud)
         if (m->dir) open_dir(m->path);
         else if (ends_with(m->path, ".t5app")) ask_install(m->path);
         else if (sa_photo_can_open(m->path)) sa_photo_open(t5_app_screen(s_app), m->path, NULL);
-        else md_snackbar_show("No app opens this kind of file", NULL, NULL, NULL);
+        else md_snackbar_show("No app on the Tab5 opens this kind of file", NULL, NULL, NULL);
     } else if (item == 1) {
         ask_delete(m->path, m->dir);
     }
@@ -341,14 +348,20 @@ static void more_clicked(lv_event_t *e)
                  folder_menu_picked, NULL);
 }
 
+static void eject(bool usb)
+{
+    t5_err_t err = usb ? t5_usb_storage_eject() : t5_storage_sd_eject();
+    char msg[96];
+    if (err == T5_OK) snprintf(msg, sizeof msg, "%s ejected. You can remove it now.", usb ? "USB drive" : "SD card");
+    else snprintf(msg, sizeof msg, "Couldn't eject the %s (%s)", usb ? "USB drive" : "SD card", t5_err_str(err));
+    md_snackbar_show(msg, NULL, NULL, NULL);
+}
+
 static void eject_clicked(lv_event_t *e)
 {
     (void)e;
     dir_page_t *p = s_nav.lv[s_nav.depth - 1].arg;
-    t5_err_t err;
-    if (!strncmp(p->path, T5_USB_PATH, strlen(T5_USB_PATH))) err = t5_usb_storage_eject();
-    else err = t5_storage_sd_eject();
-    md_snackbar_show(err == T5_OK ? "Ejected. It's safe to remove." : "Nothing to eject", NULL, NULL, NULL);
+    eject(!strncmp(p->path, T5_USB_PATH, strlen(T5_USB_PATH)));
     sa_pop_to_root(&s_nav);
 }
 
@@ -364,13 +377,24 @@ static void dir_refresh(sa_nav_t *nav, void *arg)
     (void)nav; (void)arg;          /* marks a directory page; reload_top() finds it */
 }
 
+/* A drive's name at its root, else the folder's own name: full paths
+ * don't fit a portrait app bar and mean little to most people. */
+static const char *title_for(const char *path)
+{
+    if (!strcmp(path, T5_SD_PATH)) return "SD card";
+    if (!strcmp(path, T5_USB_PATH)) return "USB drive";
+    if (!strcmp(path, T5_DATA_PATH)) return "Internal storage";
+    const char *base = strrchr(path, '/');
+    return base && base[1] ? base + 1 : path;
+}
+
 static void open_dir(const char *path)
 {
     dir_page_t *p = calloc(1, sizeof *p);
     if (!p) return;
     snprintf(p->path, sizeof p->path, "%s", path);
     load(p);
-    lv_obj_t *body = sa_push(&s_nav, path);
+    lv_obj_t *body = sa_push(&s_nav, title_for(path));
     lv_obj_set_scrollable(body, false);
     lv_obj_t *bar = sa_bar(&s_nav);
     bool removable = !strncmp(path, T5_SD_PATH, strlen(T5_SD_PATH)) || !strncmp(path, T5_USB_PATH, strlen(T5_USB_PATH));
@@ -396,12 +420,15 @@ static void root_clicked(lv_event_t *e)
     const char *path = lv_event_get_user_data(e);
     if (!strcmp(path, T5_SD_PATH) && t5_storage_sd_state() != T5_SD_MOUNTED) {
         if (t5_storage_sd_rescan() != T5_OK) {
-            md_snackbar_show("No SD card", NULL, NULL, NULL);
+            bool bad = t5_storage_sd_state() == T5_SD_FAILED;
+            md_snackbar_show(bad ? "Couldn't read the SD card. Long press to format it."
+                                 : "No SD card. Insert one, then tap again.",
+                             NULL, NULL, NULL);
             return;
         }
     }
     if (!strcmp(path, T5_USB_PATH) && !t5_usb_storage_mounted()) {
-        md_snackbar_show("No USB drive", NULL, NULL, NULL);
+        md_snackbar_show("No USB drive. Plug one into the USB-A port.", NULL, NULL, NULL);
         return;
     }
     open_dir(path);
@@ -413,8 +440,7 @@ static void drive_menu_picked(int item, void *ud)
     if (item == 0) {
         open_dir(usb ? T5_USB_PATH : T5_SD_PATH);
     } else if (item == 1) {
-        t5_err_t err = usb ? t5_usb_storage_eject() : t5_storage_sd_eject();
-        md_snackbar_show(err == T5_OK ? "Ejected. It's safe to remove." : "Nothing to eject", NULL, NULL, NULL);
+        eject(usb);
     } else if (item == 2) {
         ask_format(usb);
     }
@@ -423,7 +449,7 @@ static void drive_menu_picked(int item, void *ud)
 static void drive_long(lv_event_t *e)
 {
     lv_indev_wait_release(lv_indev_active());
-    static const char *items[] = { "Open", "Eject", "Format..." };
+    static const char *items[] = { "Open", "Eject", "Format" };
     md_menu_show(lv_event_get_current_target_obj(e), items, 3, drive_menu_picked, lv_event_get_user_data(e));
 }
 
@@ -439,17 +465,21 @@ static void root_refresh(sa_nav_t *nav, void *arg)
         sa_fmt_bytes(b, sizeof b, info.total_bytes);
         snprintf(buf, sizeof buf, "%s free of %s", a, b);
     } else {
-        snprintf(buf, sizeof buf, "%s%s", t5_storage_sd_state_str(sd), sd == T5_SD_EJECTED ? " (tap to mount)" : "");
+        static const char *st[] = { [T5_SD_ABSENT] = "No card inserted", [T5_SD_MOUNTED] = "Reading the card",
+                                    [T5_SD_FAILED] = "Can't read this card. Long press to format it.",
+                                    [T5_SD_EJECTED] = "Ejected. Tap to use it again." };
+        bool known = (unsigned)sd < sizeof st / sizeof st[0] && st[sd];
+        snprintf(buf, sizeof buf, "%s", known ? st[sd] : t5_storage_sd_state_str(sd));
     }
     md_row_set_secondary(r->sd, buf);
     uint64_t total = 0, used = 0;
     if (t5_storage_data_usage(&total, &used) == T5_OK) {
         sa_fmt_bytes(a, sizeof a, total - used);
         sa_fmt_bytes(b, sizeof b, total);
-        snprintf(buf, sizeof buf, "%s free of %s (internal flash)", a, b);
+        snprintf(buf, sizeof buf, "%s free of %s", a, b);
         md_row_set_secondary(r->data, buf);
     }
-    md_row_set_secondary(r->usb, t5_usb_storage_mounted() ? "USB drive" : "Nothing plugged in");
+    md_row_set_secondary(r->usb, t5_usb_storage_mounted() ? "Connected" : "Plug a drive into the USB-A port");
 }
 
 static void on_create(t5_app_t *app)
@@ -465,10 +495,9 @@ static void on_create(t5_app_t *app)
     r->usb = md_row_create(body, MD_ICON_USB, "USB drive", " ");
     md_row_set_clickable(r->usb, root_clicked, (void *)T5_USB_PATH);
     lv_obj_add_event_cb(r->usb, drive_long, LV_EVENT_LONG_PRESSED, (void *)1);
-    r->data = md_row_create(body, MD_ICON_STORAGE, "Internal (/data)", " ");
+    r->data = md_row_create(body, MD_ICON_STORAGE, "Internal storage", " ");
     md_row_set_clickable(r->data, root_clicked, (void *)T5_DATA_PATH);
-    sa_note(body, "Tap a .t5app file to install it. Apps install to the SD card when there is one. Long press a "
-                  "file or folder to delete it, or a drive to eject or format it.");
+    sa_note(body, "Open a .t5app file to install it. Long press a drive, file or folder for more options.");
     sa_set_refresh(&s_nav, root_refresh, r, free);
     const char *arg = t5_app_launch_arg(app);
     if (arg[0] == '/') open_dir(arg);

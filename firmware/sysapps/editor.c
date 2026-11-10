@@ -36,6 +36,8 @@ typedef struct {
 static sa_nav_t s_nav;
 static ed_t *s_ed;          /* the open file's state (one at a time) */
 static lv_obj_t *s_newname;
+static lv_obj_t *s_list;    /* the script list's body, rebuilt when it comes back to the front */
+static bool s_list_stale;
 
 static const char s_hello[] =
     "# Press the play button to run, the stop button to stop.\n"
@@ -111,7 +113,7 @@ static void changed(cv_t *cv, void *arg)
     int line, col;
     cv_cursor(cv, &line, &col);
     char buf[48];
-    snprintf(buf, sizeof buf, "Ln %d, Col %d  \xc2\xb7  %d lines", line, col, cv_line_count(cv));
+    snprintf(buf, sizeof buf, "Line %d, column %d, %d lines in all", line, col, cv_line_count(cv));
     sa_set_text(ed->status, buf);
     update_title(ed);
 }
@@ -138,9 +140,9 @@ static void run_finished(t5_py_t *vm, t5_py_state_t how, void *arg)
 {
     (void)vm;
     ed_t *ed = arg;
-    const char *msg = how == T5_PY_EXCEPTION ? "\n[stopped by an exception]\n"
-                    : how == T5_PY_STOPPED   ? "\n[stopped]\n"
-                                             : "\n[done]\n";
+    const char *msg = how == T5_PY_EXCEPTION ? "\n[Stopped by an error]\n"
+                    : how == T5_PY_STOPPED   ? "\n[Stopped]\n"
+                                             : "\n[Finished]\n";
     t5_py_console_write(ed->out, msg, strlen(msg));
     ed->run_done = true;     /* the timer frees the VM on the UI task */
 }
@@ -189,7 +191,7 @@ static void run_clicked(lv_event_t *e)
     t5_err_t err = t5_py_start(&cfg, &ed->vm);
     if (err != T5_OK) {
         char m[96];
-        snprintf(m, sizeof m, "Can't run: %s", t5_err_str(err));
+        snprintf(m, sizeof m, "Couldn't run the script (%s)", t5_err_str(err));
         md_snackbar_show(m, NULL, NULL, NULL);
         return;
     }
@@ -241,6 +243,7 @@ static void open_file(const char *path)
         return;
     }
     ed->app = s_nav.app;
+    s_list_stale = true;     /* sizes change once it's saved */
     snprintf(ed->path, sizeof ed->path, "%s", path);
     lv_obj_t *body = sa_push(&s_nav, base_name(path));
     lv_obj_set_style_pad_all(body, 0, 0);
@@ -257,7 +260,8 @@ static void open_file(const char *path)
     lv_obj_set_flex_grow(ed->view, 2);
     ed->cv = cv_get(ed->view);
     ed->status = md_label_create(body, "", MD_TYPE_CAPTION);
-    lv_obj_set_style_pad_hor(ed->status, T5_DP(8), 0);
+    lv_obj_set_style_pad_hor(ed->status, T5_DP(16), 0);
+    lv_obj_set_style_pad_ver(ed->status, T5_DP(4), 0);
     lv_obj_set_style_text_opa(ed->status, md_scheme()->on_surface.medium, 0);
     ed->out = t5_py_console_create(body);
     lv_obj_set_style_border_side(ed->out, LV_BORDER_SIDE_TOP, 0);
@@ -312,7 +316,20 @@ static void list_dir(lv_obj_t *body, const char *dir, const char *title)
         n++;
     }
     closedir(d);
-    if (!n) sa_note(body, "No scripts here yet.");
+    if (!n) sa_note(body, "No scripts here yet. Tap + to write one.");
+}
+
+static bool name_ok(const char *name)
+{
+    size_t l = strlen(name);
+    if (l > 3 && !strcmp(name + l - 3, ".py")) l -= 3;
+    if (!l || l > 48) return false;
+    for (size_t i = 0; i < l; i++) {
+        char c = name[i];
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!ok) return false;
+    }
+    return true;
 }
 
 static void create_clicked(lv_event_t *e)
@@ -323,11 +340,9 @@ static void create_clicked(lv_event_t *e)
         md_textfield_set_helper(s_newname, "Type a name first", true);
         return;
     }
-    for (const char *c = name; *c; c++) {
-        if (*c == '/' || *c == '\\' || (unsigned char)*c < 0x20) {
-            md_textfield_set_helper(s_newname, "Letters, digits, - and _ only", true);
-            return;
-        }
+    if (!name_ok(name)) {
+        md_textfield_set_helper(s_newname, "Use letters, digits, - and _ only", true);
+        return;
     }
     char path[160];
     size_t l = strlen(name);
@@ -335,27 +350,79 @@ static void create_clicked(lv_event_t *e)
     struct stat st;
     if (stat(path, &st) != 0 && !write_file(path, "import t5\n\n")) return;
     t5_shell_keyboard_hide();
+    s_newname = NULL;
+    /* Replace the "New script" page with the script itself, so Back from
+     * the code goes to the list. */
+    sa_pop(&s_nav);
     open_file(path);
+}
+
+static void name_ready(lv_event_t *e)
+{
+    create_clicked(e);
+}
+
+static void new_free(void *arg)
+{
+    (void)arg;
+    t5_shell_keyboard_hide();
+    s_newname = NULL;
+}
+
+static void new_clicked(lv_event_t *e)
+{
+    (void)e;
+    lv_obj_t *body = sa_push(&s_nav, "New script");
+    lv_obj_set_style_pad_all(body, T5_DP(16), 0);
+    lv_obj_set_style_pad_gap(body, T5_DP(8), 0);
+    s_newname = md_textfield_create(body, "Name", false);
+    lv_obj_set_width(s_newname, LV_PCT(100));
+    md_textfield_set_helper(s_newname, "Saved on the device as name.py", false);
+    lv_obj_t *ta = md_textfield_ta(s_newname);
+    lv_obj_add_event_cb(ta, name_ready, LV_EVENT_READY, NULL);
+    lv_obj_t *row = sa_button_row(body);
+    lv_obj_set_style_pad_hor(row, 0, 0);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *b = md_button_create(row, "Create script", MD_BUTTON_CONTAINED);
+    lv_obj_add_event_cb(b, create_clicked, LV_EVENT_CLICKED, NULL);
+    sa_set_refresh(&s_nav, NULL, s_newname, new_free);
+    lv_obj_add_state(ta, LV_STATE_FOCUSED);
+    lv_obj_send_event(ta, LV_EVENT_FOCUSED, NULL);
+    t5_shell_keyboard_show(ta);
+}
+
+static void fill_list(lv_obj_t *body)
+{
+    list_dir(body, SCRIPTS, "On the device");
+    list_dir(body, SD_SCRIPTS, "On the SD card");
+    sa_note(body, "Scripts can use the ports, the network, USB devices and storage.");
+    /* Room under the last row so the floating + never covers it. */
+    lv_obj_t *pad = lv_obj_create(body);
+    lv_obj_remove_style_all(pad);
+    lv_obj_set_size(pad, LV_PCT(100), T5_DP(MD_FAB_DP + 24));
 }
 
 static void list_refresh(sa_nav_t *nav, void *arg)
 {
     (void)nav;
     (void)arg;
+    if (!s_list_stale || !s_list) return;
+    s_list_stale = false;
+    lv_obj_clean(s_list);
+    fill_list(s_list);
 }
 
 static void build_list(void)
 {
     lv_obj_t *body = sa_push(&s_nav, "Editor");
-    lv_obj_t *row = sa_button_row(body);
-    s_newname = md_textfield_create(row, "New script name", false);
-    lv_obj_set_flex_grow(s_newname, 1);
-    lv_obj_t *b = md_button_create(row, "Create", MD_BUTTON_CONTAINED);
-    lv_obj_add_event_cb(b, create_clicked, LV_EVENT_CLICKED, NULL);
-    list_dir(body, SCRIPTS, "On the device");
-    list_dir(body, SD_SCRIPTS, "On the SD card");
-    sa_note(body, "Scripts run with access to the Grove, M5-Bus, ext and RS-485 ports, the network, USB devices "
-                  "and files in internal storage, on the SD card and on a USB drive.");
+    s_list = body;
+    fill_list(body);
+    /* New script: a FAB on the list page (not the body), so it stays put
+     * while the list scrolls and goes away with the page. */
+    lv_obj_t *fab = md_fab_create(lv_obj_get_parent(body), MD_ICON_ADD, false);
+    lv_obj_set_floating(fab, true);
+    lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -T5_DP(16), -T5_DP(16));
+    lv_obj_add_event_cb(fab, new_clicked, LV_EVENT_CLICKED, NULL);
     sa_set_refresh(&s_nav, list_refresh, NULL, NULL);
 }
 
@@ -372,6 +439,9 @@ static void on_destroy(t5_app_t *app)
 {
     (void)app;
     sa_nav_destroy(&s_nav);
+    s_list = NULL;
+    s_newname = NULL;
+    s_list_stale = false;
 }
 
 static const t5_app_desc_t s_desc = { .api = T5_API_LEVEL, .on_create = on_create, .on_destroy = on_destroy };

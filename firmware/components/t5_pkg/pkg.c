@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -217,6 +218,15 @@ static char *read_text(const char *path, size_t max, size_t *len)
     buf[n] = 0;
     if (len) *len = n;
     return buf;
+}
+
+/* Bumped by every install and removal (t5_pkg_generation). Atomic: the
+ * shell reads it on the UI task while an install runs on another. */
+static atomic_uint s_generation;
+
+uint32_t t5_pkg_generation(void)
+{
+    return atomic_load(&s_generation);
 }
 
 /* --- inspect --------------------------------------------------------------- */
@@ -641,6 +651,7 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
 done:
     free(pb);
     t5_zip_close(z);
+    atomic_fetch_add(&s_generation, 1);   /* even on failure: a rollback can still touch the dirs */
     return e;
 }
 
@@ -659,6 +670,7 @@ t5_err_t t5_pkg_remove(const char *id, bool keep_data)
         if (fmt_path(data, sizeof data, "%s/%s", s_appdata, id)) rm_rf(data);
     }
     if (found) T5_LOGI(TAG, "removed %s%s", id, keep_data ? " (data kept)" : "");
+    atomic_fetch_add(&s_generation, 1);
     return found ? T5_OK : T5_ERR_NOT_FOUND;
 }
 

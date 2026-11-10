@@ -432,9 +432,9 @@ Dark surfaces use `#121212` plus a white overlay that grows with elevation: abou
 | Subtitle 1 | 16 / 28 | Regular | 32 | List items |
 | Body 1 | 16 / 24 | Regular | 32 | Main text |
 | Body 2 | 14 / 20 | Regular | 28 | Secondary text |
-| Button | 14 / 36 | Medium, uppercase | 28 | Buttons, snackbar actions |
+| Button | 14 / 36 | Medium, sentence case | 28 | Buttons, snackbar actions |
 | Caption | 12 / 20 | Regular | 24 | Hints, status bar |
-| Overline | 12 / 32 | Medium, uppercase | 24 | Section labels |
+| Overline | 12 / 32 | Medium, sentence case | 24 | Section labels |
 
 Ship Roboto Regular and Medium as precompiled LVGL bitmap fonts at these sizes, so UI text needs no font engine at runtime. The larger Headline 1 to 3 sizes (96, 60 and 48 dp) stay out of the system image. Add FreeType later for other scripts or free scaling.
 

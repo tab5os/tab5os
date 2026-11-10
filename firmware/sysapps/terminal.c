@@ -68,7 +68,7 @@ static void repl_start(term_t *t)
     t5_err_t e = t5_py_start(&cfg, &t->vm);
     if (e != T5_OK) {
         char msg[96];
-        snprintf(msg, sizeof msg, "Python didn't start: %s\n", t5_err_str(e));
+        snprintf(msg, sizeof msg, "Couldn't start Python: %s. Tap Restart to try again.\n", t5_err_str(e));
         t5_py_console_write(t->con, msg, strlen(msg));
     }
 }
@@ -170,24 +170,24 @@ static void sys_refresh(term_t *t)
     size_t n = 0;
 #define P(...) n += (size_t)snprintf(buf + n, n < sizeof buf ? sizeof buf - n : 0, __VA_ARGS__)
     int64_t up = esp_timer_get_time() / 1000000;
-    P("uptime        %lld:%02lld:%02lld\n", up / 3600, up / 60 % 60, up % 60);
-    P("memory        internal %u KB free (min %u KB), PSRAM %u KB free\n",
+    P("Uptime        %lld:%02lld:%02lld\n", up / 3600, up / 60 % 60, up % 60);
+    P("Memory        internal %u KB free (min %u KB), PSRAM %u KB free\n",
       (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
       (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
       (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
-    P("tasks         %u\n", (unsigned)uxTaskGetNumberOfTasks());
-    P("power         %s\n", t5_power_state_name(t5_power_state()));
+    P("Tasks         %u\n", (unsigned)uxTaskGetNumberOfTasks());
+    P("Power         %s\n", t5_power_state_name(t5_power_state()));
     t5_battery_status_t b;
     t5_battery_status(&b);
-    P("battery       %d%%, %u mV, %d mA, %s\n", b.percent, b.mv, (int)(b.ma10 / 10), b.usb ? "on USB" : "on battery");
+    P("Battery       %d%%, %u mV, %d mA, %s\n", b.percent, b.mv, (int)(b.ma10 / 10), b.usb ? "on USB" : "on battery");
     t5_net_status_t ns;
     t5_net_status(&ns);
-    P("wi-fi         %s %s, %u.%u.%u.%u, rssi %d\n", t5_net_state_name(ns.state), ns.ssid, ns.ip[0], ns.ip[1],
+    P("Wi-Fi         %s %s, %u.%u.%u.%u, signal %d dBm\n", t5_net_state_name(ns.state), ns.ssid, ns.ip[0], ns.ip[1],
       ns.ip[2], ns.ip[3], ns.rssi);
-    P("time          %s%s\n", t5_time_valid() ? "set" : "not set", ns.sntp_synced ? " (NTP)" : "");
-    P("python        %s\n", t5_py_busy() ? "running" : "idle");
-    P("storage       SD %s\n", t5_storage_sd_state_str(t5_storage_sd_state()));
-    P("usb devices   %d%s\n", t5_usb_device_count(), t5_usb_keyboard_present() ? " (keyboard)" : "");
+    P("Clock         %s%s\n", t5_time_valid() ? "set" : "not set", ns.sntp_synced ? ", from the network" : "");
+    P("Python        %s\n", t5_py_busy() ? "running" : "idle");
+    P("SD card       %s\n", t5_storage_sd_state_str(t5_storage_sd_state()));
+    P("USB devices   %d%s\n", t5_usb_device_count(), t5_usb_keyboard_present() ? " (keyboard)" : "");
 #undef P
     sa_set_text(t->sys, buf);
 }
@@ -236,9 +236,14 @@ static void on_create(t5_app_t *app)
     lv_obj_set_flex_grow(t->con, 1);
     t->input = lv_textarea_create(py);
     lv_textarea_set_one_line(t->input, true);
-    lv_textarea_set_placeholder_text(t->input, ">>> type Python, Enter to run");
+    lv_textarea_set_placeholder_text(t->input, "Type Python, then press Enter");
     lv_obj_set_width(t->input, LV_PCT(100));
     lv_obj_set_style_text_font(t->input, md_font_mono(), 0);
+    /* A one-line field scrolls sideways under long lines; its scrollbar
+     * showed as a stray bar at the right edge. The cursor is enough. */
+    lv_obj_set_scrollbar_mode(t->input, LV_SCROLLBAR_MODE_OFF);
+    /* Square top corners: the field sits flush under the console. */
+    lv_obj_set_style_radius(t->input, 0, 0);
     lv_obj_add_event_cb(t->input, input_ready, LV_EVENT_READY, t);
     lv_obj_add_event_cb(t->input, input_key, LV_EVENT_KEY | LV_EVENT_PREPROCESS, t);
     lv_group_t *g = lv_group_get_default();
@@ -254,6 +259,7 @@ static void on_create(t5_app_t *app)
     t->log_pos = t5_log_head() > 8192 ? t5_log_head() - 8192 : 0;
 
     lv_obj_t *sy = md_tabs_add(tabs, "System");
+    lv_obj_set_style_pad_all(sy, T5_DP(16), 0);
     t->sys = lv_label_create(sy);
     lv_obj_set_width(t->sys, LV_PCT(100));
     lv_obj_set_style_text_font(t->sys, md_font_mono(), 0);

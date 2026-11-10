@@ -117,8 +117,11 @@ lv_obj_t *statusbar_create(void)
     lv_obj_add_event_cb(s_home, home_long, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_set_hidden(s_home, true);
 
+    /* Figures in the bar set without the caption's tracking: "100 %" spaced
+     * out reads as separate glyphs at this size. */
     s_time = md_label_create(s_bar, "", MD_TYPE_CAPTION);
     lv_obj_set_style_text_opa(s_time, sc->on_surface.high, 0);
+    lv_obj_set_style_text_letter_space(s_time, 0, 0);
     lv_obj_set_clickable(s_time, false);
     lv_obj_t *spacer = lv_obj_create(s_bar);
     lv_obj_remove_style_all(spacer);
@@ -128,6 +131,7 @@ lv_obj_t *statusbar_create(void)
 
     for (int i = 0; i < ACT_ICONS; i++) s_act[i] = icon(s_bar, MD_ICON_SCHEDULE);
     s_more = md_label_create(s_bar, "", MD_TYPE_CAPTION);
+    lv_obj_set_style_text_letter_space(s_more, 0, 0);
     lv_obj_set_clickable(s_more, false);
     s_bg = icon(s_bar, MD_ICON_BOLT);
     s_alarm = icon(s_bar, MD_ICON_ALARM);
@@ -144,6 +148,7 @@ lv_obj_t *statusbar_create(void)
     s_wifi = icon(s_bar, MD_ICON_WIFI);
     s_bat = icon(s_bar, MD_ICON_BATTERY_STD);
     s_pct = md_label_create(s_bar, "", MD_TYPE_CAPTION);
+    lv_obj_set_style_text_letter_space(s_pct, 0, 0);
     lv_obj_set_clickable(s_pct, false);
     lv_obj_t *hide[] = { s_mic, s_cam, s_usb, s_kbd, s_ble, s_act[0], s_act[1], s_act[2], s_more, s_bg, s_alarm,
                          s_xfer, s_net, s_audio };

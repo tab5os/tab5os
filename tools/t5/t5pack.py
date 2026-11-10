@@ -337,6 +337,32 @@ def verify_entries(entries):
     return fields["key"]
 
 
+# The launcher draws icons 56 dp (112 px) across; the device decodes up to
+# T5_PNG_MAX_DIM a side (firmware/components/t5_pkg/include/t5_pkg/png.h).
+ICON_MAX_DIM = define("t5_pkg/include/t5_pkg/png.h", "T5_PNG_MAX_DIM")
+ICON_BEST_PX = 112
+PNG_DEPTHS = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
+
+
+def check_icon(name, data):
+    """Raise PackError if the device can't draw this icon; return a warning
+    (or None) for one it can, but that won't look its best."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR" or len(data) < 33:
+        raise PackError(f"icon '{name}' is not a PNG")
+    w, h, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", data[16:29])
+    if depth not in PNG_DEPTHS.get(ctype, ()):
+        raise PackError(f"icon '{name}': not a valid PNG (colour type {ctype}, {depth} bits)")
+    if interlace:
+        raise PackError(f"icon '{name}' is interlaced: export it without interlacing")
+    if not w or not h or w > ICON_MAX_DIM or h > ICON_MAX_DIM:
+        raise PackError(f"icon '{name}' is {w}x{h}: at most {ICON_MAX_DIM}x{ICON_MAX_DIM}")
+    if w != h:
+        return f"icon '{name}' is {w}x{h}, not square: the launcher stretches it to a circle"
+    if w < ICON_BEST_PX:
+        return f"icon '{name}' is {w}x{h}: {ICON_BEST_PX}x{ICON_BEST_PX} or larger looks sharp"
+    return None
+
+
 def pack(app_dir, out_path, key_path=None):
     mpath = os.path.join(app_dir, "manifest.toml")
     if not os.path.isfile(mpath):
@@ -356,6 +382,11 @@ def pack(app_dir, out_path, key_path=None):
         raise PackError(f"entry '{m['entry']}' not found in {app_dir}")
     if "icon" in m and m["icon"] not in names:
         raise PackError(f"icon '{m['icon']}' not found in {app_dir}")
+    if "icon" in m:
+        with open(dict(files)[m["icon"]], "rb") as f:
+            warning = check_icon(m["icon"], f.read())
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr)
     if m["runtime"] == "native":
         with open(dict(files)[m["entry"]], "rb") as f:
             check_imports(f.read())
@@ -444,6 +475,13 @@ def inspect(path):
                         problems.append(str(e))
                 if "icon" in m and m["icon"] not in names:
                     problems.append(f"icon '{m['icon']}' is not in the package")
+                elif "icon" in m:
+                    try:
+                        warning = check_icon(m["icon"], z.read(m["icon"]))
+                        if warning:
+                            print(f"  warning: {warning}")
+                    except PackError as e:
+                        problems.append(str(e))
             except (PackError, UnicodeDecodeError) as e:
                 problems.append(str(e))
     for p in problems:

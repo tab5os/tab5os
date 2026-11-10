@@ -90,7 +90,7 @@ static void session_open(void)
     if (t5_media_session_open(&s.session) != T5_OK) {
         s.session = NULL;
         s.session_failed = true;
-        T5_IGNORE(t5_shell_toast("Another player has the media session"));
+        T5_IGNORE(t5_shell_toast("Another app is playing audio"));
     }
 }
 
@@ -252,10 +252,10 @@ static void task(void *arg)
                 if (nx >= 0) s.cur = nx, s.want_load = true;
                 changed();
                 unlock();
-                if (nx < 0) T5_IGNORE(t5_shell_toast("Can't play that track"));
+                if (nx < 0) T5_IGNORE(t5_shell_toast("Couldn't play that track"));
                 continue;
             } else {
-                T5_IGNORE(t5_shell_toast("Can't play those tracks"));
+                T5_IGNORE(t5_shell_toast("Couldn't play those tracks"));
             }
         }
         if (want_seek && e.dec) {

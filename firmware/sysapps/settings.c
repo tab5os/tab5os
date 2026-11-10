@@ -81,9 +81,31 @@ static lv_obj_t *chips(lv_obj_t *body)
     return c;
 }
 
+/* A column container for rows a refresh rebuilds. */
+static lv_obj_t *row_list(lv_obj_t *body)
+{
+    lv_obj_t *l = lv_obj_create(body);
+    lv_obj_remove_style_all(l);
+    lv_obj_set_size(l, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(l, LV_FLEX_FLOW_COLUMN);
+    return l;
+}
+
+static void set_hidden(lv_obj_t *o, bool hidden)
+{
+    lv_obj_set_hidden(o, hidden);
+}
+
+/* Received signal strength in words: dBm means nothing to most people,
+ * and the bands are what a person acts on (move closer, or not). */
+static const char *signal_words(int rssi)
+{
+    return rssi >= -60 ? "strong signal" : rssi >= -70 ? "good signal" : rssi >= -80 ? "fair signal" : "weak signal";
+}
+
 /* ---- Wi-Fi ----------------------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *sw, *status, *list, *saved;
+    lv_obj_t *sw, *status, *list, *saved, *saved_hdr;
     t5_net_ap_t aps[T5_NET_MAX_SCAN];
     int naps;
     uint32_t shown_hash;
@@ -107,7 +129,7 @@ static void pass_connect(lv_event_t *e)
     const char *pw = md_textfield_text(p->field);
     char msg[80];
     if (t5_net_connect(p->ssid, pw, true) == T5_OK) snprintf(msg, sizeof msg, "Connecting to %s", p->ssid);
-    else snprintf(msg, sizeof msg, "Couldn't start connecting to %s", p->ssid);
+    else snprintf(msg, sizeof msg, "Couldn't connect to %s", p->ssid);
     md_snackbar_show(msg, NULL, NULL, NULL);
     t5_shell_keyboard_hide();
     sa_pop(&s_nav);
@@ -191,13 +213,17 @@ static void saved_clicked(lv_event_t *e)
     snprintf(f->ssid, sizeof f->ssid, "%s", w->saved_ssids[i]);
     char title[80];
     snprintf(title, sizeof title, "Forget %s?", f->ssid);
-    md_dialog_show(title, "Tab5 OS won't join this network on its own any more.", "Forget", "Cancel", forget_answer, f);
+    md_dialog_show(title, "The Tab5 won't join this network by itself any more, and you'll need the password to join "
+                          "it again.", "Forget", "Cancel", forget_answer, f);
 }
 
 static void scan_clicked(lv_event_t *e)
 {
     (void)e;
-    if (t5_net_scan() == T5_OK) md_snackbar_show("Scanning...", NULL, NULL, NULL);
+    t5_net_status_t st;
+    t5_net_status(&st);
+    if (!st.enabled) md_snackbar_show("Turn on Wi-Fi first", NULL, NULL, NULL);
+    else if (t5_net_scan() == T5_OK) md_snackbar_show("Looking for networks", NULL, NULL, NULL);
 }
 
 static uint32_t ap_hash(const t5_net_ap_t *a, int n)
@@ -218,17 +244,23 @@ static void wifi_refresh(sa_nav_t *nav, void *arg)
     t5_net_status(&st);
     set_switch(w->sw, st.enabled);
     char buf[128];
-    if (!st.enabled) snprintf(buf, sizeof buf, "Wi-Fi is off");
+    if (!st.enabled) snprintf(buf, sizeof buf, "Off. Turn on Wi-Fi to see networks nearby.");
     else if (st.state == T5_NET_CONNECTED)
-        snprintf(buf, sizeof buf, "Connected to %s, %d dBm, %u.%u.%u.%u", st.ssid, st.rssi, st.ip[0], st.ip[1], st.ip[2],
-                 st.ip[3]);
-    else snprintf(buf, sizeof buf, "%s", t5_net_state_name(st.state));
+        snprintf(buf, sizeof buf, "Connected to %s, %s. IP address %u.%u.%u.%u", st.ssid, signal_words(st.rssi),
+                 st.ip[0], st.ip[1], st.ip[2], st.ip[3]);
+    else if (st.state == T5_NET_CONNECTING) snprintf(buf, sizeof buf, "Connecting...");
+    else if (st.state == T5_NET_FAILED)
+        snprintf(buf, sizeof buf, "Couldn't connect. Check the password and try again.");
+    else if (st.state == T5_NET_STARTING) snprintf(buf, sizeof buf, "Turning on...");
+    else snprintf(buf, sizeof buf, "Not connected. Choose a network below.");
     sa_set_text(w->status, buf);
 
     w->naps = t5_net_scan_results(w->aps, T5_NET_MAX_SCAN);
     char ss[8][T5_NET_SSID_LEN];
     int ns = t5_net_saved_list(ss, 8);
-    uint32_t h = ap_hash(w->aps, w->naps) ^ ((uint32_t)ns << 24);
+    uint32_t h = ap_hash(w->aps, w->naps) ^ ((uint32_t)ns << 24) ^ ((uint32_t)st.enabled << 30) ^
+                 ((uint32_t)(st.state == T5_NET_CONNECTED) << 31);
+    for (const char *p = st.ssid; st.state == T5_NET_CONNECTED && *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
     for (int i = 0; i < ns; i++)
         for (const char *p = ss[i]; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
     if (h == w->shown_hash) return;
@@ -239,18 +271,24 @@ static void wifi_refresh(sa_nav_t *nav, void *arg)
     for (int i = 0; i < w->naps; i++) {
         t5_net_ap_t *a = &w->aps[i];
         if (!a->ssid[0]) continue;
-        snprintf(buf, sizeof buf, "%d dBm · channel %u%s%s", a->rssi, a->channel, a->auth ? " · secured" : " · open",
-                 a->saved ? " · saved" : "");
+        /* One row per network name: a mesh or dual-band router answers from
+         * several access points. Results come strongest first. */
+        bool dup = false;
+        for (int j = 0; j < i && !dup; j++) dup = !strcmp(w->aps[j].ssid, a->ssid);
+        if (dup) continue;
+        snprintf(buf, sizeof buf, "%s, %s", a->saved ? "Saved" : a->auth ? "Secured" : "Open", signal_words(a->rssi));
         lv_obj_t *r = md_row_create(w->list, a->auth ? MD_ICON_WIFI_LOCK : MD_ICON_WIFI, a->ssid, buf);
         md_row_set_clickable(r, ap_clicked, (void *)(intptr_t)i);
         if (st.state == T5_NET_CONNECTED && !strcmp(st.ssid, a->ssid)) md_row_trailing_text(r, "Connected");
     }
-    if (!w->naps) sa_note(w->list, "No networks found yet. Tap Scan.");
+    if (!st.enabled) sa_note(w->list, "Wi-Fi is off.");
+    else if (!w->naps) sa_note(w->list, "No networks found yet. Tap the refresh button to look again.");
     lv_obj_clean(w->saved);
     for (int i = 0; i < ns; i++) {
         lv_obj_t *r = md_row_create(w->saved, MD_ICON_WIFI, ss[i], "Tap to forget");
         md_row_set_clickable(r, saved_clicked, (void *)(intptr_t)i);
     }
+    set_hidden(w->saved_hdr, ns == 0);
 }
 
 static void page_wifi(void)
@@ -263,16 +301,10 @@ static void page_wifi(void)
     t5_net_status(&st);
     w->sw = switch_row(body, MD_ICON_WIFI, "Use Wi-Fi", NULL, st.enabled, wifi_toggle);
     w->status = sa_note(body, "");
-    md_section_create(body, "Networks");
-    w->list = lv_obj_create(body);
-    lv_obj_remove_style_all(w->list);
-    lv_obj_set_size(w->list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(w->list, LV_FLEX_FLOW_COLUMN);
-    md_section_create(body, "Saved");
-    w->saved = lv_obj_create(body);
-    lv_obj_remove_style_all(w->saved);
-    lv_obj_set_size(w->saved, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(w->saved, LV_FLEX_FLOW_COLUMN);
+    md_section_create(body, "Networks nearby");
+    w->list = row_list(body);
+    w->saved_hdr = md_section_create(body, "Saved networks");
+    w->saved = row_list(body);
     if (st.enabled && t5_net_scan_results(w->aps, 1) == 0) t5_net_scan();
     sa_set_refresh(&s_nav, wifi_refresh, w, free);
 }
@@ -296,7 +328,7 @@ static void ble_scan_clicked(lv_event_t *e)
         md_snackbar_show("Turn Bluetooth on first", NULL, NULL, NULL);
         return;
     }
-    if (t5_ble_sys_scan(5000) == T5_OK) md_snackbar_show("Scanning for 5 s...", NULL, NULL, NULL);
+    if (t5_ble_sys_scan(5000) == T5_OK) md_snackbar_show("Looking for devices for 5 seconds", NULL, NULL, NULL);
 }
 
 static void ble_dev_clicked(lv_event_t *e)
@@ -310,7 +342,7 @@ static void ble_dev_clicked(lv_event_t *e)
         return;
     }
     t5_err_t err = t5_ble_sys_connect(b->devs[i].addr, b->devs[i].addr_type);
-    md_snackbar_show(err == T5_OK ? "Connecting..." : "Couldn't connect", NULL, NULL, NULL);
+    md_snackbar_show(err == T5_OK ? "Connecting..." : "Couldn't connect to this device", NULL, NULL, NULL);
 }
 
 static void ble_refresh(sa_nav_t *nav, void *arg)
@@ -318,19 +350,26 @@ static void ble_refresh(sa_nav_t *nav, void *arg)
     (void)nav;
     ble_page_t *b = arg;
     bool on = t5_ble_ready();
+    bool conn = on && t5_ble_sys_connected();
     set_switch(b->sw, on);
-    sa_set_text(b->status, !on ? "Bluetooth is off" : t5_ble_sys_connected() ? "Connected to a device" : "On, not connected");
+    sa_set_text(b->status, !on   ? "Off. Turn on Bluetooth to find devices nearby."
+                           : conn ? "Connected. Tap the device to disconnect."
+                                  : "Not connected. Tap a device to connect.");
     b->n = t5_ble_sys_scan_results(b->devs, T5_BLE_MAX_SCAN);
-    if (b->n == b->shown) return;
-    b->shown = b->n;
+    int key = b->n * 2 + on;
+    if (key == b->shown) return;
+    b->shown = key;
     lv_obj_clean(b->list);
     char addr[18], sub[48];
     for (int i = 0; i < b->n; i++) {
         t5_ble_format_addr(b->devs[i].addr, addr);
-        snprintf(sub, sizeof sub, "%s · %d dBm", addr, b->devs[i].rssi);
-        lv_obj_t *r = md_row_create(b->list, MD_ICON_BLUETOOTH, b->devs[i].name[0] ? b->devs[i].name : "(no name)", sub);
+        snprintf(sub, sizeof sub, "%s, %s", addr, signal_words(b->devs[i].rssi));
+        lv_obj_t *r =
+            md_row_create(b->list, MD_ICON_BLUETOOTH, b->devs[i].name[0] ? b->devs[i].name : "Unnamed device", sub);
         md_row_set_clickable(r, ble_dev_clicked, (void *)(intptr_t)i);
     }
+    if (!on) sa_note(b->list, "Bluetooth is off.");
+    else if (!b->n) sa_note(b->list, "No devices found yet. Tap the refresh button to look for 5 seconds.");
 }
 
 static void page_ble(void)
@@ -339,14 +378,11 @@ static void page_ble(void)
     if (!b) return;
     lv_obj_t *body = sa_push(&s_nav, "Bluetooth");
     md_appbar_add_action(sa_bar(&s_nav), MD_ICON_REFRESH, ble_scan_clicked, NULL);
-    b->sw = switch_row(body, MD_ICON_BLUETOOTH, "Use Bluetooth", "Bluetooth LE, through the C6", t5_ble_ready(),
+    b->sw = switch_row(body, MD_ICON_BLUETOOTH, "Use Bluetooth", "Bluetooth LE sensors and accessories", t5_ble_ready(),
                        ble_toggle);
     b->status = sa_note(body, "");
-    md_section_create(body, "Devices");
-    b->list = lv_obj_create(body);
-    lv_obj_remove_style_all(b->list);
-    lv_obj_set_size(b->list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(b->list, LV_FLEX_FLOW_COLUMN);
+    md_section_create(body, "Devices nearby");
+    b->list = row_list(body);
     b->shown = -1;
     sa_set_refresh(&s_nav, ble_refresh, b, free);
 }
@@ -372,9 +408,72 @@ static void stats_toggle(bool on)
     t5_ui_show_stats(on);
 }
 
+/* Accent swatches: a row of colour circles, the chosen one carrying a
+ * check. Names on ten chips made the choice a reading exercise; the colour
+ * itself is the label, and the section header names the current one. */
+static lv_obj_t *s_accent_hdr;   /* valid while the Display page is open */
+
+static void accent_header(void)
+{
+    char buf[48];
+    snprintf(buf, sizeof buf, "Accent colour: %s", md_accent(md_get_accent())->name);
+    lv_label_set_text(s_accent_hdr, buf);
+}
+
 static void accent_clicked(lv_event_t *e)
 {
+    lv_obj_t *sw = lv_event_get_current_target_obj(e);
     t5_shell_accent_set((md_accent_t)(intptr_t)lv_event_get_user_data(e));
+    lv_obj_t *row = lv_obj_get_parent(sw);
+    for (uint32_t i = 0; i < lv_obj_get_child_count(row); i++) {
+        lv_obj_t *c = lv_obj_get_child(row, (int32_t)i);
+        set_hidden(lv_obj_get_child(c, 0), c != sw);
+    }
+    if (s_accent_hdr) {
+        lv_obj_set_style_text_color(s_accent_hdr, md_color(md_scheme()->c.primary), 0);
+        accent_header();
+    }
+}
+
+static void accent_hdr_deleted(lv_event_t *e)
+{
+    (void)e;
+    s_accent_hdr = NULL;
+}
+
+static void accent_swatches(lv_obj_t *body)
+{
+    s_accent_hdr = md_section_create(body, "");
+    lv_obj_add_event_cb(s_accent_hdr, accent_hdr_deleted, LV_EVENT_DELETE, NULL);
+    accent_header();
+    lv_obj_t *row = lv_obj_create(body);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(row, T5_DP(12), 0);
+    lv_obj_set_style_pad_ver(row, T5_DP(4), 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_scrollable(row, false);
+    for (int i = 0; i < MD_ACCENT_COUNT; i++) {
+        const md_accent_def_t *a = md_accent((md_accent_t)i);
+        lv_obj_t *s = lv_obj_create(row);
+        lv_obj_remove_style_all(s);
+        /* 40 dp of colour in a 48 dp touch target. */
+        lv_obj_set_size(s, T5_DP(40), T5_DP(40));
+        lv_obj_set_style_margin_all(s, T5_DP(4), 0);
+        lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(s, md_color(md_is_dark() ? a->dark : a->light), 0);
+        lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
+        lv_obj_set_style_clip_corner(s, true, 0);
+        lv_obj_set_ext_click_area(s, T5_DP(4));
+        lv_obj_set_clickable(s, true);
+        lv_obj_set_scrollable(s, false);
+        md_ripple_attach(s);
+        lv_obj_t *chk = md_icon_create(s, MD_ICON_CHECK, MD_ICON_DP);
+        lv_obj_set_style_text_color(chk, md_color(md_is_dark() ? a->on_dark : a->on_light), 0);
+        lv_obj_center(chk);
+        set_hidden(chk, md_get_accent() != (md_accent_t)i);
+        lv_obj_add_event_cb(s, accent_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
 }
 
 static void rot_clicked(lv_event_t *e)
@@ -383,9 +482,37 @@ static void rot_clicked(lv_event_t *e)
     t5_ui_set_rotation((t5_rotation_t)(intptr_t)lv_event_get_user_data(e));
 }
 
+/* The timeout note says what the chosen profile does, so it follows the
+ * chips (it used to keep describing the profile the page opened with). */
+static lv_obj_t *s_timeout_note;   /* valid while the Display page is open */
+
+static void timeout_note_deleted(lv_event_t *e)
+{
+    (void)e;
+    s_timeout_note = NULL;
+}
+
+static void timeout_text(void)
+{
+    if (!s_timeout_note) return;
+    t5_power_timeouts_t to;
+    t5_power_get_timeouts(&to);
+    char buf[160], a[24], b[24];
+    sa_fmt_duration(a, sizeof a, to.screen_off_ms / 1000);
+    sa_fmt_duration(b, sizeof b, to.soft_off_ms / 1000);
+    if (t5_power_profile() == T5_PROFILE_MOUNTED)
+        snprintf(buf, sizeof buf, "The screen turns off after %s without a touch. A mounted Tab5 never powers off by "
+                                  "itself.", a);
+    else
+        snprintf(buf, sizeof buf, "The screen turns off after %s without a touch, and the Tab5 powers off after %s "
+                                  "asleep.", a, b);
+    sa_set_text(s_timeout_note, buf);
+}
+
 static void profile_clicked(lv_event_t *e)
 {
     sa_report(t5_power_set_profile((t5_power_profile_t)(intptr_t)lv_event_get_user_data(e)), "change the power profile");
+    timeout_text();
 }
 
 static void page_display(void)
@@ -393,27 +520,18 @@ static void page_display(void)
     lv_obj_t *body = sa_push(&s_nav, "Display");
     md_section_create(body, "Brightness");
     slider_row(body, MD_ICON_BRIGHTNESS_6, T5_DISPLAY_BRIGHTNESS_MIN, 100, t5_display_brightness(), bright_changed);
-    md_section_create(body, "Standby");
-    switch_row(body, MD_ICON_NIGHTS_STAY, "Standby while charging",
-               "A clock, music and app cards instead of dimming", t5_shell_standby_enabled(), standby_toggle);
     md_section_create(body, "Rotation");
-    switch_row(body, MD_ICON_SCREEN_ROTATION, "Auto-rotate", "Off keeps the current orientation, across reboots",
-               t5_ui_follows_board(), autorot_toggle);
+    switch_row(body, MD_ICON_SCREEN_ROTATION, "Auto-rotate", "When off, the screen keeps its orientation, even after a "
+               "restart", t5_ui_follows_board(), autorot_toggle);
     lv_obj_t *c = chips(body);
-    static const char *names[] = { "Portrait", "Landscape", "Portrait (flipped)", "Landscape (flipped)" };
+    static const char *names[] = { "Portrait", "Landscape", "Flipped portrait", "Flipped landscape" };
     for (int i = 0; i < 4; i++) {
         lv_obj_t *ch = md_chip_create(c, names[i], NULL, MD_CHIP_CHOICE);
         if ((int)t5_ui_rotation() == i) md_chip_set_selected(ch, true);
         lv_obj_add_event_cb(ch, rot_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
-    md_section_create(body, "Accent colour");
-    c = chips(body);
-    for (int i = 0; i < MD_ACCENT_COUNT; i++) {
-        lv_obj_t *ch = md_chip_create(c, md_accent((md_accent_t)i)->name, MD_ICON_PALETTE, MD_CHIP_CHOICE);
-        if (md_get_accent() == (md_accent_t)i) md_chip_set_selected(ch, true);
-        lv_obj_add_event_cb(ch, accent_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    }
-    md_section_create(body, "Screen timeout");
+    accent_swatches(body);
+    md_section_create(body, "Sleep");
     c = chips(body);
     static const char *prof[] = { "Handheld", "Mounted" };
     for (int i = 0; i < 2; i++) {
@@ -421,17 +539,12 @@ static void page_display(void)
         if ((int)t5_power_profile() == i) md_chip_set_selected(ch, true);
         lv_obj_add_event_cb(ch, profile_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
-    t5_power_timeouts_t to;
-    t5_power_get_timeouts(&to);
-    char buf[128], a[24], b[24];
-    sa_fmt_duration(a, sizeof a, to.screen_off_ms / 1000);
-    sa_fmt_duration(b, sizeof b, to.soft_off_ms / 1000);
-    snprintf(buf, sizeof buf, "Screen off after %s idle; off completely after %s asleep%s.", a, b,
-             t5_power_profile() == T5_PROFILE_MOUNTED ? " (mounted: never)" : "");
-    sa_note(body, buf);
-    md_section_create(body, "Theme");
-    sa_note(body, "Dark theme. The light theme is built but not tuned yet, so it stays hidden until after 1.0.");
-    switch_row(body, MD_ICON_DASHBOARD, "Frame counters", "Frame rate and render time on screen", false, stats_toggle);
+    s_timeout_note = sa_note(body, "");
+    lv_obj_add_event_cb(s_timeout_note, timeout_note_deleted, LV_EVENT_DELETE, NULL);
+    timeout_text();
+    switch_row(body, MD_ICON_NIGHTS_STAY, "Standby while charging",
+               "Shows a clock, music and app cards instead of turning the screen off", t5_shell_standby_enabled(),
+               standby_toggle);
 }
 
 /* ---- Sound --------------------------------------------------------------------------------- */
@@ -485,9 +598,10 @@ static void sound_refresh(sa_nav_t *nav, void *arg)
     t5_audio_stats_t st;
     t5_audio_stats(&st);
     char buf[160];
-    if (!st.ready) snprintf(buf, sizeof buf, "The audio codecs didn't answer at boot.");
-    else snprintf(buf, sizeof buf, "Output to the %s%s. %u underruns since boot.", st.headphones ? "headphones" : "speaker",
-                  st.out_running ? " (playing)" : "", (unsigned)st.underruns);
+    if (!st.ready) snprintf(buf, sizeof buf, "No sound: the audio chips didn't respond at startup. Restart the Tab5 to "
+                                             "try again.");
+    else snprintf(buf, sizeof buf, "%s through the %s.", st.out_running ? "Playing" : "Sound plays",
+                  st.headphones ? "headphones" : "speaker");
     sa_set_text(p->status, buf);
     set_switch(p->mute, t5_audio_muted());
 }
@@ -509,8 +623,8 @@ static void page_sound(void)
     lv_obj_add_event_cb(b, tone_clicked, LV_EVENT_CLICKED, NULL);
     md_section_create(body, "Microphones");
     slider_row(body, MD_ICON_MIC, 0, 37, (int32_t)t5_audio_in_gain_db(), gain_changed);
-    sa_note(body, "Input gain for both microphones, 0 to 37 dB. Apps ask before they use them, and the status bar "
-                  "shows a microphone while one is listening.");
+    sa_note(body, "Input level for both microphones. Apps ask before they listen, and the status bar shows a "
+                  "microphone while one is.");
     sa_set_refresh(&s_nav, sound_refresh, p, free);
 }
 
@@ -547,8 +661,14 @@ static void power_refresh(sa_nav_t *nav, void *arg)
     t5_battery_status_t b;
     t5_battery_status(&b);
     char buf[128];
-    if (!b.ready || b.percent < 0) snprintf(buf, sizeof buf, "Battery: measuring");
-    else snprintf(buf, sizeof buf, "%d%% · %u mV · %s", b.percent, b.mv, b.usb ? "USB power" : "on battery");
+    if (!b.ready || b.percent < 0) snprintf(buf, sizeof buf, "Measuring the battery...");
+    else snprintf(buf, sizeof buf, "Battery at %d%%, %s.", b.percent,
+                  !b.usb                          ? "running on battery"
+                  : b.charge == T5_CHG_CHARGING   ? "charging"
+                  : b.charge == T5_CHG_FULL        ? "full"
+                  : b.charge == T5_CHG_PAUSED_LIMIT ? "charging paused at the 80% limit"
+                  : b.charge == T5_CHG_PAUSED_TEMP  ? "charging paused while the battery is warm"
+                                                    : "on USB power");
     sa_set_text(p->status, buf);
     set_switch(p->saver, t5_power_low_power());
     set_switch(p->limit, t5_battery_charge_limit());
@@ -561,12 +681,16 @@ static void page_power(void)
     if (!p) return;
     lv_obj_t *body = sa_push(&s_nav, "Power");
     p->status = sa_note(body, "");
-    p->saver = switch_row(body, MD_ICON_BATTERY_SAVER, "Battery saver", "30 fps, plain ripples, shorter timers",
+    p->saver = switch_row(body, MD_ICON_BATTERY_SAVER, "Battery saver",
+                          "Lower frame rate, simpler animations, shorter timeouts",
                           t5_power_low_power(), saver_toggle);
     p->limit = switch_row(body, MD_ICON_BATTERY_CHARGING_FULL, "Stop charging at 80%",
-                          "Better for the pack when the Tab5 lives on USB", t5_battery_charge_limit(), limit_toggle);
-    p->fast = switch_row(body, MD_ICON_BOLT, "Fast charging", NULL, t5_battery_fast_charge(), fast_toggle);
-    lv_obj_t *r = md_row_create(body, MD_ICON_OPEN_IN_NEW, "Power app", "Live draw, history and per-app use");
+                          "Makes the battery last longer if the Tab5 stays plugged in", t5_battery_charge_limit(),
+                          limit_toggle);
+    p->fast = switch_row(body, MD_ICON_BOLT, "Fast charging", "Higher charging current", t5_battery_fast_charge(),
+                         fast_toggle);
+    lv_obj_t *r =
+        md_row_create(body, MD_ICON_OPEN_IN_NEW, "Battery details", "Live power draw, charge history, use per app");
     md_row_set_clickable(r, open_power, NULL);
     sa_set_refresh(&s_nav, power_refresh, p, free);
 }
@@ -612,8 +736,16 @@ static void open_zones(lv_event_t *e)
     for (int i = 0; i < t5_time_zone_count(); i++) {
         const char *name, *posix;
         t5_time_zone(i, &name, &posix);
-        lv_obj_t *r = md_row_create(body, !strcmp(posix, t5_time_tz()) ? MD_ICON_CHECK : NULL, name, posix);
+        /* The POSIX rule string is for machines: the name alone, with a
+         * trailing check on the current zone. */
+        lv_obj_t *r = md_row_create(body, NULL, name, NULL);
         md_row_set_clickable(r, zone_clicked, (void *)(intptr_t)i);
+        if (!strcmp(posix, t5_time_tz())) {
+            lv_obj_t *chk = md_row_trailing_text(r, MD_ICON_CHECK);
+            lv_obj_set_style_text_font(chk, md_icon_font(MD_ICON_DP), 0);
+            lv_obj_set_style_text_color(chk, md_color(md_scheme()->c.primary), 0);
+            lv_obj_set_style_text_opa(chk, LV_OPA_COVER, 0);
+        }
     }
 }
 
@@ -624,7 +756,7 @@ static void time_set_clicked(lv_event_t *e)
     if (sscanf(md_textfield_text(p->date), "%d-%d-%d", &Y, &M, &D) != 3 ||
         sscanf(md_textfield_text(p->time), "%d:%d", &h, &m) != 2 || M < 1 || M > 12 || D < 1 || D > 31 || h < 0 ||
         h > 23 || m < 0 || m > 59 || Y < 2024) {
-        md_textfield_set_helper(p->date, "Use YYYY-MM-DD and HH:MM", true);
+        md_textfield_set_helper(p->date, "Use the form 2026-01-31 and 14:30", true);
         return;
     }
     struct tm tm = { .tm_year = Y - 1900, .tm_mon = M - 1, .tm_mday = D, .tm_hour = h, .tm_min = m, .tm_isdst = -1 };
@@ -642,12 +774,20 @@ static void time_refresh(sa_nav_t *nav, void *arg)
     struct tm tm;
     char buf[96];
     bool ok = t5_time_local(&tm);
-    if (ok) strftime(buf, sizeof buf, "%A %d %B %Y, %H:%M:%S", &tm);
-    else snprintf(buf, sizeof buf, "Not set");
+    if (ok) {
+        char day[16], month[16];
+        strftime(day, sizeof day, "%A", &tm);
+        strftime(month, sizeof month, "%B", &tm);
+        snprintf(buf, sizeof buf, "%02d:%02d, %s %d %s %d", tm.tm_hour, tm.tm_min, day, tm.tm_mday, month,
+                 tm.tm_year + 1900);
+    }
+    else snprintf(buf, sizeof buf, "The clock isn't set");
     sa_set_text(p->now, buf);
-    static const char *src[] = { "not set", "the RTC", "set by hand", "the network (NTP)" };
+    static const char *src[] = { "Connect to Wi-Fi or set the time below.",
+                                 "Kept by the Tab5's clock while it was off. It sets itself over Wi-Fi.",
+                                 "Set by hand.", "Set over the network. It stays right while the Tab5 is off." };
     t5_time_source_t s = t5_time_source();
-    snprintf(buf, sizeof buf, "From %s · zone %s", src[s <= T5_TIME_SRC_NTP ? s : 0], t5_time_tz_name());
+    snprintf(buf, sizeof buf, "%s", src[s <= T5_TIME_SRC_NTP ? s : 0]);
     sa_set_text(p->src, buf);
     /* The zone changed (its page, or elsewhere): show it, and refill the
      * fields in it unless someone is typing there. */
@@ -666,15 +806,14 @@ static void page_time(void)
     if (!p) return;
     lv_obj_t *body = sa_push(&s_nav, "Date and time");
     p->now = md_label_create(body, "", MD_TYPE_HEADLINE6);
-    lv_obj_set_style_pad_all(p->now, T5_DP(16), 0);
+    lv_obj_set_style_pad_hor(p->now, T5_DP(16), 0);
+    lv_obj_set_style_pad_top(p->now, T5_DP(16), 0);
     p->src = sa_note(body, "");
-    sa_note(body, "The clock sets itself from the network when Wi-Fi is connected, and the RTC keeps it through soft "
-                  "off.");
     lv_obj_t *r = md_row_create(body, MD_ICON_LANGUAGE, "Time zone", t5_time_tz_name());
     md_row_set_clickable(r, open_zones, NULL);
     p->zone = r;
     snprintf(p->tz, sizeof p->tz, "%s", t5_time_tz());
-    r = md_row_create(body, MD_ICON_REFRESH, "Sync with the network now", "Needs Wi-Fi");
+    r = md_row_create(body, MD_ICON_REFRESH, "Set from the network now", "Needs Wi-Fi");
     md_row_set_clickable(r, sync_clicked, NULL);
     md_section_create(body, "Set by hand");
     lv_obj_t *box = lv_obj_create(body);
@@ -683,9 +822,9 @@ static void page_time(void)
     lv_obj_set_style_pad_hor(box, T5_DP(16), 0);
     lv_obj_set_style_pad_gap(box, T5_DP(16), 0);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
-    p->date = md_textfield_create(box, "Date (YYYY-MM-DD)", false);
+    p->date = md_textfield_create(box, "Date (year-month-day)", false);
     lv_obj_set_flex_grow(p->date, 1);
-    p->time = md_textfield_create(box, "Time (HH:MM)", false);
+    p->time = md_textfield_create(box, "Time (24-hour)", false);
     lv_obj_set_flex_grow(p->time, 1);
     fill_fields(p);
     lv_obj_t *row = sa_button_row(body);
@@ -710,7 +849,7 @@ static void msc_answer(int b, void *ud)
     (void)ud;
     if (b != 0) return;
     t5_err_t e = t5_usbc_set_mode(T5_USBC_STORAGE, 0);    /* until the computer ejects it */
-    if (e != T5_OK) md_snackbar_show("No SD card to share", NULL, NULL, NULL);
+    if (e != T5_OK) md_snackbar_show("Couldn't share the SD card. Check that one is inserted.", NULL, NULL, NULL);
 }
 
 static void take_back_answer(int b, void *ud)
@@ -723,17 +862,17 @@ static void msc_clicked(lv_event_t *e)
 {
     (void)e;
     if (t5_usbc_mode() == T5_USBC_STORAGE) {
-        md_dialog_show("Take the SD card back now?",
-                       "Eject the drive on the computer first. Taking it back while the computer is using it can "
-                       "lose files it was writing.",
+        md_dialog_show("Take the SD card back?",
+                       "Eject the drive on the computer first. Taking it back while the computer is writing to it "
+                       "can lose those files.",
                        "Take it back", "Cancel", take_back_answer, NULL);
         return;
     }
-    md_dialog_show("Hand the SD card to a computer?",
-                   "A computer on the USB-C port gets the SD card as a drive and keeps it until you eject it "
-                   "there. Meanwhile apps can't use /sd, the developer console and sound stop, and /data is "
-                   "never shared.",
-                   "Hand over", "Cancel", msc_answer, NULL);
+    md_dialog_show("Share the SD card with a computer?",
+                   "The computer on the USB-C port opens the card as a drive until you eject it there. While it's "
+                   "shared, apps can't use the card, and sound and the USB console stop. Internal storage is never "
+                   "shared.",
+                   "Share", "Cancel", msc_answer, NULL);
 }
 
 static void usb_refresh(sa_nav_t *nav, void *arg)
@@ -744,8 +883,8 @@ static void usb_refresh(sa_nav_t *nav, void *arg)
     int m = (int)t5_usbc_mode();
     if (m != p->mode_shown) {
         p->mode_shown = m;
-        md_row_set_secondary(p->mode, m == T5_USBC_STORAGE ? "The computer has the SD card: eject it there to take it back"
-                                                           : "Developer console (tap to hand the SD card to a computer)");
+        md_row_set_secondary(p->mode, m == T5_USBC_STORAGE ? "Shared now. Eject it on the computer, then tap here"
+                                                           : "Open the card as a drive on a computer over USB-C");
     }
     t5_usb_dev_t d[T5_USB_MAX_DEVICES];
     int n = t5_usb_devices(d, T5_USB_MAX_DEVICES);
@@ -759,12 +898,12 @@ static void usb_refresh(sa_nav_t *nav, void *arg)
                                                      MD_ICON_VIDEOCAM, MD_ICON_HEADPHONES };
     char sub[64];
     for (int i = 0; i < n; i++) {
-        snprintf(sub, sizeof sub, "%s · %04x:%04x · %s speed", t5_usb_class_name(d[i].cls), d[i].vid, d[i].pid,
-                 d[i].speed == 2 ? "high" : d[i].speed == 1 ? "full" : "low");
+        snprintf(sub, sizeof sub, "%s, %s speed, ID %04x:%04x", t5_usb_class_name(d[i].cls),
+                 d[i].speed == 2 ? "high" : d[i].speed == 1 ? "full" : "low", d[i].vid, d[i].pid);
         md_row_create(p->list, icons[d[i].cls < T5_USB_CLASS_COUNT ? d[i].cls : 0],
                       d[i].product[0] ? d[i].product : "USB device", sub);
     }
-    if (!n) sa_note(p->list, t5_usb_host_enabled() ? "Nothing plugged in." : "USB-A is off.");
+    if (!n) sa_note(p->list, t5_usb_host_enabled() ? "Nothing plugged in." : "Turn on the USB-A port to use devices.");
 }
 
 static void page_usb(void)
@@ -774,14 +913,11 @@ static void page_usb(void)
     p->shown = p->mode_shown = -1;
     lv_obj_t *body = sa_push(&s_nav, "USB");
     md_section_create(body, "USB-A");
-    p->sw = switch_row(body, MD_ICON_USB, "USB-A port", "Power and drivers for keyboards, drives, cameras, MIDI",
+    p->sw = switch_row(body, MD_ICON_USB, "USB-A port", "Keyboards, mice, drives, cameras and MIDI",
                        t5_usb_host_enabled(), usb_toggle);
-    p->list = lv_obj_create(body);
-    lv_obj_remove_style_all(p->list);
-    lv_obj_set_size(p->list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(p->list, LV_FLEX_FLOW_COLUMN);
+    p->list = row_list(body);
     md_section_create(body, "USB-C");
-    p->mode = md_row_create(body, MD_ICON_SD_STORAGE, "SD card to a computer", " ");
+    p->mode = md_row_create(body, MD_ICON_SD_STORAGE, "Share the SD card", " ");
     md_row_set_clickable(p->mode, msc_clicked, NULL);
     sa_set_refresh(&s_nav, usb_refresh, p, free);
 }
@@ -800,8 +936,8 @@ static void upd_task(void *arg)
     char err[128] = "";
     t5_err_t e = t5_ota_install_file(s_upd_path, T5_OTA_FROM_SETTINGS, t5_dev_enabled(), err, sizeof err);
     char msg[160];
-    if (e == T5_OK) snprintf(msg, sizeof msg, "Installed. Restart to run it.");
-    else snprintf(msg, sizeof msg, "Not installed: %s", err);
+    if (e == T5_OK) snprintf(msg, sizeof msg, "Update installed. Restart to use it.");
+    else snprintf(msg, sizeof msg, "Couldn't install the update: %s", err);
     t5_shell_toast(msg);
 }
 
@@ -818,10 +954,10 @@ static void upd_file_clicked(lv_event_t *e)
 {
     const char *path = lv_event_get_user_data(e);
     snprintf(s_upd_path, sizeof s_upd_path, "%s", path);
-    char text[200];
-    snprintf(text, sizeof text, "Install %s into the other system slot? The current system keeps running until you "
-                                "restart, and comes back by itself if the new one doesn't start properly.", path);
-    md_dialog_show("Install this update?", text, "Install", "Cancel", upd_answer, NULL);
+    md_dialog_show("Install this update?",
+                   "It installs alongside the current system, which keeps running until you restart. If the new "
+                   "one doesn't start properly, the current one comes back by itself.",
+                   "Install", "Cancel", upd_answer, NULL);
 }
 
 static void restart_answer(int b, void *ud)
@@ -835,14 +971,14 @@ static void recovery_clicked(lv_event_t *e)
 {
     (void)e;
     md_dialog_show("Restart into recovery?",
-                   "Recovery can reinstall the system from the SD card, clear settings and save the logs to the card.",
+                   "Recovery can reinstall the system from the SD card, reset settings and save logs to the card.",
                    "Restart", "Cancel", restart_answer, (void *)1);
 }
 
 static void safemode_clicked(lv_event_t *e)
 {
     (void)e;
-    md_dialog_show("Restart in safe mode?", "Installed apps stay off until the next restart.", "Restart", "Cancel",
+    md_dialog_show("Restart in safe mode?", "Apps you installed stay off until the next restart.", "Restart", "Cancel",
                    restart_answer, NULL);
 }
 
@@ -864,11 +1000,11 @@ static void upd_refresh(sa_nav_t *nav, void *arg)
         snprintf(buf, sizeof buf, "Installing %s: %u%%", st.version, st.total ? (unsigned)(st.done * 100ull / st.total) : 0);
         break;
     case T5_OTA_VERIFYING: snprintf(buf, sizeof buf, "Checking %s", st.version); break;
-    case T5_OTA_READY: snprintf(buf, sizeof buf, "%s installed: restart to run it", st.version); break;
-    case T5_OTA_FAILED: snprintf(buf, sizeof buf, "Last update failed: %s", st.error); break;
+    case T5_OTA_READY: snprintf(buf, sizeof buf, "%s is installed. Restart to use it", st.version); break;
+    case T5_OTA_FAILED: snprintf(buf, sizeof buf, "The last update failed: %s", st.error); break;
     default:
-        if (t5_ota_on_trial()) snprintf(buf, sizeof buf, "Just updated: confirmed after a minute of running");
-        else snprintf(buf, sizeof buf, "Up to date with what's installed");
+        if (t5_ota_on_trial()) snprintf(buf, sizeof buf, "Updated. It's kept once it has run for a minute");
+        else snprintf(buf, sizeof buf, "No update in progress");
     }
     md_row_set_secondary(p->state, buf);
     if (st.state == T5_OTA_READY && p->shown != -2) {
@@ -886,7 +1022,7 @@ static void upd_refresh(sa_nav_t *nav, void *arg)
         lv_obj_t *r = md_row_create(p->list, MD_ICON_SD_STORAGE, paths[i], "Tap to install");
         md_row_set_clickable(r, upd_file_clicked, paths[i]);
     }
-    if (!n) sa_note(p->list, "No update on the SD card. Put a .t5os file in its top folder or in /update.");
+    if (!n) sa_note(p->list, "No update found. Copy a .t5os file to the card's top folder or its update folder.");
 }
 
 static void page_updates(void)
@@ -896,34 +1032,36 @@ static void page_updates(void)
     if (!p) return;
     p->shown = -1;
     const esp_app_desc_t *d = esp_app_get_description();
-    const esp_partition_t *run = esp_ota_get_running_partition();
     char buf[160];
-    snprintf(buf, sizeof buf, "Tab5 OS %s, %s %s, slot %s", d->version, d->date, d->time, run ? run->label : "?");
-    md_row_create(body, MD_ICON_SYSTEM_UPDATE, "Installed", buf);
+    /* __DATE__ is "Nov  9 2026": shown as "9 Nov 2026". */
+    char mon[4] = "", day[4] = "", year[8] = "";
+    if (sscanf(d->date, "%3s %3s %7s", mon, day, year) == 3)
+        snprintf(buf, sizeof buf, "Tab5 OS %s, built %s %s %s", d->version, day, mon, year);
+    else
+        snprintf(buf, sizeof buf, "Tab5 OS %s, built %s", d->version, d->date);
+    md_row_create(body, MD_ICON_SYSTEM_UPDATE, "System", buf);
     p->state = md_row_create(body, MD_ICON_VERIFIED_USER, "Status", " ");
     t5_net_status_t n;
     t5_net_status(&n);
-    snprintf(buf, sizeof buf, "Running %s%s%s", n.c6_version[0] ? n.c6_version : "unknown",
-             n.c6_image[0] ? ", staged " : "", n.c6_image);
-    md_row_create(body, MD_ICON_WIFI, "Radio (ESP32-C6)", buf);
+    snprintf(buf, sizeof buf, "Version %s%s%s", n.c6_version[0] ? n.c6_version : "unknown",
+             n.c6_image[0] ? ", update ready: " : "", n.c6_image);
+    md_row_create(body, MD_ICON_WIFI, "Wi-Fi and Bluetooth radio", buf);
     md_section_create(body, "From the SD card");
-    p->list = lv_obj_create(body);
-    lv_obj_remove_style_all(p->list);
-    lv_obj_set_size(p->list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(p->list, LV_FLEX_FLOW_COLUMN);
-    sa_note(body, "Updates are checked before they are used: signed by a trusted key (or pushed in developer mode), "
-                  "and built for this chip. A paired computer can also push one with `t5 ota`.");
+    p->list = row_list(body);
+    sa_note(body, "An update installs only if it's built for this Tab5 and signed by a trusted key, or sent from a "
+                  "paired computer in developer mode.");
     md_section_create(body, "Repair");
-    lv_obj_t *r = md_row_create(body, MD_ICON_HEALING, "Restart in safe mode", "Installed apps stay off");
+    lv_obj_t *r = md_row_create(body, MD_ICON_HEALING, "Restart in safe mode", "Apps you installed stay off");
     md_row_set_clickable(r, safemode_clicked, NULL);
-    r = md_row_create(body, MD_ICON_RESTORE, "Restart into recovery", "Reinstall, clear settings, save logs");
+    r = md_row_create(body, MD_ICON_RESTORE, "Restart into recovery",
+                      "Reinstall the system, reset settings, save logs");
     md_row_set_clickable(r, recovery_clicked, NULL);
     sa_set_refresh(&s_nav, upd_refresh, p, free);
 }
 
 /* ---- Developer ---------------------------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *sw, *addr, *stats, *clients;
+    lv_obj_t *sw, *addr, *stats, *clients, *forget;
     int shown;
 } dev_page_t;
 
@@ -945,7 +1083,7 @@ static void dev_forget_answer(int b, void *ud)
 static void forget_clicked(lv_event_t *e)
 {
     (void)e;
-    md_dialog_show("Forget paired computers?", "They will need to pair again to push or launch apps.", "Forget",
+    md_dialog_show("Forget all paired computers?", "They'll need to pair again to send or launch apps.", "Forget",
                    "Cancel", dev_forget_answer, NULL);
 }
 
@@ -959,11 +1097,11 @@ static void dev_refresh(sa_nav_t *nav, void *arg)
     t5_net_status_t n;
     t5_net_status(&n);
     char buf[160];
-    if (!st.enabled) snprintf(buf, sizeof buf, "Off: nothing listens on the network");
-    else if (n.state != T5_NET_CONNECTED) snprintf(buf, sizeof buf, "Waiting for Wi-Fi (port %u)", st.port);
-    else snprintf(buf, sizeof buf, "t5 pair %u.%u.%u.%u", n.ip[0], n.ip[1], n.ip[2], n.ip[3]);
+    if (!st.enabled) snprintf(buf, sizeof buf, "Turn on developer mode first");
+    else if (n.state != T5_NET_CONNECTED) snprintf(buf, sizeof buf, "Connect to Wi-Fi first");
+    else snprintf(buf, sizeof buf, "On the computer, run:\nt5 pair %u.%u.%u.%u", n.ip[0], n.ip[1], n.ip[2], n.ip[3]);
     md_row_set_secondary(p->addr, buf);
-    snprintf(buf, sizeof buf, "%u requests, %u refused since boot", (unsigned)st.requests, (unsigned)st.denied);
+    snprintf(buf, sizeof buf, "%u requests since startup, %u refused", (unsigned)st.requests, (unsigned)st.denied);
     md_row_set_secondary(p->stats, buf);
     if (st.clients == p->shown) return;
     p->shown = st.clients;
@@ -971,7 +1109,8 @@ static void dev_refresh(sa_nav_t *nav, void *arg)
     char names[T5_DEV_MAX_CLIENTS][T5_DEV_NAME_LEN];
     int k = t5_dev_clients(names, T5_DEV_MAX_CLIENTS);
     for (int i = 0; i < k; i++) md_row_create(p->clients, MD_ICON_DEVELOPER_BOARD, names[i], NULL);
-    if (!k) sa_note(p->clients, "No computer is paired. Run `t5 pair <address>` and type the code shown here.");
+    if (!k) sa_note(p->clients, "None yet.");
+    set_hidden(p->forget, k == 0);
 }
 
 static void page_developer(void)
@@ -982,22 +1121,20 @@ static void page_developer(void)
     p->shown = -1;
     p->sw = switch_row(body, MD_ICON_CODE, "Developer mode", "A paired computer can push, launch and watch apps",
                        t5_dev_enabled(), devmode_toggle);
-    p->addr = md_row_create(body, MD_ICON_WIFI, "Address", " ");
+    p->addr = md_row_create(body, MD_ICON_WIFI, "Pair a computer", " ");
     p->stats = md_row_create(body, MD_ICON_SECURITY, "Activity", " ");
     md_section_create(body, "Paired computers");
-    p->clients = lv_obj_create(body);
-    lv_obj_remove_style_all(p->clients);
-    lv_obj_set_size(p->clients, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(p->clients, LV_FLEX_FLOW_COLUMN);
-    lv_obj_t *row = sa_button_row(body);
-    lv_obj_t *b = md_button_create(row, "Forget all", MD_BUTTON_TEXT);
+    p->clients = row_list(body);
+    p->forget = sa_button_row(body);
+    lv_obj_t *b = md_button_create(p->forget, "Forget all", MD_BUTTON_TEXT);
     lv_obj_add_event_cb(b, forget_clicked, LV_EVENT_CLICKED, NULL);
+    md_section_create(body, "Tools");
+    switch_row(body, MD_ICON_DASHBOARD, "Frame counters", "Frame rate and render time on screen", false, stats_toggle);
     char note[224];
     snprintf(note, sizeof note,
-             "Developer mode listens on port %d only while it is on, and every request but pairing needs a "
-             "token from a computer you paired here. The USB-C console is separate and always on.", T5_DEV_PORT);
+             "Developer mode listens on port %d only while it's on. Apart from pairing, every request needs a "
+             "computer paired here. The USB-C console is separate and always on.", T5_DEV_PORT);
     sa_note(body, note);
-    switch_row(body, MD_ICON_DASHBOARD, "Frame counters", "Frame rate and render time on screen", false, stats_toggle);
     sa_set_refresh(&s_nav, dev_refresh, p, free);
 }
 
@@ -1022,8 +1159,8 @@ static void page_licences(lv_event_t *e)
         { "mbedTLS", "Apache License 2.0" },
     };
     for (size_t i = 0; i < sizeof l / sizeof l[0]; i++) md_row_create(body, NULL, l[i].what, l[i].lic);
-    sa_note(body, "The full licence texts are in the source tree (LICENSE and firmware/components/md/assets/LICENSES). "
-                  "Material-inspired: Tab5 OS follows the Material Design 2 guidelines and is not a Google product.");
+    sa_note(body, "The full licence texts are in the source code, in LICENSE and firmware/components/md/assets/"
+                  "LICENSES. Tab5 OS follows the Material Design 2 guidelines and is not a Google product.");
 }
 
 static void page_about(void)
@@ -1036,15 +1173,15 @@ static void page_about(void)
     uint32_t flash = 0;
     esp_flash_get_size(NULL, &flash);
     md_row_create(body, MD_ICON_DEVELOPER_BOARD, "M5Stack Tab5", "ESP32-P4 with an ESP32-C6 radio");
-    snprintf(buf, sizeof buf, "%s (API level %d), ESP-IDF %s", d->version, T5_API_LEVEL, d->idf_ver);
+    snprintf(buf, sizeof buf, "Version %s, app API level %d, ESP-IDF %s", d->version, T5_API_LEVEL, d->idf_ver);
     md_row_create(body, MD_ICON_INFO, "Tab5 OS", buf);
-    snprintf(buf, sizeof buf, "ESP32-P4 v%d.%d, %d cores · %u MB PSRAM · %u MB flash", ci.revision / 100,
+    snprintf(buf, sizeof buf, "ESP32-P4 v%d.%d, %d cores, %u MB PSRAM, %u MB flash", ci.revision / 100,
              ci.revision % 100, ci.cores, (unsigned)(esp_psram_get_size() >> 20), (unsigned)(flash >> 20));
     md_row_create(body, MD_ICON_MEMORY, "Chip", buf);
-    snprintf(buf, sizeof buf, "%s, %d x %d at %d px per dp", t5_bsp_panel_name(t5_bsp_panel()->panel), T5_PANEL_NATIVE_W,
-             T5_PANEL_NATIVE_H, MD_PX_PER_DP);
+    snprintf(buf, sizeof buf, "%s, %d by %d pixels", t5_bsp_panel_name(t5_bsp_panel()->panel), T5_PANEL_NATIVE_W,
+             T5_PANEL_NATIVE_H);
     md_row_create(body, MD_ICON_IMAGE, "Display", buf);
-    lv_obj_t *r = md_row_create(body, MD_ICON_INFO, "Licences", "Open-source components in this image");
+    lv_obj_t *r = md_row_create(body, MD_ICON_CODE, "Licences", "Open-source software in Tab5 OS");
     md_row_set_clickable(r, page_licences, NULL);
 }
 
@@ -1056,12 +1193,12 @@ typedef struct {
 
 static const section_t s_sections[] = {
     { T5_SETTINGS_PAGE_WIFI, MD_ICON_WIFI, "Wi-Fi", "Networks and connection", page_wifi },
-    { T5_SETTINGS_PAGE_BLE, MD_ICON_BLUETOOTH, "Bluetooth", "Bluetooth LE devices", page_ble },
-    { T5_SETTINGS_PAGE_DISPLAY, MD_ICON_BRIGHTNESS_6, "Display", "Brightness, rotation, accent, timeout", page_display },
+    { T5_SETTINGS_PAGE_BLE, MD_ICON_BLUETOOTH, "Bluetooth", "Bluetooth LE devices nearby", page_ble },
+    { T5_SETTINGS_PAGE_DISPLAY, MD_ICON_BRIGHTNESS_6, "Display", "Brightness, rotation, colour, sleep", page_display },
     { T5_SETTINGS_PAGE_SOUND, MD_ICON_VOLUME_UP, "Sound", "Volume, system sounds, microphones", page_sound },
     { T5_SETTINGS_PAGE_POWER, MD_ICON_BATTERY_FULL, "Power", "Battery saver, charging", page_power },
-    { T5_SETTINGS_PAGE_TIME, MD_ICON_ACCESS_TIME, "Date and time", "Time zone, network time", page_time },
-    { T5_SETTINGS_PAGE_USB, MD_ICON_USB, "USB", "USB-A devices, USB-C mode", page_usb },
+    { T5_SETTINGS_PAGE_TIME, MD_ICON_ACCESS_TIME, "Date and time", "Time zone, setting the clock", page_time },
+    { T5_SETTINGS_PAGE_USB, MD_ICON_USB, "USB", "USB-A devices, sharing the SD card", page_usb },
     { T5_SETTINGS_PAGE_UPDATES, MD_ICON_SYSTEM_UPDATE, "Updates", "System updates, safe mode, recovery", page_updates },
     { T5_SETTINGS_PAGE_DEVELOPER, MD_ICON_CODE, "Developer mode", "Push and run apps from a computer", page_developer },
     { T5_SETTINGS_PAGE_ABOUT, MD_ICON_INFO, "About", "Device, versions, licences", page_about },

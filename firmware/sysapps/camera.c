@@ -34,6 +34,9 @@ typedef struct {
 
 static cam_app_t s;
 static sa_nav_t s_nav;            /* gallery pages */
+static char s_last_photo[96];     /* for the snackbar's View */
+
+static void photo_closed(void);
 
 static void make_dcim(void)
 {
@@ -54,14 +57,33 @@ typedef struct {
     t5_err_t err;
 } shot_t;
 
+static void cam_stop(void);
+
+/* The snackbar's View: the viewer replaces the preview until it's closed
+ * (photo_closed starts the camera again). */
+static void view_last(void *arg)
+{
+    (void)arg;
+    if (!t5_app_running(s.app) || !s_last_photo[0] || sa_photo_is_open() || s.busy) return;
+    if (s.cam && t5_camera_recording(s.cam)) return;
+    cam_stop();
+    if (!sa_photo_open(s.scr, s_last_photo, photo_closed)) photo_closed();
+}
+
 static void shot_done(void *p)
 {
     shot_t *sh = p;
     s.busy = false;
-    char msg[128];
-    if (sh->err == T5_OK) snprintf(msg, sizeof msg, "Saved %s", sh->path + strlen(T5_SD_PATH) + 1);
-    else snprintf(msg, sizeof msg, "Photo failed: %s", t5_err_str(sh->err));
-    if (t5_app_running(s.app)) md_snackbar_show(msg, NULL, NULL, NULL);
+    if (t5_app_running(s.app)) {
+        if (sh->err == T5_OK) {
+            snprintf(s_last_photo, sizeof s_last_photo, "%s", sh->path);
+            md_snackbar_show("Photo saved", "View", view_last, NULL);
+        } else {
+            char msg[96];
+            snprintf(msg, sizeof msg, "Couldn't take the photo (%s)", t5_err_str(sh->err));
+            md_snackbar_show(msg, NULL, NULL, NULL);
+        }
+    }
     free(sh);
 }
 
@@ -187,17 +209,21 @@ static void tick(lv_timer_t *t)
     t5_camera_stats_t st;
     t5_camera_stats(&st);
     char buf[96];
+    /* The pill only speaks when there is something to say: a recording's
+     * running time, or why there is no picture. A live preview needs no
+     * caption (the frame rate was a bench readout). */
     if (st.recording) {
-        char d[24];
-        sa_fmt_duration(d, sizeof d, st.rec_ms / 1000);
-        snprintf(buf, sizeof buf, "REC %s · %u frames%s", d, (unsigned)st.rec_frames,
-                 st.rec_dropped ? " · dropping" : "");
+        uint32_t sec = st.rec_ms / 1000;
+        snprintf(buf, sizeof buf, "Recording %u:%02u%s", (unsigned)(sec / 60), (unsigned)(sec % 60),
+                 st.rec_dropped ? ", dropping frames" : "");
     } else if (st.open) {
-        snprintf(buf, sizeof buf, "%u fps", (unsigned)st.preview_fps);
+        buf[0] = 0;
     } else {
-        snprintf(buf, sizeof buf, "%s", s.granted ? "Camera off" : "Needs the camera permission");
+        snprintf(buf, sizeof buf, "%s", s.granted ? "Camera off" : "Allow the camera in Settings to use it");
     }
     sa_set_text(s.status, buf);
+    lv_obj_set_hidden(s.status, !buf[0]);
+    lv_obj_set_style_text_color(s.status, st.recording ? md_color(md_accent(MD_ACCENT_RED)->dark) : lv_color_white(), 0);
 }
 
 static void cam_stop(void);
@@ -215,17 +241,32 @@ static int cmp_desc(const void *a, const void *b)
     return -strcmp(a, b);
 }
 
+/* "IMG_20261109_224301.jpg" -> "9 Nov 2026, 22:43". False if the name
+ * isn't one of ours. */
+static bool pretty_stamp(const char *name, char *out, size_t n)
+{
+    static const char *const mon[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    unsigned y, mo, d, h, mi, se;
+    char pre[4];
+    if (sscanf(name, "%3[A-Z]_%4u%2u%2u_%2u%2u%2u", pre, &y, &mo, &d, &h, &mi, &se) != 7) return false;
+    if (mo < 1 || mo > 12) return false;
+    snprintf(out, n, "%u %s %u, %02u:%02u", d, mon[mo - 1], y, h, mi);
+    return true;
+}
+
 static void gal_bind(md_list_row_t *r, uint32_t i, void *ud)
 {
     gallery_t *g = ud;
     if ((int)i >= g->n) return;
-    lv_label_set_text(r->primary, g->names[i]);
+    char when[40];
+    lv_label_set_text(r->primary, pretty_stamp(g->names[i], when, sizeof when) ? when : g->names[i]);
     bool video = strstr(g->names[i], ".h264") != NULL;
     lv_label_set_text(r->icon, video ? MD_ICON_VIDEOCAM : MD_ICON_IMAGE);
     if (r->secondary) {
         char b[24];
         sa_fmt_bytes(b, sizeof b, g->sizes[i]);
-        lv_label_set_text_fmt(r->secondary, "%s%s", b, video ? " · H.264 (play it on a computer)" : "");
+        lv_label_set_text_fmt(r->secondary, video ? "Video, %s. Plays on a computer (H.264)" : "Photo, %s", b);
     }
 }
 
@@ -275,7 +316,13 @@ static void open_gallery(lv_event_t *e)
     g->list = md_list_create(body, (uint32_t)g->n, MD_LIST_ROW_2_DP, gal_bind, gal_click, g);
     lv_obj_set_width(g->list, LV_PCT(100));
     lv_obj_set_flex_grow(g->list, 1);
-    if (!g->n) sa_note(body, "No photos or videos yet.");
+    if (!g->n) {
+        /* An empty list would push the note to the bottom: drop the list. */
+        lv_obj_set_hidden(g->list, true);
+        sa_note(body, t5_storage_sd_state() == T5_SD_MOUNTED
+                          ? "No photos or videos yet. What you take is saved to the DCIM folder on the SD card."
+                          : "Insert an SD card. Photos and videos are saved to it.");
+    }
     sa_set_refresh(&s_nav, NULL, g, free);
 }
 
@@ -286,7 +333,7 @@ static void cam_start(void)
     t5_err_t e = s.video_mode ? t5_camera_open(&s.cam) : t5_camera_open_photo(&s.cam);
     if (e != T5_OK) {
         char msg[64];
-        snprintf(msg, sizeof msg, "Camera: %s", t5_err_str(e));
+        snprintf(msg, sizeof msg, "Couldn't open the camera (%s)", t5_err_str(e));
         md_snackbar_show(msg, NULL, NULL, NULL);
         return;
     }
@@ -382,7 +429,8 @@ static void on_rotate(t5_app_t *app, int degrees)
     }
 }
 
-/* A photo opened by another app (a launch argument) was closed. */
+/* A photo opened by another app (a launch argument), or from the
+ * snackbar, was closed. */
 static void photo_closed(void)
 {
     if (!s.destroying && s_nav.depth == 0) cam_start();
@@ -417,10 +465,14 @@ static void on_create(t5_app_t *app)
     lv_obj_set_style_text_color(s.status, lv_color_white(), 0);
     lv_obj_set_style_bg_color(s.status, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s.status, LV_OPA_50, 0);
-    lv_obj_set_style_radius(s.status, T5_DP(10), 0);
-    lv_obj_set_style_pad_hor(s.status, T5_DP(8), 0);
-    lv_obj_set_style_pad_ver(s.status, T5_DP(2), 0);
-    lv_obj_align(s.status, LV_ALIGN_BOTTOM_MID, 0, -T5_DP(12));
+    lv_obj_set_style_radius(s.status, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(s.status, T5_DP(12), 0);
+    lv_obj_set_style_pad_ver(s.status, T5_DP(4), 0);
+    /* On the button row's centre line (12 dp + half of 44 dp, less half the
+     * pill's 28 dp), clear of the picture's bottom edge however the preview
+     * is letterboxed. */
+    lv_obj_align(s.status, LV_ALIGN_TOP_MID, 0, T5_DP(20));
+    lv_obj_set_hidden(s.status, true);
 
     s.bar = lv_obj_create(s.view);
     lv_obj_remove_style_all(s.bar);

@@ -4,5 +4,6 @@ version = "1.0.0"
 api = 1
 runtime = "native"
 entry = "app.elf"
+icon = "icon.png"
 orientation = "any"
 description = "MD2 components, raw LVGL, a custom widget class and canvas drawing, with the shell's bars"

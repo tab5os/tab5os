@@ -211,8 +211,10 @@ static void update_app(void)
     shell_set_text(s.a_icon, c.icon[0] ? c.icon : MD_ICON_INFO);
     char title[96];
     bool same = !strcasecmp(c.title, c.who);       /* "Weather" from Weather: once */
-    snprintf(title, sizeof title, "%s%s%s", c.title, c.title[0] && c.who[0] && !same ? " · " : "",
-             same ? "" : c.who);
+    /* "Logger: Greenhouse", or just "Weather" when the card is titled
+     * after its app. */
+    if (!same && c.who[0] && c.title[0]) snprintf(title, sizeof title, "%s: %s", c.who, c.title);
+    else snprintf(title, sizeof title, "%s", c.title[0] ? c.title : c.who);
     shell_set_text(s.a_title, title);
     shell_set_text(s.a_value, c.value);
     shell_set_text(s.a_detail, c.detail);

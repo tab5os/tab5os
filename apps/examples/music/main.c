@@ -1007,7 +1007,7 @@ static void open_playlist(const char *path)
     int n = 0, missing = 0;
     int *t = lib_playlist_tracks(ui.lib, path, &n, &missing);
     if (!t) {
-        toast("Can't read that playlist");
+        toast("Couldn't read that playlist");
         return;
     }
     const char *name = path;
@@ -1043,7 +1043,7 @@ static bool write_playlist(const char *path, const int *t, int n, const char *ok
         if (ok_msg) toast(ok_msg);
         return true;
     }
-    toast("Can't save the playlist: the SD card may be full or read-only");
+    toast("Couldn't save the playlist. The SD card may be full or read-only.");
     return false;
 }
 
@@ -1161,14 +1161,14 @@ static void do_name(void *arg)
     if (np->old[0]) {
         mkdir(PLAYLIST_DIR, 0775);
         if (rename(np->old, path) != 0) {
-            toast("Can't rename the playlist");
+            toast("Couldn't rename the playlist");
             return;
         }
         if (ui.detail && !strcmp(ui.detail->pl_path, np->old)) lv_obj_delete(ui.detail->page);
         toast("Playlist renamed");
     } else {
         int t = np->add_track;
-        write_playlist(path, &t, t >= 0 ? 1 : 0, t >= 0 ? "Playlist made, with the song in it" : "Playlist made");
+        write_playlist(path, &t, t >= 0 ? 1 : 0, t >= 0 ? "Playlist made with the song in it" : "Playlist made");
     }
     playlists_changed();
     lv_obj_delete(np->page);
@@ -1211,7 +1211,7 @@ static void do_delete(void *arg)
         playlists_changed();
         toast("Playlist deleted");
     } else {
-        toast("Can't delete the playlist");
+        toast("Couldn't delete the playlist");
     }
     free(j);
 }
@@ -1885,7 +1885,7 @@ static void on_create(t5_app_t *app)
     ui.app = app;
     snprintf(ui.data, sizeof ui.data, "%s", t5_app_data_dir(app));
     art_start();
-    if (!player_start(app)) toast("Can't start the player");
+    if (!player_start(app)) toast("Couldn't start the player");
     load_state();
 
     lv_obj_t *scr = t5_app_screen(app);

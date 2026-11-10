@@ -1,6 +1,6 @@
 /* UVC Monitor (plan 7.9): shows a USB capture dongle or webcam on the
  * screen. Plug it into USB-A (a hub works too); the picture appears full
- * screen. Tap to show or hide the info line.
+ * screen. Tap it to show or hide the stream details.
  *
  * Frames arrive as MJPEG on the USB driver's task. The newest one is copied
  * (older ones are dropped while a decode runs), a worker task decodes it
@@ -26,7 +26,7 @@ void lv_image_cache_drop(const void *src);
 typedef struct {
     t5_app_t *app;
     t5_usb_uvc_t *uvc;
-    lv_obj_t *img, *info, *hint;
+    lv_obj_t *img, *info, *empty, *hint;
     lv_image_dsc_t dsc[2];
     uint16_t *px[2];
     int shown;
@@ -97,10 +97,11 @@ static void tick(lv_timer_t *t)
     s->last_frames = s->decoded;
     if (!s->uvc && t5_usb_uvc_present()) {
         t5_err_t e = t5_usb_uvc_open(W, H, 30, frame_cb, s, &s->uvc);
-        if (e != T5_OK) lv_label_set_text_fmt(s->hint, "Couldn't start the camera: %s", t5_err_str(e));
+        if (e != T5_OK) lv_label_set_text_fmt(s->hint, "Couldn't start the camera (%s). Unplug it and try again.",
+                                              t5_err_str(e));
     }
-    lv_obj_set_hidden(s->hint, s->uvc != NULL);
-    lv_label_set_text_fmt(s->info, "%ux%u · %u fps shown · %u received · %u dropped · %u errors", s->src_w, s->src_h,
+    lv_obj_set_hidden(s->empty, s->uvc != NULL);
+    lv_label_set_text_fmt(s->info, "%ux%u at %u fps\n%u frames received, %u dropped, %u errors", s->src_w, s->src_h,
                           (unsigned)s->fps, (unsigned)s->frames, (unsigned)s->dropped, (unsigned)s->errors);
 }
 
@@ -111,7 +112,7 @@ static void toggle_info(lv_event_t *e)
 
 static void perm_answer(t5_app_t *app, uint32_t perm, bool granted, void *user)
 {
-    if (!granted) lv_label_set_text(m->hint, "UVC Monitor needs the camera permission (App Manager).");
+    if (!granted) lv_label_set_text(m->hint, "UVC Monitor needs camera access. Allow it in App Manager.");
 }
 
 static void on_create(t5_app_t *app)
@@ -141,15 +142,31 @@ static void on_create(t5_app_t *app)
     lv_image_set_src(m->img, &m->dsc[0]);
     lv_obj_set_clickable(m->img, true);
     lv_obj_add_event_cb(m->img, toggle_info, LV_EVENT_CLICKED, NULL);
-    m->hint = md_label_create(scr, "Plug a UVC camera or capture dongle into USB-A.", MD_TYPE_HEADLINE6);
+    /* Until a camera streams: an icon and one line saying what to plug in. */
+    m->empty = lv_obj_create(scr);
+    lv_obj_remove_style_all(m->empty);
+    lv_obj_set_size(m->empty, LV_PCT(80), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(m->empty, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(m->empty, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(m->empty, T5_DP(16), 0);
+    lv_obj_center(m->empty);
+    lv_obj_t *ic = md_icon_create(m->empty, MD_ICON_VIDEOCAM, 40);
+    lv_obj_set_style_text_color(ic, lv_color_white(), 0);
+    lv_obj_set_style_text_opa(ic, LV_OPA_60, 0);
+    m->hint = md_label_create(m->empty, "Plug a USB camera or HDMI capture dongle into the USB-A port.",
+                              MD_TYPE_SUBTITLE1);
+    lv_obj_set_width(m->hint, LV_PCT(100));
+    lv_label_set_long_mode(m->hint, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_align(m->hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(m->hint, lv_color_white(), 0);
-    lv_obj_center(m->hint);
     m->info = md_label_create(scr, "", MD_TYPE_CAPTION);
     lv_obj_set_style_text_color(m->info, lv_color_white(), 0);
     lv_obj_set_style_bg_color(m->info, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(m->info, LV_OPA_60, 0);
     lv_obj_set_style_pad_all(m->info, T5_DP(8), 0);
-    lv_obj_align(m->info, LV_ALIGN_BOTTOM_LEFT, T5_DP(8), -T5_DP(8));
+    lv_obj_set_style_radius(m->info, T5_DP(MD_SHAPE_SMALL_DP), 0);
+    lv_obj_align(m->info, LV_ALIGN_BOTTOM_LEFT, T5_DP(16), -T5_DP(16));
+    lv_obj_set_hidden(m->info, true);     /* a tap on the picture shows it */
     m->timer = lv_timer_create(tick, 1000, m);
     if (!t5_app_has_permission(app, T5_PERM_CAMERA) &&
         t5_app_request_permission(app, T5_PERM_CAMERA, perm_answer, NULL) != T5_OK) {

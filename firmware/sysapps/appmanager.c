@@ -10,6 +10,7 @@
 #include <time.h>
 #include "t5/system.h"
 #include "t5_pkg/manifest.h"
+#include "t5_shell/app_icon.h"
 #include "t5_storage/paths.h"
 #include "sysapps_priv.h"
 
@@ -32,6 +33,16 @@ static void grant_changed(lv_event_t *e)
     sa_report(t5_apps_set_grant(p->id, perm, on), "change the permission");
 }
 
+/* An installed app's own icon in place of a row's glyph: 40 dp, the
+ * width of the glyph's slot, so the names still line up. */
+static void app_row_icon(lv_obj_t *row, const t5_app_entry_t *a)
+{
+    lv_obj_t *img = row && !a->builtin ? t5_shell_app_icon_create(row, a->id, T5_DP(40)) : NULL;
+    if (!img) return;
+    lv_obj_set_hidden(lv_obj_get_child(row, 0), true);
+    lv_obj_move_to_index(img, 0);
+}
+
 static void open_clicked(lv_event_t *e)
 {
     app_page_t *p = lv_event_get_user_data(e);
@@ -41,13 +52,18 @@ static void open_clicked(lv_event_t *e)
 static void crash_reset_clicked(lv_event_t *e)
 {
     app_page_t *p = lv_event_get_user_data(e);
-    sa_report(t5_apps_crash_reset(p->id), "reset its crash count");
-    md_snackbar_show("Crash record cleared. It can open on its own again.", NULL, NULL, NULL);
-    if (p->crash_row) md_row_set_secondary(p->crash_row, "None");
+    t5_err_t err = t5_apps_crash_reset(p->id);
+    if (err != T5_OK) {
+        sa_report(err, "clear the crash record");
+        return;
+    }
+    md_snackbar_show("Crash record cleared", NULL, NULL, NULL);
+    if (p->crash_row) md_row_set_secondary(p->crash_row, "No crashes since it was cleared");
 }
 
 typedef struct {
     char id[64];
+    char name[T5_APP_NAME_LEN];
     bool keep;
 } remove_t;
 
@@ -56,8 +72,11 @@ static void remove_answer(int b, void *ud)
     remove_t *r = ud;
     if (b == 0) {
         t5_err_t e = t5_apps_remove(r->id, r->keep);
-        md_snackbar_show(e == T5_OK ? "Removed" : e == T5_ERR_BUSY ? "Close the app first" : "Couldn't remove it", NULL,
-                         NULL, NULL);
+        char msg[96];
+        if (e == T5_OK) snprintf(msg, sizeof msg, "%s removed", r->name);
+        else if (e == T5_ERR_BUSY) snprintf(msg, sizeof msg, "Couldn't remove %s: close it first", r->name);
+        else snprintf(msg, sizeof msg, "Couldn't remove %s (%s)", r->name, t5_err_str(e));
+        md_snackbar_show(msg, NULL, NULL, NULL);
         if (e == T5_OK) sa_pop(&s_nav);
     }
     free(r);
@@ -69,11 +88,12 @@ static void remove_clicked(lv_event_t *e)
     remove_t *r = calloc(1, sizeof *r);
     if (!r) return;
     snprintf(r->id, sizeof r->id, "%s", p->id);
+    snprintf(r->name, sizeof r->name, "%s", p->info.entry.name[0] ? p->info.entry.name : p->id);
     r->keep = true;
     char title[96];
     snprintf(title, sizeof title, "Remove %s?", p->info.entry.name);
-    md_dialog_show(title, "Its data in " T5_APPDATA_DIR " stays, so a reinstall picks up where it left off.", "Remove",
-                   "Cancel", remove_answer, r);
+    md_dialog_show(title, "Its saved data stays on the Tab5, so installing it again picks up where you left off.",
+                   "Remove", "Cancel", remove_answer, r);
 }
 
 static const char *crash_kind(uint8_t k)
@@ -88,14 +108,16 @@ static void open_app(const char *id)
     snprintf(p->id, sizeof p->id, "%s", id);
     if (t5_apps_info(id, &p->info) != T5_OK) {
         free(p);
-        md_snackbar_show("No such app", NULL, NULL, NULL);
+        md_snackbar_show("That app isn't installed any more", NULL, NULL, NULL);
         return;
     }
     const t5_app_info_t *in = &p->info;
     lv_obj_t *body = sa_push(&s_nav, in->entry.name[0] ? in->entry.name : id);
     char buf[256], a[24], b[24];
-    snprintf(buf, sizeof buf, "%s · %s · %s", id, in->entry.version, in->runtime);
-    md_row_create(body, in->entry.icon[0] ? in->entry.icon : MD_ICON_EXTENSION, in->entry.name, buf);
+    if (in->entry.builtin) snprintf(buf, sizeof buf, "Part of Tab5 OS");
+    else snprintf(buf, sizeof buf, "Version %s", in->entry.version);
+    app_row_icon(md_row_create(body, in->entry.icon[0] ? in->entry.icon : MD_ICON_EXTENSION, in->entry.name, buf),
+                 &in->entry);
     lv_obj_t *row = sa_button_row(body);
     lv_obj_t *bt = md_button_create(row, "Open", MD_BUTTON_CONTAINED);
     lv_obj_add_event_cb(bt, open_clicked, LV_EVENT_CLICKED, p);
@@ -107,27 +129,26 @@ static void open_app(const char *id)
     md_section_create(body, "Storage");
     if (!in->entry.builtin) {
         sa_fmt_bytes(a, sizeof a, in->install_bytes);
-        snprintf(buf, sizeof buf, "%s on %s · %s", a, in->on_sd ? "the SD card" : "internal flash", in->install_dir);
+        snprintf(buf, sizeof buf, "%s on %s", a, in->on_sd ? "the SD card" : "internal storage");
         md_row_create(body, in->on_sd ? MD_ICON_SD_STORAGE : MD_ICON_STORAGE, "App", buf);
     }
     sa_fmt_bytes(b, sizeof b, in->data_bytes);
-    snprintf(buf, sizeof buf, "%s · %s", b, in->data_dir);
-    md_row_create(body, MD_ICON_FOLDER, "Data", buf);
+    md_row_create(body, MD_ICON_FOLDER, "Saved data", in->data_bytes ? b : "Nothing saved yet");
 
     md_section_create(body, "Permissions");
     uint32_t perms = in->entry.perms;
-    if (!perms) sa_note(body, "None.");
+    if (!perms) sa_note(body, "This app doesn't ask for any permissions.");
     for (uint32_t bit = 1; bit & T5_PERM_ALL; bit <<= 1) {
         if (!(perms & bit)) continue;
         const char *name = t5_perm_label(bit);
         if ((bit & t5_perm_prompted()) && !in->entry.builtin) {
-            const char *state = (in->granted & bit) ? "Allowed" : (in->denied & bit) ? "Not allowed" : "Asks first";
+            const char *state = (in->granted & bit) ? "Allowed" : (in->denied & bit) ? "Not allowed" : "Asks the first time";
             lv_obj_t *r = md_row_create(body, bit == T5_PERM_CAMERA ? MD_ICON_CAMERA_ALT : bit == T5_PERM_MIC ? MD_ICON_MIC : MD_ICON_FOLDER,
                                        name, state);
             lv_obj_t *sw = md_row_switch(r, (in->granted & bit) != 0);
             lv_obj_add_event_cb(sw, grant_changed, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)bit);
         } else {
-            md_row_create(body, MD_ICON_CHECK, name, "Granted at install");
+            md_row_create(body, MD_ICON_CHECK, name, in->entry.builtin ? NULL : "Allowed when installed");
         }
     }
     if (!in->entry.builtin) sa_note(body, T5_NATIVE_APP_WARNING);
@@ -135,39 +156,55 @@ static void open_app(const char *id)
     md_section_create(body, "Power");
     t5_energy_rec_t rec[T5_ENERGY_MAX];
     int n = t5_apps_energy(rec, T5_ENERGY_MAX);
-    snprintf(buf, sizeof buf, "No measurement yet (on battery only)");
+    snprintf(buf, sizeof buf, "Not measured yet. Use it on battery to get a reading.");
     for (int i = 0; i < n; i++) {
         if (!strcmp(rec[i].id, id) && t5_energy_avg_mw(&rec[i]) >= 0) {
             sa_fmt_duration(a, sizeof a, rec[i].ms / 1000);
-            snprintf(buf, sizeof buf, "%d mW average over %s in front", (int)t5_energy_avg_mw(&rec[i]), a);
+            snprintf(buf, sizeof buf, "%d mW on average, over %s of use", (int)t5_energy_avg_mw(&rec[i]), a);
         }
     }
     md_row_create(body, MD_ICON_BOLT, "Average draw", buf);
 
     md_section_create(body, "Crashes");
     if (in->crashes_total) {
-        char when[32] = "unknown time";
+        char when[32] = "";
         if (in->last_crash_time > 0) {
             time_t t = (time_t)in->last_crash_time;
             struct tm tm;
             localtime_r(&t, &tm);
-            strftime(when, sizeof when, "%d %b %H:%M", &tm);
+            strftime(when, sizeof when, ", %d %b at %H:%M", &tm);
         }
-        snprintf(buf, sizeof buf, "%u in all, %u in a row; last: %s, %s%s", in->crashes_total, in->entry.crashes,
-                 crash_kind(in->last_crash_kind), when, in->entry.autolaunch_blocked ? " · won't open on its own" : "");
-        p->crash_row = md_row_create(body, MD_ICON_WARNING, "Crash record", buf);
+        snprintf(buf, sizeof buf, "Last: %s%s", crash_kind(in->last_crash_kind), when);
+        char title[48];
+        if (in->crashes_total == 1) snprintf(title, sizeof title, "Crashed once");
+        else snprintf(title, sizeof title, "Crashed %u times", in->crashes_total);
+        p->crash_row = md_row_create(body, MD_ICON_WARNING, title, buf);
+        if (in->entry.autolaunch_blocked)
+            sa_note(body, "It crashed several times in a row, so it won't start on its own (alarms, "
+                          "background work) until you clear the record.");
         if (in->has_dump) {
             struct stat st;
             sa_fmt_bytes(a, sizeof a, stat(in->dump_path, &st) == 0 ? (uint64_t)st.st_size : 0);
-            snprintf(buf, sizeof buf, "%s, %s (an ELF core: idf.py coredump-info)", in->dump_path, a);
+            snprintf(buf, sizeof buf, "%s, %s", a, in->dump_path);
             md_row_create(body, MD_ICON_DOWNLOAD, "Core dump", buf);
+            sa_note(body, "Read it on a computer with idf.py coredump-info.");
         }
         row = sa_button_row(body);
         bt = md_button_create(row, "Clear crash record", MD_BUTTON_TEXT);
         lv_obj_add_event_cb(bt, crash_reset_clicked, LV_EVENT_CLICKED, p);
     } else {
-        sa_note(body, "None.");
+        sa_note(body, "No crashes.");
     }
+
+    /* Developer details last: useful for logs and the t5 tool, noise for most. */
+    md_section_create(body, "Details");
+    md_row_create(body, MD_ICON_INFO, "App ID", id);
+    if (!in->entry.builtin) {
+        bool py = !strcmp(in->runtime, "micropython");
+        md_row_create(body, MD_ICON_CODE, "Runtime", py ? "MicroPython" : "Native (C)");
+        md_row_create(body, MD_ICON_FOLDER_OPEN, "Installed in", in->install_dir);
+    }
+    md_row_create(body, MD_ICON_FOLDER_OPEN, "Data folder", in->data_dir);
     sa_set_refresh(&s_nav, NULL, p, free);
 }
 
@@ -179,6 +216,7 @@ static void crash_clicked(lv_event_t *e)
 
 typedef struct {
     t5_crash_rec_t rec[16];
+    t5_app_entry_t ents[T5_APPS_MAX];
 } crashes_t;
 
 static void open_crashes(lv_event_t *e)
@@ -188,15 +226,22 @@ static void open_crashes(lv_event_t *e)
     if (!c) return;
     lv_obj_t *body = sa_push(&s_nav, "Crash reports");
     int n = t5_apps_crashes(c->rec, 16);
-    char buf[96];
+    int ne = t5_apps_list(c->ents, T5_APPS_MAX);
+    char buf[128];
+    int shown = 0;
     for (int i = 0; i < n; i++) {
         if (!c->rec[i].total) continue;
-        snprintf(buf, sizeof buf, "%u crashes, last %s%s", c->rec[i].total, crash_kind(c->rec[i].last_kind),
-                 c->rec[i].has_dump ? " · core dump" : "");
-        lv_obj_t *r = md_row_create(body, MD_ICON_WARNING, c->rec[i].id, buf);
+        const char *name = c->rec[i].id;
+        for (int k = 0; k < ne; k++)
+            if (!strcmp(c->ents[k].id, c->rec[i].id) && c->ents[k].name[0]) name = c->ents[k].name;
+        const char *dump = c->rec[i].has_dump ? ", core dump saved" : "";
+        if (c->rec[i].total == 1) snprintf(buf, sizeof buf, "Once, %s%s", crash_kind(c->rec[i].last_kind), dump);
+        else snprintf(buf, sizeof buf, "%u times, last %s%s", c->rec[i].total, crash_kind(c->rec[i].last_kind), dump);
+        lv_obj_t *r = md_row_create(body, MD_ICON_WARNING, name, buf);
         md_row_set_clickable(r, crash_clicked, c->rec[i].id);
+        shown++;
     }
-    if (!n) sa_note(body, "No app has crashed.");
+    if (!shown) sa_note(body, "No app has crashed. Crashes and core dumps show up here.");
     sa_set_refresh(&s_nav, NULL, c, free);
 }
 
@@ -227,17 +272,22 @@ static void list_refresh(sa_nav_t *nav, void *arg)
     md_section_create(l->list, "Installed");
     int inst = 0;
     for (int pass = 0; pass < 2; pass++) {
-        if (pass == 1) md_section_create(l->list, "System");
+        if (pass == 1) md_section_create(l->list, "Built in");
         for (int i = 0; i < l->n; i++) {
             t5_app_entry_t *a = &l->e[i];
             if (a->builtin != (pass == 1)) continue;
             inst += pass == 0;
-            snprintf(buf, sizeof buf, "%s%s%s", a->builtin ? "Built in" : a->version, a->running ? " · running" : "",
-                     a->autolaunch_blocked ? " · crashed" : "");
-            lv_obj_t *r = md_row_create(l->list, a->icon[0] ? a->icon : MD_ICON_EXTENSION, a->name, buf);
+            /* System apps only get a second line when it says something. */
+            const char *state = a->autolaunch_blocked ? "Stopped after crashing" : a->running ? "Running" : NULL;
+            if (a->builtin) snprintf(buf, sizeof buf, "%s", state ? state : "");
+            else snprintf(buf, sizeof buf, "Version %s%s%s", a->version, state ? ", " : "",
+                          state ? (a->autolaunch_blocked ? "stopped after crashing" : "running") : "");
+            lv_obj_t *r = md_row_create(l->list, a->icon[0] ? a->icon : MD_ICON_EXTENSION, a->name,
+                                        buf[0] ? buf : NULL);
+            app_row_icon(r, a);
             md_row_set_clickable(r, app_clicked, a->id);
         }
-        if (pass == 0 && !inst) sa_note(l->list, "No apps installed. Tap a .t5app in Files to install one.");
+        if (pass == 0 && !inst) sa_note(l->list, "No apps installed yet. Open a .t5app file in Files to install one.");
     }
 }
 
@@ -245,7 +295,18 @@ static void on_create(t5_app_t *app)
 {
     sa_nav_init(&s_nav, app);
     lv_obj_t *body = sa_push(&s_nav, "App Manager");
-    lv_obj_t *r = md_row_create(body, MD_ICON_WARNING, "Crash reports", "Crashes and core dumps, every app");
+    t5_crash_rec_t *cr = calloc(16, sizeof *cr);
+    int crashed = 0;
+    if (cr) {
+        int n = t5_apps_crashes(cr, 16);
+        for (int i = 0; i < n; i++) crashed += cr[i].total > 0;
+        free(cr);
+    }
+    char sub[48];
+    if (crashed == 1) snprintf(sub, sizeof sub, "1 app has crashed");
+    else if (crashed) snprintf(sub, sizeof sub, "%d apps have crashed", crashed);
+    lv_obj_t *r = md_row_create(body, crashed ? MD_ICON_WARNING : MD_ICON_CHECK, "Crash reports",
+                                crashed ? sub : "No crashes");
     md_row_set_clickable(r, open_crashes, NULL);
     list_t *l = calloc(1, sizeof *l);
     if (!l) return;

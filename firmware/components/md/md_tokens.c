@@ -111,7 +111,10 @@ uint32_t md_contrast_x100(md_rgb_t a, md_rgb_t b)
     return (uint32_t)((la + 0.05) / (lb + 0.05) * 100.0 + 0.5);
 }
 
-/* MDC 14 typography: size/line in sp (= dp here), tracking in em. */
+/* MDC 14 typography: size/line in sp (= dp here), tracking in em.
+ * One deliberate departure: button and overline are sentence case with
+ * light tracking. All-caps labels read as shouting on a 5" panel and cost
+ * width that long translated labels need. */
 static const md_type_t s_type[MD_TYPE_COUNT] = {
     [MD_TYPE_HEADLINE4] = { "headline4", 34, 40, MD_WEIGHT_REGULAR, false, 7 },
     [MD_TYPE_HEADLINE5] = { "headline5", 24, 32, MD_WEIGHT_REGULAR, false, 0 },
@@ -119,9 +122,9 @@ static const md_type_t s_type[MD_TYPE_COUNT] = {
     [MD_TYPE_SUBTITLE1] = { "subtitle1", 16, 28, MD_WEIGHT_REGULAR, false, 9 },
     [MD_TYPE_BODY1]     = { "body1", 16, 24, MD_WEIGHT_REGULAR, false, 31 },
     [MD_TYPE_BODY2]     = { "body2", 14, 20, MD_WEIGHT_REGULAR, false, 18 },
-    [MD_TYPE_BUTTON]    = { "button", 14, 36, MD_WEIGHT_MEDIUM, true, 89 },
+    [MD_TYPE_BUTTON]    = { "button", 14, 36, MD_WEIGHT_MEDIUM, false, 18 },
     [MD_TYPE_CAPTION]   = { "caption", 12, 20, MD_WEIGHT_REGULAR, false, 33 },
-    [MD_TYPE_OVERLINE]  = { "overline", 12, 32, MD_WEIGHT_MEDIUM, true, 167 },
+    [MD_TYPE_OVERLINE]  = { "overline", 12, 32, MD_WEIGHT_MEDIUM, false, 42 },
 };
 
 const md_type_t *md_type(md_type_role_t r)

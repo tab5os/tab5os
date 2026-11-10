@@ -4,6 +4,7 @@ version = "2.0.0"
 api = 1
 runtime = "native"
 entry = "app.elf"
+icon = "icon.png"
 orientation = "any"
 description = "A music player for the SD card's music folder: MP3, FLAC and WAV, album art, albums, artists and M3U playlists"
 

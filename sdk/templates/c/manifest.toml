@@ -4,6 +4,7 @@ version = "1.0.0"
 api = 1
 runtime = "native"
 entry = "app.elf"
+# icon = "icon.png"   # a 112 x 112 px PNG; also add ICON icon.png to t5_app() in CMakeLists.txt
 orientation = "any"
 
 [permissions]

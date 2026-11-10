@@ -65,6 +65,11 @@ T5_MUST_CHECK t5_err_t t5_pkg_find(const char *id, t5_pkg_info_t *out);
 /* Fill up to max entries (SD first); returns how many were stored. */
 int t5_pkg_list(t5_pkg_info_t *out, int max);
 
+/* Goes up on every install, upgrade and removal. Anything cached from an
+ * install dir (the launcher's app icons) is stale once it has moved. Safe
+ * from any task. */
+uint32_t t5_pkg_generation(void);
+
 /* Finish or roll back interrupted installs/removals on both roots.
  * Returns the number of directories repaired or deleted. */
 int t5_pkg_recover(void);

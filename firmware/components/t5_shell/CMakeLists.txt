@@ -3,7 +3,7 @@
 # simulator builds them unchanged with sim/sim_shell_sys.c.
 include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS ${T5_SHELL_PORTABLE_SRCS} ${T5_SHELL_LVGL_SRCS} "shell_sys_idf.c" "accent.c" "activity.c" "ambient.c"
+    SRCS ${T5_SHELL_PORTABLE_SRCS} ${T5_SHELL_LVGL_SRCS} "shell_sys_idf.c" "app_icon.c" "accent.c" "activity.c" "ambient.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core md

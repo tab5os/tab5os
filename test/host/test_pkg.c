@@ -13,6 +13,7 @@
 #include "t5_pkg/inflate.h"
 #include "t5_pkg/manifest.h"
 #include "t5_pkg/pkg.h"
+#include "t5_pkg/png.h"
 #include "t5_pkg/toml.h"
 #include "t5_pkg/zip.h"
 #include "pkg_test.h"
@@ -892,9 +893,13 @@ static void test_remove(void)
 {
     t5_pkg_info_t info;
     char err[160];
+    uint32_t gen = t5_pkg_generation();
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_SD, &info, err, sizeof err));
+    TEST_ASSERT_NOT_EQUAL(gen, t5_pkg_generation());   /* the launcher's cached icons are stale */
+    gen = t5_pkg_generation();
     write_text(info.data_dir, "save.dat", "x");
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_remove("com.example.hello", true));
+    TEST_ASSERT_NOT_EQUAL(gen, t5_pkg_generation());
     TEST_ASSERT_FALSE(exists("%s%s", info.dir, ""));
     TEST_ASSERT_FALSE(exists("%s/%s~del", s_sd, "com.example.hello"));
     TEST_ASSERT_TRUE(exists("%s/%s", info.data_dir, "save.dat"));
@@ -1033,6 +1038,310 @@ static void test_grants(void)
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_pkg_grants_load("x", &g, &d));
 }
 
+/* ---- png (app icons) ------------------------------------------------------- */
+
+typedef struct {
+    uint8_t *p;
+    size_t len, cap;
+} bb_t;
+
+static void bb_put(bb_t *b, const void *d, size_t n)
+{
+    if (b->len + n > b->cap) {
+        b->cap = (b->len + n) * 2 + 64;
+        b->p = realloc(b->p, b->cap);
+        TEST_ASSERT_NOT_NULL(b->p);
+    }
+    memcpy(b->p + b->len, d, n);
+    b->len += n;
+}
+
+static void bb_be32(bb_t *b, uint32_t v)
+{
+    uint8_t x[4] = { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
+    bb_put(b, x, 4);
+}
+
+static void png_chunk(bb_t *b, const char *type, const void *d, size_t n)
+{
+    bb_be32(b, (uint32_t)n);
+    bb_put(b, type, 4);
+    if (n) bb_put(b, d, n);
+    bb_be32(b, 0);   /* the decoder doesn't check CRCs */
+}
+
+typedef struct {
+    uint32_t w, h;
+    int depth, ct, interlace;
+    const uint8_t *plte, *trns;
+    size_t nplte, ntrns;
+    uint8_t zlib0;   /* first zlib header byte; 0 = 0x78 */
+} png_spec_t;
+
+/* A PNG of the given scanlines (each with its filter byte), as stored
+ * deflate blocks split over two IDAT chunks, so the chunk walking is tested
+ * too. */
+static uint8_t *make_png(const png_spec_t *sp, const uint8_t *raw, size_t raw_len, size_t *len)
+{
+    bb_t z = { 0 };
+    uint8_t hdr[2] = { sp->zlib0 ? sp->zlib0 : 0x78, 0x01 };
+    if (hdr[0] != 0x78) hdr[1] = (uint8_t)(31 - (hdr[0] << 8) % 31);
+    bb_put(&z, hdr, 2);
+    size_t off = 0;
+    do {
+        size_t n = raw_len - off > 65535 ? 65535 : raw_len - off;
+        uint8_t bh[5] = { off + n == raw_len, (uint8_t)n, (uint8_t)(n >> 8), (uint8_t)~n, (uint8_t)(~n >> 8) };
+        bb_put(&z, bh, 5);
+        bb_put(&z, raw + off, n);
+        off += n;
+    } while (off < raw_len);
+    bb_be32(&z, 0);   /* Adler-32: never read */
+
+    bb_t b = { 0 };
+    bb_put(&b, "\x89PNG\r\n\x1a\n", 8);
+    uint8_t ihdr[13] = { 0 };
+    for (int i = 0; i < 4; i++) {
+        ihdr[i] = (uint8_t)(sp->w >> (24 - 8 * i));
+        ihdr[4 + i] = (uint8_t)(sp->h >> (24 - 8 * i));
+    }
+    ihdr[8] = (uint8_t)sp->depth;
+    ihdr[9] = (uint8_t)sp->ct;
+    ihdr[12] = (uint8_t)sp->interlace;
+    png_chunk(&b, "IHDR", ihdr, 13);
+    if (sp->plte) png_chunk(&b, "PLTE", sp->plte, sp->nplte);
+    if (sp->trns) png_chunk(&b, "tRNS", sp->trns, sp->ntrns);
+    png_chunk(&b, "tEXt", "Comment\0skipped", 15);
+    png_chunk(&b, "IDAT", z.p, z.len / 2);
+    png_chunk(&b, "IDAT", NULL, 0);
+    png_chunk(&b, "IDAT", z.p + z.len / 2, z.len - z.len / 2);
+    png_chunk(&b, "IEND", NULL, 0);
+    free(z.p);
+    *len = b.len;
+    return b.p;
+}
+
+static t5_err_t decode_spec(const png_spec_t *sp, const uint8_t *raw, size_t raw_len, t5_png_t *out)
+{
+    size_t len;
+    uint8_t *png = make_png(sp, raw, raw_len, &len);
+    t5_err_t e = t5_png_decode(png, len, 0, out);
+    free(png);
+    return e;
+}
+
+static int paeth_ref(int a, int b, int c)
+{
+    int p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
+    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+}
+
+/* The encoder's side of filter f, for one row. */
+static void filter_row(int f, const uint8_t *cur, const uint8_t *prev, size_t stride, size_t bpp, uint8_t *out)
+{
+    out[0] = (uint8_t)f;
+    for (size_t i = 0; i < stride; i++) {
+        int a = i >= bpp ? cur[i - bpp] : 0, b = prev ? prev[i] : 0, c = prev && i >= bpp ? prev[i - bpp] : 0;
+        int pred = f == 1 ? a : f == 2 ? b : f == 3 ? (a + b) / 2 : f == 4 ? paeth_ref(a, b, c) : 0;
+        out[1 + i] = (uint8_t)(cur[i] - pred);
+    }
+}
+
+static void test_png_filters(void)
+{
+    /* Five RGBA rows, one per filter type, and again with each row's type
+     * rotated, so every filter sees a row above it and the first row. */
+    enum { W = 7, H = 5, ST = W * 4 };
+    uint8_t px[H][ST], raw[H * (ST + 1)];
+    srand(77);
+    for (int y = 0; y < H; y++) {
+        for (int i = 0; i < ST; i++) px[y][i] = (uint8_t)rand();
+    }
+    for (int rot = 0; rot < 5; rot++) {
+        for (int y = 0; y < H; y++) filter_row((y + rot) % 5, px[y], y ? px[y - 1] : NULL, ST, 4, raw + y * (ST + 1));
+        png_spec_t sp = { .w = W, .h = H, .depth = 8, .ct = 6 };
+        t5_png_t img;
+        TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, raw, sizeof raw, &img));
+        TEST_ASSERT_EQUAL(W, img.w);
+        TEST_ASSERT_EQUAL(H, img.h);
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(px, img.rgba, sizeof px);
+        free(img.rgba);
+    }
+    /* Sub-byte pixels filter byte by byte, one byte to the left (bpp 1). */
+    uint8_t g[2][2] = { { 0xb5, 0x40 }, { 0x3c, 0xc0 } }, graw[2 * 3];
+    filter_row(1, g[0], NULL, 2, 1, graw);
+    filter_row(4, g[1], g[0], 2, 1, graw + 3);
+    png_spec_t sp = { .w = 10, .h = 2, .depth = 1, .ct = 0 };
+    t5_png_t img;
+    TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, graw, sizeof graw, &img));
+    const char *want = "1011010101" "0011110011";
+    for (int i = 0; i < 20; i++) {
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(want[i] == '1' ? 255 : 0, img.rgba[i * 4], want + i);
+        TEST_ASSERT_EQUAL_UINT8(255, img.rgba[i * 4 + 3]);
+    }
+    free(img.rgba);
+}
+
+static void expect_px(const t5_png_t *img, int i, int r, int g, int b, int a)
+{
+    const uint8_t *p = img->rgba + 4 * i;
+    uint8_t want[4] = { (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a };
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, p, 4);
+}
+
+static void test_png_formats(void)
+{
+    t5_png_t img;
+    {   /* grey, 2 bits, with a tRNS key */
+        uint8_t raw[] = { 0, 0x1b };   /* 0, 1, 2, 3 */
+        uint8_t key[] = { 0, 1 };
+        png_spec_t sp = { .w = 4, .h = 1, .depth = 2, .ct = 0, .trns = key, .ntrns = 2 };
+        TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, raw, sizeof raw, &img));
+        expect_px(&img, 0, 0, 0, 0, 255);
+        expect_px(&img, 1, 85, 85, 85, 0);
+        expect_px(&img, 2, 170, 170, 170, 255);
+        expect_px(&img, 3, 255, 255, 255, 255);
+        free(img.rgba);
+    }
+    {   /* palette, 4 bits, tRNS shorter than the palette */
+        uint8_t raw[] = { 0, 0x01, 0x20 };
+        uint8_t pal[] = { 255, 0, 0, 0, 255, 0, 0, 0, 255 }, tr[] = { 0, 128 };
+        png_spec_t sp = { .w = 3, .h = 1, .depth = 4, .ct = 3, .plte = pal, .nplte = 9, .trns = tr, .ntrns = 2 };
+        TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, raw, sizeof raw, &img));
+        expect_px(&img, 0, 255, 0, 0, 0);
+        expect_px(&img, 1, 0, 255, 0, 128);
+        expect_px(&img, 2, 0, 0, 255, 255);
+        free(img.rgba);
+    }
+    {   /* grey + alpha, 8 and 16 bits */
+        uint8_t raw8[] = { 0, 10, 200 }, raw16[] = { 0, 0x12, 0x34, 0xfe, 0xdc };
+        png_spec_t sp = { .w = 1, .h = 1, .depth = 8, .ct = 4 };
+        TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, raw8, sizeof raw8, &img));
+        expect_px(&img, 0, 10, 10, 10, 200);
+        free(img.rgba);
+        sp.depth = 16;
+        TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, raw16, sizeof raw16, &img));
+        expect_px(&img, 0, 0x12, 0x12, 0x12, 0xfe);
+        free(img.rgba);
+    }
+    {   /* RGB, 16 bits, with a tRNS key matching the second pixel exactly */
+        uint8_t raw[] = { 0, 0x12, 0x34, 0xab, 0xcd, 0xff, 0xff, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03 };
+        uint8_t key[] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x03 };
+        png_spec_t sp = { .w = 2, .h = 1, .depth = 16, .ct = 2, .trns = key, .ntrns = 6 };
+        TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, raw, sizeof raw, &img));
+        expect_px(&img, 0, 0x12, 0xab, 0xff, 255);
+        expect_px(&img, 1, 0, 0, 0, 0);
+        free(img.rgba);
+    }
+    {   /* RGBA, 16 bits */
+        uint8_t raw[] = { 0, 1, 0, 2, 0, 3, 0, 4, 0 };
+        png_spec_t sp = { .w = 1, .h = 1, .depth = 16, .ct = 6 };
+        TEST_ASSERT_EQUAL(T5_OK, decode_spec(&sp, raw, sizeof raw, &img));
+        expect_px(&img, 0, 1, 2, 3, 4);
+        free(img.rgba);
+    }
+}
+
+static void test_png_errors(void)
+{
+    t5_png_t img;
+    uint8_t rgba[] = { 0, 1, 2, 3, 4 };
+    png_spec_t ok = { .w = 1, .h = 1, .depth = 8, .ct = 6 };
+    TEST_ASSERT_EQUAL(T5_OK, decode_spec(&ok, rgba, sizeof rgba, &img));
+    free(img.rgba);
+
+    size_t len;
+    uint8_t *png = make_png(&ok, rgba, sizeof rgba, &len);
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_png_decode(png, 8, 0, &img));              /* signature only */
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_png_decode(png, len - 20, 0, &img));       /* cut in the IDATs */
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_png_decode(NULL, len, 0, &img));
+    png[1] = 'J';
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_png_decode(png, len, 0, &img));
+    free(png);
+    TEST_ASSERT_NULL(img.rgba);
+
+    png_spec_t sp = ok;
+    sp.interlace = 1;
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, decode_spec(&sp, rgba, sizeof rgba, &img));
+    sp = ok;
+    sp.w = T5_PNG_MAX_DIM + 1;
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, decode_spec(&sp, rgba, sizeof rgba, &img));
+    png = make_png(&ok, rgba, sizeof rgba, &len);
+    sp.w = 1;
+    TEST_ASSERT_EQUAL(T5_OK, t5_png_decode(png, len, 1, &img));
+    free(img.rgba);
+    free(png);
+    sp = (png_spec_t){ .w = 2, .h = 2, .depth = 8, .ct = 6 };
+    png = make_png(&sp, (uint8_t[18]){ 0 }, 18, &len);
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_png_decode(png, len, 1, &img));        /* over the caller's limit */
+    free(png);
+
+    sp = ok;
+    sp.depth = 4;   /* RGBA has no 4-bit form */
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, decode_spec(&sp, rgba, sizeof rgba, &img));
+    sp = ok;
+    sp.zlib0 = 0x79;   /* not deflate */
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, decode_spec(&sp, rgba, sizeof rgba, &img));
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, decode_spec(&ok, rgba, 3, &img));            /* short scanline */
+    uint8_t two_rows[10] = { 0 };
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, decode_spec(&ok, two_rows, sizeof two_rows, &img));   /* too many */
+    uint8_t bad_filter[] = { 5, 1, 2, 3, 4 };
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, decode_spec(&ok, bad_filter, sizeof bad_filter, &img));
+
+    uint8_t idx[] = { 0, 0x03 << 6 }, pal[] = { 1, 2, 3, 4, 5, 6 };
+    sp = (png_spec_t){ .w = 1, .h = 1, .depth = 2, .ct = 3 };
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, decode_spec(&sp, idx, sizeof idx, &img));    /* no palette */
+    sp.plte = pal;
+    sp.nplte = 6;
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, decode_spec(&sp, idx, sizeof idx, &img));    /* index 3 of 2 */
+    TEST_ASSERT_NULL(img.rgba);
+}
+
+static uint8_t *read_all(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    TEST_ASSERT_NOT_NULL_MESSAGE(f, path);
+    fseek(f, 0, SEEK_END);
+    *len = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *d = malloc(*len);
+    TEST_ASSERT_EQUAL(*len, fread(d, 1, *len, f));
+    fclose(f);
+    return d;
+}
+
+/* An icon the example apps ship, compressed by zlib for real (dynamic
+ * Huffman blocks), against the colours tools/assets/app_icons.py drew. */
+static void test_png_example_icon(void)
+{
+    size_t len;
+    uint8_t *d = read_all(T5_REPO_ROOT "/apps/examples/calculator/icon.png", &len);
+    t5_png_t img;
+    TEST_ASSERT_EQUAL(T5_OK, t5_png_decode(d, len, 0, &img));
+    TEST_ASSERT_EQUAL(112, img.w);
+    TEST_ASSERT_EQUAL(112, img.h);
+    expect_px(&img, 0, 0xd8, 0x43, 0x15, 255);                    /* deep orange 800 at the top */
+    expect_px(&img, 111 * 112, 0xbf, 0x36, 0x0c, 255);            /* 900 at the bottom */
+    expect_px(&img, 41 * 112 + 41, 0xff, 0xcc, 0xbc, 255);        /* the middle of the plus, in 100 */
+    free(img.rgba);
+
+    /* Damaged copies fail cleanly (and never crash or leak). */
+    uint8_t *buf = malloc(len);
+    srand(99);
+    int bad = 0;
+    for (int it = 0; it < 600; it++) {
+        memcpy(buf, d, len);
+        for (int f = 1 + rand() % 3; f > 0; f--) buf[rand() % len] ^= (uint8_t)(1u << (rand() % 8));
+        size_t n = rand() % 5 ? len : (size_t)rand() % len;
+        t5_err_t e = t5_png_decode(buf, n, 0, &img);
+        TEST_ASSERT_TRUE(e == T5_OK || e == T5_ERR_INVALID_ARG || e == T5_ERR_NOT_SUPPORTED || e == T5_ERR_NO_MEM);
+        if (e == T5_OK) free(img.rgba);
+        else bad++;
+    }
+    TEST_ASSERT_TRUE(bad > 0);
+    free(buf);
+    free(d);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1063,5 +1372,9 @@ int main(void)
     RUN_TEST(test_list_and_shadowing);
     RUN_TEST(test_recover_interrupted);
     RUN_TEST(test_grants);
+    RUN_TEST(test_png_filters);
+    RUN_TEST(test_png_formats);
+    RUN_TEST(test_png_errors);
+    RUN_TEST(test_png_example_icon);
     return UNITY_END();
 }

@@ -219,7 +219,7 @@ static void on_alarm(t5_app_t *app)
 typedef struct {
     t5_app_t *app;
     cfg_t cfg;
-    lv_obj_t *now, *sub, *chart, *sw, *url;
+    lv_obj_t *now, *sub, *chart, *chart_note, *sw, *log_row, *ivl_row, *url;
     lv_chart_series_t *ser;
     int ivl;
 } ui_t;
@@ -227,6 +227,7 @@ typedef struct {
 static const int s_intervals[] = { 900, 1800, 3600, 3 * 3600, 6 * 3600 };
 static const char *const s_interval_names[] = { "Every 15 minutes", "Every 30 minutes", "Every hour",
                                                 "Every 3 hours", "Every 6 hours" };
+#define N_INTERVALS ((int)(sizeof s_intervals / sizeof s_intervals[0]))
 
 static void load_chart(ui_t *u)
 {
@@ -234,25 +235,48 @@ static void load_chart(ui_t *u)
     path(u->app, "log.csv", p, sizeof p);
     FILE *f = fopen(p, "r");
     lv_chart_set_all_values(u->chart, u->ser, LV_CHART_POINT_NONE);
-    if (!f) return;
-    char line[96];
-    while (fgets(line, sizeof line, f)) {
-        if (line[0] == '#') continue;
-        char *c1 = strchr(line, ',');
-        if (!c1 || c1[1] == ',') continue;
-        lv_chart_set_next_value(u->chart, u->ser, (int32_t)(atof(c1 + 1) * 10));
+    int n = 0;
+    if (f) {
+        char line[96];
+        while (fgets(line, sizeof line, f)) {
+            if (line[0] == '#') continue;
+            char *c1 = strchr(line, ',');
+            if (!c1 || c1[1] == ',') continue;
+            lv_chart_set_next_value(u->chart, u->ser, (int32_t)(atof(c1 + 1) * 10));
+            n++;
+        }
+        fclose(f);
     }
-    fclose(f);
+    /* No readings: no bare grid. The headline above already says what to do. */
+    lv_obj_set_hidden(u->chart, n == 0);
+    lv_obj_set_hidden(u->chart_note, n == 0);
+    char buf[96];
+    if (n == 1) snprintf(buf, sizeof buf, "Temperature, 1 reading so far");
+    else snprintf(buf, sizeof buf, "Temperature, last %d readings", n < MAX_POINTS ? n : MAX_POINTS);
+    lv_label_set_text(u->chart_note, buf);
+}
+
+static void show_schedule(ui_t *u)
+{
+    bool on = logging_on(u->app);
+    md_row_set_secondary(u->log_row, on ? "Wakes the Tab5 from off for each reading" : "Paused");
+    md_row_set_secondary(u->ivl_row, s_interval_names[u->ivl]);
 }
 
 static void show(ui_t *u, const reading_t *r)
 {
-    char buf[96];
-    if (r->have_sensor) snprintf(buf, sizeof buf, "%.1f °C  %.0f%%", r->t, r->rh);
-    else snprintf(buf, sizeof buf, "No sensor on Grove");
-    lv_label_set_text(u->now, buf);
-    snprintf(buf, sizeof buf, "Battery %d.%02d V · %s · %s", r->mv / 1000, r->mv % 1000 / 10,
-             s_interval_names[u->ivl], logging_on(u->app) ? "logging" : "paused");
+    char buf[128];
+    int v = r->mv / 1000, cv = r->mv % 1000 / 10;
+    if (r->have_sensor) {
+        snprintf(buf, sizeof buf, "%.1f °C", r->t);
+        lv_label_set_text(u->now, buf);
+        snprintf(buf, sizeof buf, "%.0f%% humidity\nBattery %d.%02d V", r->rh, v, cv);
+    } else {
+        lv_label_set_text(u->now, "No sensor found");
+        snprintf(buf, sizeof buf,
+                 "Plug an SHT4x or SHT3x into the Grove port. Until then each reading logs the battery only, "
+                 "now %d.%02d V.", v, cv);
+    }
     lv_label_set_text(u->sub, buf);
 }
 
@@ -266,6 +290,7 @@ static void read_now(lv_event_t *e)
     append(u->app, line);
     show(u, &r);
     load_chart(u);
+    t5_shell_toast("Reading saved");
 }
 
 static void toggle(lv_event_t *e)
@@ -276,33 +301,49 @@ static void toggle(lv_event_t *e)
     if (lv_obj_has_state(u->sw, LV_STATE_CHECKED)) {
         remove(p);
         t5_err_t err = t5_app_schedule_alarm(u->app, time(NULL) + u->cfg.interval_s);
-        t5_shell_toast(err == T5_OK ? "Logging: the next reading wakes the Tab5 from off" : "Can't schedule a wake");
+        if (err == T5_OK) {
+            t5_shell_toast("Logging on");
+        } else {
+            char msg[96];
+            snprintf(msg, sizeof msg, "Couldn't schedule the next reading (%s)", t5_err_str(err));
+            t5_shell_toast(msg);
+        }
     } else {
         t5_storage_write_atomic(p, "1", 1);
         t5_shell_toast("Logging paused");
     }
+    show_schedule(u);
 }
 
-static void interval_next(lv_event_t *e)
+static void interval_picked(int item, void *arg)
+{
+    ui_t *u = arg;
+    if (item < 0 || item >= N_INTERVALS) return;
+    u->ivl = item;
+    u->cfg.interval_s = s_intervals[item];
+    cfg_save(u->app, &u->cfg);
+    show_schedule(u);
+}
+
+static void interval_open(lv_event_t *e)
 {
     ui_t *u = lv_event_get_user_data(e);
-    u->ivl = (u->ivl + 1) % (int)(sizeof s_intervals / sizeof s_intervals[0]);
-    u->cfg.interval_s = s_intervals[u->ivl];
-    cfg_save(u->app, &u->cfg);
-    lv_label_set_text(lv_obj_get_child(lv_event_get_target_obj(e), 0), s_interval_names[u->ivl]);
+    md_menu_show(u->ivl_row, s_interval_names, N_INTERVALS, interval_picked, u);
 }
+
+#define URL_HELP "Optional. Each reading is sent here as one CSV line."
 
 static void url_done(lv_event_t *e)
 {
     ui_t *u = lv_event_get_user_data(e);
     const char *t = md_textfield_text(u->url);
     if (t[0] && strncmp(t, "http://", 7)) {
-        md_textfield_set_helper(u->url, "Starts with http://", true);
+        md_textfield_set_helper(u->url, "Use an address that starts with http://", true);
         return;
     }
     snprintf(u->cfg.url, sizeof u->cfg.url, "%s", t);
     cfg_save(u->app, &u->cfg);
-    md_textfield_set_helper(u->url, t[0] ? "Each reading is POSTed here" : "No upload", false);
+    md_textfield_set_helper(u->url, t[0] ? "Each reading is sent here" : URL_HELP, false);
     t5_shell_keyboard_hide();
 }
 
@@ -318,36 +359,69 @@ static void on_create(t5_app_t *app)
     t5_app_set_user(app, u);
     u->app = app;
     cfg_load(app, &u->cfg);
-    for (int i = 0; i < (int)(sizeof s_intervals / sizeof s_intervals[0]); i++) {
+    u->ivl = 2;
+    for (int i = 0; i < N_INTERVALS; i++) {
         if (s_intervals[i] == u->cfg.interval_s) u->ivl = i;
     }
-    lv_obj_t *page = md_page_create(t5_app_screen(app), "Logger", back, NULL, NULL);
+    lv_obj_t *bar = NULL;
+    lv_obj_t *page = md_page_create(t5_app_screen(app), "Logger", back, NULL, &bar);
+    md_appbar_add_action(bar, MD_ICON_REFRESH, read_now, u);   /* take and save a reading now */
     lv_obj_t *b = md_page_body(page);
     lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(b, T5_DP(16), 0);
-    lv_obj_set_style_pad_row(b, T5_DP(8), 0);
-    u->now = md_label_create(b, "", MD_TYPE_HEADLINE4);
-    u->sub = md_label_create(b, "", MD_TYPE_BODY2);
+    lv_obj_set_style_pad_ver(b, T5_DP(8), 0);
+
+    /* The latest reading is the hero. */
+    lv_obj_t *hero = lv_obj_create(b);
+    lv_obj_remove_style_all(hero);
+    lv_obj_set_size(hero, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(hero, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_hor(hero, T5_DP(16), 0);
+    lv_obj_set_style_pad_row(hero, T5_DP(4), 0);
+    u->now = md_label_create(hero, "", MD_TYPE_HEADLINE4);
+    u->sub = md_label_create(hero, "", MD_TYPE_BODY2);
+    lv_obj_set_width(u->sub, LV_PCT(100));
+    lv_label_set_long_mode(u->sub, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_opa(u->sub, md_scheme()->on_surface.medium, 0);
+
     u->chart = lv_chart_create(b);
     lv_obj_set_size(u->chart, LV_PCT(100), T5_DP(140));
+    lv_obj_set_style_margin_top(u->chart, T5_DP(16), 0);
+    lv_obj_set_style_pad_hor(u->chart, T5_DP(16), 0);
     lv_obj_set_style_bg_opa(u->chart, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(u->chart, 0, 0);
+    lv_obj_set_style_line_opa(u->chart, md_scheme()->on_surface.divider, LV_PART_MAIN);
     lv_obj_set_style_size(u->chart, 0, 0, LV_PART_INDICATOR);
+    lv_chart_set_div_line_count(u->chart, 3, 0);
     lv_chart_set_point_count(u->chart, MAX_POINTS);
     lv_chart_set_axis_range(u->chart, LV_CHART_AXIS_PRIMARY_Y, 0, 400);
     lv_chart_set_update_mode(u->chart, LV_CHART_UPDATE_MODE_SHIFT);
     u->ser = lv_chart_add_series(u->chart, md_color(md_scheme()->c.secondary), LV_CHART_AXIS_PRIMARY_Y);
-    lv_obj_t *row = md_row_create(b, MD_ICON_SCHEDULE, "Log in the background", "Wakes the Tab5 from off");
-    u->sw = md_row_switch(row, logging_on(app));
+    u->chart_note = md_label_create(b, "", MD_TYPE_CAPTION);
+    lv_obj_set_width(u->chart_note, LV_PCT(100));
+    lv_label_set_long_mode(u->chart_note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_pad_hor(u->chart_note, T5_DP(16), 0);
+    lv_obj_set_style_text_opa(u->chart_note, md_scheme()->on_surface.medium, 0);
+
+    md_section_create(b, "Schedule");
+    u->log_row = md_row_create(b, MD_ICON_SCHEDULE, "Log in the background", "");
+    u->sw = md_row_switch(u->log_row, logging_on(app));
     lv_obj_add_event_cb(u->sw, toggle, LV_EVENT_VALUE_CHANGED, u);
-    lv_obj_t *iv = md_button_create(b, s_interval_names[u->ivl], MD_BUTTON_OUTLINED);
-    lv_obj_add_event_cb(iv, interval_next, LV_EVENT_CLICKED, u);
-    u->url = md_textfield_create(b, "Upload URL (http://...)", false);
+    u->ivl_row = md_row_create(b, MD_ICON_TIMER, "How often", "");
+    md_row_set_clickable(u->ivl_row, interval_open, u);
+
+    md_section_create(b, "Upload");
+    lv_obj_t *wrap = lv_obj_create(b);   /* holds the field on the 16 dp margins */
+    lv_obj_remove_style_all(wrap);
+    lv_obj_set_size(wrap, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(wrap, T5_DP(16), 0);
+    lv_obj_set_style_pad_ver(wrap, T5_DP(8), 0);
+    u->url = md_textfield_create(wrap, "Upload address (http://...)", false);
     lv_obj_set_width(u->url, LV_PCT(100));
     if (u->cfg.url[0]) md_textfield_set_text(u->url, u->cfg.url);
+    md_textfield_set_helper(u->url, u->cfg.url[0] ? "Each reading is sent here" : URL_HELP, false);
     lv_obj_add_event_cb(md_textfield_ta(u->url), url_done, LV_EVENT_READY, u);
-    lv_obj_t *rn = md_button_create(b, "Read now", MD_BUTTON_CONTAINED);
-    lv_obj_add_event_cb(rn, read_now, LV_EVENT_CLICKED, u);
+
+    show_schedule(u);
     reading_t r;
     take_reading(&r);
     show(u, &r);
