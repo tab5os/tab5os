@@ -22,6 +22,7 @@
 #include "t5_core/crc.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
+#include "t5_core/task_tls.h"
 #include "app_priv.h"
 #include "apps_hw.h"
 
@@ -432,6 +433,12 @@ bool apps_hw_task_park(void *task, int (*app_held)(void *task))
         vTaskResume((TaskHandle_t)task);
         return false;
     }
+    /* Inside lwIP is held like a lock: deleted there, the task would leave
+     * lwIP pointing into its stack and at its freed semaphore (isolate.h). */
+    if (apps_hw_net_inside(task)) {
+        vTaskResume((TaskHandle_t)task);
+        return false;
+    }
     if (s_mutexes_held_word < 0) return true;
     UBaseType_t held = ((const volatile UBaseType_t *)task)[s_mutexes_held_word];
     /* None, or only the app's own (app_held is -1 when it can't tell). */
@@ -447,6 +454,16 @@ void apps_hw_task_delete(void *task)
      * release walk that called us isn't safe against app code. */
     if (!suspend_and_settle((TaskHandle_t)task)) {
         T5_LOGE(TAG, "%s didn't stop within %u ms; deleting it anyway", pcTaskGetName((TaskHandle_t)task), SETTLE_MS);
+    }
+    /* Still inside lwIP once the exit can't wait any longer (quiesce gave
+     * up): not deleted there. It leaves the app and runs on until the call
+     * returns, then ends itself (netguard.c). Its stack isn't the app's. */
+    if (apps_hw_net_orphan(task)) {
+        T5_LOGW(TAG, "%s is inside a network call; it ends itself when the call returns",
+                pcTaskGetName((TaskHandle_t)task));
+        vTaskSetThreadLocalStoragePointer((TaskHandle_t)task, T5_TASK_TLS_APP_CTX, NULL);
+        vTaskResume((TaskHandle_t)task);
+        return;
     }
     t5_task_delete((t5_task_t)task);
 }

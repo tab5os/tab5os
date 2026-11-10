@@ -11,6 +11,7 @@ t5_app(fscope SRCS fscope/main.c MANIFEST fscope/manifest.toml)
 t5_app(fsshared SRCS fscope/main.c MANIFEST fscope/shared.toml)
 t5_app(netleak SRCS netleak/main.c MANIFEST netleak/manifest.toml)
 t5_app(nonet SRCS nonet/main.c MANIFEST nonet/manifest.toml)
+t5_app(netexit SRCS netexit/main.c MANIFEST netexit/manifest.toml)
 t5_app(hwcrash SRCS hwcrash/main.c MANIFEST hwcrash/manifest.toml)
 # The C template, filled in as `t5 new Hello` would (tools/t5/t5dev.py).
 set(APP_ID com.example.hello)

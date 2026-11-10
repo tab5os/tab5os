@@ -1191,15 +1191,50 @@ int t5_app_lwip_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
     return fd;
 }
 
+/* A task blocked on one of its app's sockets (accept, recv, a select with
+ * no timeout, a blocking connect) can't be parked or deleted there
+ * (isolate.h), and only the socket's close wakes it. So the exit closes
+ * them first, before stopping the tasks. lwIP keeps the slot until calls
+ * still inside on it have returned. */
+int app_close_sockets(t5_app_t *a)
+{
+    int total = 0;
+    for (;;) {
+        void *keys[APP_MAX_SOCKETS];
+        int n = 0;
+        apps_lock();
+        a->net_closed = true;
+        for (int i = 0; i < a->trk.n && n < APP_MAX_SOCKETS; i++) {
+            if (a->trk.ent[i].release == fd_release) keys[n++] = a->trk.ent[i].handle;
+        }
+        for (int i = 0; i < n; i++) t5_tracker_remove(&a->trk, keys[i]);
+        apps_unlock();
+        if (!n) return total;
+        for (int i = 0; i < n; i++) fd_release(keys[i]);
+        total += n;
+    }
+}
+
+/* Closed by the exit already: the number may be another socket's by now. */
+static bool closed_at_exit(bool had)
+{
+    t5_app_t *a = owner();
+    if (had || !a || !a->net_closed) return false;
+    errno = EBADF;
+    return true;
+}
+
 int t5_app_lwip_close(int s)
 {
-    untrack(FD_KEY(s));
+    if (closed_at_exit(untrack(FD_KEY(s)))) return -1;
     return lwip_close(s);
 }
 
 int t5_app_close(int fd)
 {
-    untrack(FD_KEY(fd));
+    bool sock = fd >= LWIP_SOCKET_OFFSET && fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS;
+    bool had = untrack(FD_KEY(fd));
+    if (sock && closed_at_exit(had)) return -1;
     return close(fd);
 }
 
