@@ -1,0 +1,6 @@
+id = "com.t5.test.anims"
+name = "Anims"
+version = "1.0.0"
+api = 1
+runtime = "native"
+entry = "app.elf"

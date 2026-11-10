@@ -8,6 +8,7 @@ installed, run and closed again; build them first with `t5 apps`.
   fspy     the same for Python apps
   netleak  sockets and the HTTP server through t5_net, and the BSD layer
   nonet    an app without the net permission is refused
+  anims    finished animations don't stay counted against the app's handles
 
     tools/t5/t5 hil app_checks [--only fscope,fspy]
 """
@@ -27,7 +28,24 @@ APPS = {
     "fspy": ("com.t5.test.fspy", rb"fspy: done"),
     "netleak": ("com.t5.test.netleak", rb"netleak: bsd (PASS|FAIL)"),
     "nonet": ("com.t5.test.nonet", rb"nonet: .* -> (PASS|FAIL)"),
+    "anims": ("com.t5.test.anims", rb"anims: done"),
 }
+
+
+def anims_usage(t):
+    """While anims still runs: only its one endless animation is held."""
+    out = t.cmd("app usage", 10)
+    out = out.decode(errors="replace") if isinstance(out, bytes) else out
+    m = re.search(r"anims (\d+).*untracked (\d+)", out)
+    if not m:
+        return f"anims: app usage unreadable: {out.strip()} -> FAIL"
+    held, dropped = int(m.group(1)), int(m.group(2))
+    ok = held == 1 and dropped == 0
+    return f"anims: app usage anims {held} untracked {dropped} -> {'PASS' if ok else 'FAIL'}"
+
+
+# Checks the host makes after an app's last line, before closing it.
+AFTER = {"anims": anims_usage}
 
 
 def run_app(t, name, app_id, last):
@@ -42,13 +60,16 @@ def run_app(t, name, app_id, last):
     t.flush_input()
     t.send(f"app run {app_id}")
     text, m = t.read_until(re.compile(last), 30)
-    t.cmd("app exit", 10)
     text = text.decode(errors="replace")
+    if m and name in AFTER:
+        text += "\n" + AFTER[name](t)
+    t.cmd("app exit", 10)
     if not m:
         return 0, 1, text + f"\n[no '{last.decode()}' within 30 s]"
     # Native apps print straight to the console; a Python app's print goes
-    # through the log ("I (..) py: <id>: fspy: ...").
-    lines = re.findall(rf"(?:^|: )({name}: .*)$", text.replace("\r", ""), re.M)
+    # through the log ("I (..) py: <id>: fspy: ..."). A native app's first
+    # line can land after the console prompt ("tab5>  anims: ...").
+    lines = re.findall(rf"(?:^|: |>\s+)({name}: .*)$", text.replace("\r", ""), re.M)
     passes = sum(bool(re.search(r"\bPASS\b", x)) for x in lines)
     fails = sum(bool(re.search(r"\bFAIL\b", x)) for x in lines)
     return passes, fails, "\n".join(lines)

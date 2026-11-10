@@ -22,6 +22,8 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "misc/cache/instance/lv_image_cache.h"
+#include "core/lv_global.h"          /* LVGL's animation list, to find one animation */
+#include "misc/lv_anim_private.h"
 #include "lwip/sockets.h"
 #include <setjmp.h>
 #include "t5_app/apps.h"
@@ -991,30 +993,60 @@ void t5_app_lv_timer_delete(lv_timer_t *t)
     lv_timer_delete(t);
 }
 
+/* One running animation, known by LVGL's own descriptor. var/exec/custom are
+ * copied so a freed descriptor whose memory LVGL reused for some other
+ * animation is not mistaken for this one.
+ *
+ * Matching by (var, exec_cb) instead, as lv_anim_get does, cannot tell an
+ * app's finished animations from its running ones when they share a target:
+ * every new animation on the same object kept all the old refs "alive", so
+ * they were never pruned and filled the app's 256-handle table. */
 typedef struct {
+    lv_anim_t *run;
     void *var;
     lv_anim_exec_xcb_t exec;
     lv_anim_custom_exec_cb_t custom;
 } anim_ref_t;
 
+static bool anim_alive(const anim_ref_t *r)
+{
+    lv_ll_t *ll = &LV_GLOBAL_DEFAULT()->anim_state.anim_ll;
+    for (lv_anim_t *a = lv_ll_get_head(ll); a; a = lv_ll_get_next(ll, a)) {
+        if (a == r->run) return a->var == r->var && a->exec_cb == r->exec && a->custom_exec_cb == r->custom;
+    }
+    return false;
+}
+
+/* Never called: marks the one animation anim_release deletes. */
+static void anim_kill_tag(void *var, int32_t v)
+{
+    (void)var;
+    (void)v;
+}
+
 static void anim_release(void *p)
 {
     anim_ref_t *r = p;
-    if (r->custom) lv_anim_delete(r->var, NULL);
-    else lv_anim_delete(r->var, r->exec);
+    if (anim_alive(r)) {
+        /* lv_anim_delete matches by (var, exec_cb), and var NULL matches
+         * every animation in the system; retag exec_cb so it deletes exactly
+         * this one. var is left alone: deleted callbacks often read it. */
+        r->run->exec_cb = anim_kill_tag;
+        lv_anim_delete(r->var, anim_kill_tag);
+    }
     free(r);
 }
 
-static bool anim_alive(const anim_ref_t *r)
-{
-    return lv_anim_get(r->var, r->exec) != NULL;
-}
+static const lv_anim_t *s_anim_fresh;   /* under apps_lock */
 
-/* Finished animations leave their refs behind: swept before adding more. */
+/* Finished animations leave their refs behind: swept before adding more.
+ * A ref naming the descriptor just started is stale too (LVGL reused the
+ * memory of an animation that finished). */
 static bool anim_keep(void *p)
 {
-    if (anim_alive(p)) return true;
-    free(p);
+    anim_ref_t *r = p;
+    if (r->run != s_anim_fresh && anim_alive(r)) return true;
+    free(r);
     return false;
 }
 
@@ -1025,12 +1057,19 @@ lv_anim_t *t5_app_lv_anim_start(const lv_anim_t *a)
     if (!run || !app) return run;
     anim_ref_t *r = malloc(sizeof *r);
     if (!r) return run;
-    *r = (anim_ref_t){ a->var, a->exec_cb, a->custom_exec_cb };
+    *r = (anim_ref_t){ run, run->var, run->exec_cb, run->custom_exec_cb };
     apps_lock();
-    if (t5_tracker_count(&app->trk, T5_RES_ANIM) >= 32) t5_tracker_prune(&app->trk, T5_RES_ANIM, anim_keep);
+    s_anim_fresh = run;
+    t5_tracker_prune(&app->trk, T5_RES_ANIM, anim_keep);
+    s_anim_fresh = NULL;
     if (!t5_tracker_add(&app->trk, T5_RES_ANIM, r, anim_release)) free(r);
     apps_unlock();
     return run;
+}
+
+void t5_app_anims_prune(t5_app_t *app)
+{
+    t5_tracker_prune(&app->trk, T5_RES_ANIM, anim_keep);
 }
 
 typedef struct {
