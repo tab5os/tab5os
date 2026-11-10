@@ -4,5 +4,6 @@ version = "1.0.0"
 api = 1
 runtime = "native"
 entry = "app.elf"
+icon = "icon.png"
 orientation = "any"
 description = "A basic and a scientific calculator, with live results"

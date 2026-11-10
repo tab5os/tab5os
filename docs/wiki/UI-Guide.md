@@ -150,6 +150,8 @@ Elevation on the dark theme is a lighter surface: `md_set_elevation(obj, 4, fals
 
 The 160 `MD_ICON_*` names in `md/md_icons.h` are all there is. An unknown name is a compile error, which is helpful. Icons are text: `lv_label_set_text(label, MD_ICON_WIFI)` works on a label with `md_icon_font(24)`.
 
+Your app's own launcher icon is a PNG named in the manifest, not one of these. See [App icon](Manifest-and-Packaging.md#app-icon).
+
 ## Lists
 
 `md_row_*` builds real objects, which is right for a settings page. For more than about 30 rows, or any list that grows, use the recycled list:

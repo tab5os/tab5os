@@ -10,6 +10,7 @@
 #include <time.h>
 #include "t5/system.h"
 #include "t5_pkg/manifest.h"
+#include "t5_shell/app_icon.h"
 #include "t5_storage/paths.h"
 #include "sysapps_priv.h"
 
@@ -30,6 +31,16 @@ static void grant_changed(lv_event_t *e)
     uint32_t perm = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     bool on = lv_obj_has_state(lv_event_get_target_obj(e), LV_STATE_CHECKED);
     sa_report(t5_apps_set_grant(p->id, perm, on), "change the permission");
+}
+
+/* An installed app's own icon in place of a row's glyph: 40 dp, the
+ * width of the glyph's slot, so the names still line up. */
+static void app_row_icon(lv_obj_t *row, const t5_app_entry_t *a)
+{
+    lv_obj_t *img = row && !a->builtin ? t5_shell_app_icon_create(row, a->id, T5_DP(40)) : NULL;
+    if (!img) return;
+    lv_obj_set_hidden(lv_obj_get_child(row, 0), true);
+    lv_obj_move_to_index(img, 0);
 }
 
 static void open_clicked(lv_event_t *e)
@@ -105,7 +116,8 @@ static void open_app(const char *id)
     char buf[256], a[24], b[24];
     if (in->entry.builtin) snprintf(buf, sizeof buf, "Part of Tab5 OS");
     else snprintf(buf, sizeof buf, "Version %s", in->entry.version);
-    md_row_create(body, in->entry.icon[0] ? in->entry.icon : MD_ICON_EXTENSION, in->entry.name, buf);
+    app_row_icon(md_row_create(body, in->entry.icon[0] ? in->entry.icon : MD_ICON_EXTENSION, in->entry.name, buf),
+                 &in->entry);
     lv_obj_t *row = sa_button_row(body);
     lv_obj_t *bt = md_button_create(row, "Open", MD_BUTTON_CONTAINED);
     lv_obj_add_event_cb(bt, open_clicked, LV_EVENT_CLICKED, p);
@@ -272,6 +284,7 @@ static void list_refresh(sa_nav_t *nav, void *arg)
                           state ? (a->autolaunch_blocked ? "stopped after crashing" : "running") : "");
             lv_obj_t *r = md_row_create(l->list, a->icon[0] ? a->icon : MD_ICON_EXTENSION, a->name,
                                         buf[0] ? buf : NULL);
+            app_row_icon(r, a);
             md_row_set_clickable(r, app_clicked, a->id);
         }
         if (pass == 0 && !inst) sa_note(l->list, "No apps installed yet. Open a .t5app file in Files to install one.");

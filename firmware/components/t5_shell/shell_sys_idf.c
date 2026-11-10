@@ -23,6 +23,7 @@
 #include "t5_ui/t5_ui.h"
 #include "t5_usb/usb.h"
 #include "t5_shell/accent.h"
+#include "t5_shell/app_icon.h"
 #include "t5_shell/standby.h"
 #include "shell_priv.h"
 #include "t5_core/log.h"
@@ -254,6 +255,11 @@ int shell_sys_apps(shell_app_t *out, int max)
     }
     free(e);
     return n;
+}
+
+lv_obj_t *shell_sys_app_icon(lv_obj_t *parent, const char *id, int32_t size_px)
+{
+    return t5_shell_app_icon_create(parent, id, size_px);
 }
 
 void shell_sys_launch(const char *id, const char *arg)

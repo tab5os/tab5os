@@ -4,6 +4,7 @@ version = "1.0.0"
 api = 1
 runtime = "native"
 entry = "app.elf"
+icon = "icon.png"
 description = "Scan for Bluetooth LE devices, read them, and act as a battery-level peripheral"
 
 [permissions]

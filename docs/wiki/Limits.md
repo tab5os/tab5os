@@ -76,6 +76,7 @@ Every hard number an app can run into, with where it's defined. API level 1.
 | `name` | 47 bytes |
 | `version` | 15 bytes, semver |
 | `entry`, `icon` | 63 bytes |
+| Icon file | PNG, at most 512 x 512 px and 512 KB, not interlaced. 112 x 112 px is drawn pixel for pixel |
 | `ports` | 8 entries |
 | Port name | 15 bytes |
 | `background.entry` | 31 bytes |

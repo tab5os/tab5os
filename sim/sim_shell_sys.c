@@ -83,6 +83,13 @@ static void open_stand_in(const char *id)
     lv_screen_load_anim(s_app_scr, LV_SCREEN_LOAD_ANIM_FADE_IN, MD_DUR_DIALOG_IN_MS, 0, false);
 }
 
+/* The simulator has no installed apps, so every app keeps its glyph. */
+lv_obj_t *shell_sys_app_icon(lv_obj_t *parent, const char *id, int32_t size_px)
+{
+    (void)parent; (void)id; (void)size_px;
+    return NULL;
+}
+
 void shell_sys_launch(const char *id, const char *arg)
 {
     (void)arg;

@@ -90,6 +90,10 @@ bool shell_sys_time(struct tm *out);
 
 /* Up to max (T5_APPS_MAX lists them all). */
 int shell_sys_apps(shell_app_t *out, int max);
+/* An installed app's own icon (t5_shell/app_icon.h): an image on parent,
+ * size_px across and round, or NULL to draw the glyph. */
+struct _lv_obj_t;
+struct _lv_obj_t *shell_sys_app_icon(struct _lv_obj_t *parent, const char *id, int32_t size_px);
 /* The runtime's side of t5_apps_home_t (t5_app/apps.h), in its order:
  * launching creates the app's screen, calls shell_prepare(screen, id) and
  * shell_changed(id), then loads the screen; going home loads

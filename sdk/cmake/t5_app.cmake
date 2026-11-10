@@ -76,8 +76,11 @@ function(t5_app name)
              COMMAND ${CMAKE_COMMAND} -E make_directory ${stage}
              COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/${A_MANIFEST} ${stage}/manifest.toml
              COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${name}.elf> ${stage}/app.elf)
+    set(deps ${name}.elf ${CMAKE_CURRENT_SOURCE_DIR}/${A_MANIFEST})
     if(A_ICON)
+        # At the package root, under its own name: the manifest's icon = "icon.png".
         list(APPEND cmds COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/${A_ICON} ${stage}/)
+        list(APPEND deps ${CMAKE_CURRENT_SOURCE_DIR}/${A_ICON})
     endif()
     if(A_ASSETS)
         list(APPEND cmds COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/${A_ASSETS} ${stage}/${A_ASSETS})
@@ -85,7 +88,7 @@ function(t5_app name)
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${name}.t5app
         ${cmds}
         COMMAND ${Python3_EXECUTABLE} ${T5_ROOT}/tools/t5/t5pack.py ${stage} -o ${CMAKE_CURRENT_BINARY_DIR}/${name}.t5app
-        DEPENDS ${name}.elf ${CMAKE_CURRENT_SOURCE_DIR}/${A_MANIFEST}
+        DEPENDS ${deps}
         COMMENT "Packing ${name}.t5app" VERBATIM)
     add_custom_target(${name}_pkg ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${name}.t5app)
 endfunction()

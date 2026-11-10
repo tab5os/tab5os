@@ -73,7 +73,11 @@ static lv_obj_t *badge(lv_obj_t *parent, const shell_app_t *a, int size_dp, int 
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(b, md_color(ac->dark), 0);
     lv_obj_set_clickable(b, false);
-    lv_obj_t *i = md_icon_create(b, a->icon[0] ? a->icon : MD_ICON_EXTENSION, icon_dp);
+    /* An installed app's own icon covers the disc; the disc still shows
+     * through any transparent parts, so a logo on a clear background sits
+     * on the same tinted circle as the glyphs. */
+    lv_obj_t *i = a->builtin ? NULL : shell_sys_app_icon(b, a->id, T5_DP(size_dp));
+    if (!i) i = md_icon_create(b, a->icon[0] ? a->icon : MD_ICON_EXTENSION, icon_dp);
     lv_obj_center(i);
     if (a->blocked) {
         lv_obj_t *w = md_icon_create(b, MD_ICON_WARNING, 18);
