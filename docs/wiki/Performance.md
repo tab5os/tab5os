@@ -115,7 +115,7 @@ For streams, double-buffer: fill the hidden buffer on a worker, then swap the im
 The time to first frame is your `on_create` plus ELF loading.
 
 - Build the first screen only. Load the rest lazily.
-- Show cached data at once, then refresh on a worker. Weather loads its cache in `on_create` and fetches in the background.
+- Show cached data at once, then refresh on a worker. [Weather](https://github.com/tab5os/weather) loads its cache in `on_create` and fetches in the background.
 - Keep the ELF small: fewer relocations, faster load. The build already uses `--gc-sections`.
 - Very large `.rodata` costs PSRAM and load time. Move big assets to files in the package and read them when needed.
 

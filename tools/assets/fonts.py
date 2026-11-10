@@ -122,7 +122,7 @@ ICONS = [
     "note_add", "developer_mode", "security", "restore", "update", "link",
     "link_off", "folder_open", "healing", "verified_user", "keyboard_arrow_up",
     "keyboard_arrow_down", "keyboard_tab", "format_indent_increase", "bug_report",
-    # weather (the Weather example app)
+    # weather (github.com/tab5os/weather)
     "wb_sunny", "nights_stay", "wb_cloudy", "foggy", "grain", "umbrella",
     "water_drop", "ac_unit", "thunderstorm", "air", "wb_twilight", "speed",
     "location_on",
