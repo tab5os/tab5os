@@ -513,6 +513,24 @@ static void test_manifest_design_example(void)
     TEST_ASSERT_TRUE(m.background);
     TEST_ASSERT_EQUAL_STRING("on_alarm", m.bg_entry);
     TEST_ASSERT_EQUAL(30, m.bg_max_seconds);
+    TEST_ASSERT_EQUAL(0, m.standby_refresh_min);
+}
+
+static void manifest_edit(char *text, size_t n, const char *from, const char *to);
+
+/* [background] standby_refresh_minutes: kept, with ambient. */
+static void test_manifest_standby_refresh(void)
+{
+    t5_manifest_t m;
+    char err[160], text[1024];
+    manifest_edit(text, sizeof text, "max_seconds = 30", "max_seconds = 30\nstandby_refresh_minutes = 60");
+    char *perm = strstr(text, "net = true");
+    TEST_ASSERT_NOT_NULL(perm);
+    char with_ambient[1100];
+    snprintf(with_ambient, sizeof with_ambient, "%.*sambient = true\n%s", (int)(perm - text), text, perm);
+    TEST_ASSERT_EQUAL_MESSAGE(T5_OK, t5_manifest_parse(with_ambient, strlen(with_ambient), &m, err, sizeof err), err);
+    TEST_ASSERT_EQUAL(60, m.standby_refresh_min);
+    TEST_ASSERT_TRUE(m.perms & T5_PERM_AMBIENT);
 }
 
 static void test_manifest_other_fields(void)
@@ -535,8 +553,6 @@ static void test_manifest_other_fields(void)
     TEST_ASSERT_FALSE(m.background);
     TEST_ASSERT_EQUAL(30, m.bg_max_seconds);
 }
-
-static void manifest_edit(char *text, size_t n, const char *from, const char *to);
 
 /* [shell]: full screen at launch. */
 static void test_manifest_shell(void)
@@ -604,6 +620,8 @@ static const struct {
     { "net = true", "nett = true", "unknown key 'permissions.nett'" },
     { "max_seconds = 30", "max_seconds = 301", "out of range" },
     { "\"on_alarm\"", "\"on-alarm\"", "function name" },
+    { "max_seconds = 30", "max_seconds = 30\nstandby_refresh_minutes = 60", "needs ambient" },
+    { "max_seconds = 30", "max_seconds = 30\nstandby_refresh_minutes = 5", "out of range" },
     { "min_heap_mb = 2", "min_heap_mb = 2\nmin_heap_kb = 5", "exclusive" },
     { "min_heap_mb = 2", "min_heap_mb = 2.5", "" },
     { "min_heap_mb = 2\n", "min_heap_mb = 2\norientation = \"sideways\"\n", "orientation: unknown 'sideways'" },
@@ -1357,6 +1375,7 @@ int main(void)
     RUN_TEST(test_toml_parse);
     RUN_TEST(test_toml_errors);
     RUN_TEST(test_manifest_design_example);
+    RUN_TEST(test_manifest_standby_refresh);
     RUN_TEST(test_manifest_other_fields);
     RUN_TEST(test_manifest_mbus_ports);
     RUN_TEST(test_manifest_shell);

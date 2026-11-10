@@ -36,7 +36,7 @@ static const char *const s_top_keys[] = {"id", "name", "version", "api", "runtim
                                          "min_heap_mb", "min_heap_kb", "orientation"};
 /* Top-level keys accepted but not stored (informational). */
 static const char *const s_info_keys[] = {"description", "author", "homepage", "license"};
-static const char *const s_bg_keys[] = {"entry", "max_seconds"};
+static const char *const s_bg_keys[] = {"entry", "max_seconds", "standby_refresh_minutes"};
 static const char *const s_shell_keys[] = {"fullscreen"};
 /* [shell] keys from API level 1's first candidate, when the shell drew an app
  * bar: still accepted so those packages install, and ignored. t5pack refuses
@@ -463,6 +463,15 @@ static t5_err_t validate(ctx_t *c, const t5_toml_doc_t *d, t5_manifest_t *m)
         int64_t secs = 0;
         T5_RETURN_ON_ERR(get_int(c, d, "background.max_seconds", 1, T5_MANIFEST_BG_MAX_SECONDS, &secs, &present));
         if (present) m->bg_max_seconds = (uint32_t)secs;
+        int64_t mins = 0;
+        T5_RETURN_ON_ERR(get_int(c, d, "background.standby_refresh_minutes", T5_MANIFEST_STANDBY_MIN_MINUTES,
+                                 T5_MANIFEST_STANDBY_MAX_MINUTES, &mins, &present));
+        if (present) {
+            if (!(m->perms & T5_PERM_AMBIENT)) {
+                return bad(c, "background.standby_refresh_minutes needs ambient = true in [permissions]");
+            }
+            m->standby_refresh_min = (uint32_t)mins;
+        }
     }
     return validate_shell(c, d, m);
 }

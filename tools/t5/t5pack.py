@@ -214,6 +214,9 @@ def validate(text):
         if entry is not None and not FUNC_RE.match(entry):
             raise PackError(f"background.entry: '{entry}' is not a function name")
         integer(bg, "max_seconds", 1, BG_MAX_SECONDS)
+        if integer(bg, "standby_refresh_minutes", _m("T5_MANIFEST_STANDBY_MIN_MINUTES"),
+                   _m("T5_MANIFEST_STANDBY_MAX_MINUTES")) is not None and perms.get("ambient") is not True:
+            raise PackError("background.standby_refresh_minutes needs ambient = true in [permissions]")
 
     shell = m.get("shell", {})
     for k, v in shell.items():

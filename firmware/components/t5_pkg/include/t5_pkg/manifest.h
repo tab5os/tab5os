@@ -63,6 +63,8 @@ uint32_t t5_perm_prompted(void);
 #define T5_MANIFEST_BG_DEFAULT_ENTRY "on_alarm"
 #define T5_MANIFEST_BG_DEFAULT_SECONDS 30
 #define T5_MANIFEST_BG_MAX_SECONDS 300
+#define T5_MANIFEST_STANDBY_MIN_MINUTES 15     /* [background] standby_refresh_minutes */
+#define T5_MANIFEST_STANDBY_MAX_MINUTES 1440
 
 typedef struct {
     char id[T5_APP_ID_LEN];   /* reverse-DNS: [a-z0-9_]+(\.[a-z0-9_]+)+ */
@@ -80,6 +82,10 @@ typedef struct {
     bool background;          /* [background] table present (needs background_wake = true) */
     char bg_entry[T5_MANIFEST_FUNC_LEN];   /* [background] entry */
     uint32_t bg_max_seconds;  /* [background] max_seconds */
+    /* [background] standby_refresh_minutes (needs ambient = true): while the
+     * standby screen shows, the entry runs this often so the app's card
+     * stays current. 0 = not at all. */
+    uint32_t standby_refresh_min;
     /* [shell]: the bars the shell draws around the app's screen. */
     bool fullscreen;          /* fullscreen = true: start without the bars (t5_shell_set_fullscreen) */
 } t5_manifest_t;

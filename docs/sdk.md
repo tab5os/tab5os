@@ -316,6 +316,8 @@ t5_ambient_clear();          /* takes it down */
 
 The card is copied and kept after your app exits, and across a restart, until you clear it or it expires. It isn't shown once the app is removed. Set it when what it shows changes; there's no need to keep the app running. The OS keeps 8 cards (the least recently set goes when a ninth arrives), and standby shows the newest. Without the permission, `t5_ambient_set` returns `T5_ERR_DENIED`.
 
+To keep the card current while standby shows, even with another app open, add `standby_refresh_minutes = 60` to `[background]`. The OS then runs your `on_alarm` headless about that often during standby. See [Standby refreshes](wiki/Power-and-Background.md#standby-refreshes).
+
 ## Manifest
 
 ```toml

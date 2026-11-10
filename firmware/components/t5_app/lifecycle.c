@@ -80,9 +80,12 @@ void apps_unlock(void)
     t5_mutex_unlock(s_lock);
 }
 
+/* The foreground app when there is one: a headless run can now happen while
+ * an app is open (standby refreshes), and an open app's context-less calls
+ * must not be filed under the headless app, whose things go when it ends. */
 t5_app_t *apps_fallback(void)
 {
-    return s_headless ? s_headless : s_fg;
+    return s_fg ? s_fg : s_headless;
 }
 
 /* Event payloads carry a truncated id. */
@@ -592,7 +595,12 @@ static void destroy(t5_app_t *a, bool clean)
         apps_hw_elf_unload(a->elf);
         a->elf = NULL;
     }
-    apps_hw_guard_clear();
+    /* A headless run that ends with an app open hands the crash guard back
+     * to that app. (Locked: the UI task may be closing that app.) */
+    apps_lock();
+    if (a != s_fg && valid(s_fg)) apps_hw_guard_set(s_fg->id, false);
+    else apps_hw_guard_clear();
+    apps_unlock();
     if (clean) {
         t5_crash_rec_t *r = t5_crash_find(&s_db, a->id);
         if (r && r->consecutive) {
@@ -1098,9 +1106,23 @@ static void alarm_task(void *p)
     for (;;) vTaskSuspend(NULL);
 }
 
+static bool s_alarm_busy;           /* a run is under way (s_headless is set part way in) */
+
+static t5_err_t run_alarm(const char *id);
+
 t5_err_t t5_apps_run_alarm(const char *id)
 {
     if (!s_alarm_end) return T5_ERR_STATE;
+    /* One headless run at a time (standby refreshes and `app alarm` can
+     * meet), and never a second copy of the open app. */
+    if (__atomic_exchange_n(&s_alarm_busy, true, __ATOMIC_ACQ_REL)) return T5_ERR_BUSY;
+    t5_err_t e = is_fg(id) ? T5_ERR_BUSY : run_alarm(id);
+    __atomic_store_n(&s_alarm_busy, false, __ATOMIC_RELEASE);
+    return e;
+}
+
+static t5_err_t run_alarm(const char *id)
+{
     if (!t5_crash_autolaunch_allowed(&s_db, id)) return T5_ERR_DENIED;
     t5_app_t *a;
     T5_RETURN_ON_ERR(make_app(id, &a));
