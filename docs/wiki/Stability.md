@@ -88,7 +88,7 @@ buf[n] = 0;                               /* now it's a string */
 
 - Use `snprintf`, never `sprintf`. Use `strnlen`, and check sizes before `memcpy`.
 - Validate lengths in binary protocols before indexing.
-- Parse JSON with a bounded parser. Weather's `json.c` is a small example.
+- Parse JSON with a bounded parser. [Weather](https://github.com/tab5os/weather)'s `json.c` is a small example.
 - Keep recursion out of parsers, or give it a depth limit.
 - Don't disable TLS verification outside testing.
 - Don't build paths from untrusted strings. The OS's file rules guard against mistakes in native apps. They aren't a sandbox.

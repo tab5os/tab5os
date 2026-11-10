@@ -48,7 +48,7 @@ lv_obj_set_flex_grow(body, 1);
 
 There's no navigation stack. Do one of these:
 
-- **Sub-page as an overlay on the same screen:** create an `md_page`, mark it floating, delete it on back. Weather does this. Everything stays under `t5_app_screen`, so it's tracked.
+- **Sub-page as an overlay on the same screen:** create an `md_page`, mark it floating, delete it on back. [Weather](https://github.com/tab5os/weather) does this. Everything stays under `t5_app_screen`, so it's tracked.
 - **Swap the content:** `lv_obj_clean(body)` and rebuild.
 - **Tabs:** `md_tabs_create` and `md_tabs_add`.
 - **Drawer:** `md_drawer_open`, `md_drawer_add_item`.

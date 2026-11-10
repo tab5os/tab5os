@@ -48,7 +48,7 @@ Files follow your app's file rules, and decoders and players close when the app 
 
 ## Media sessions
 
-A player app opens a media session (`t5_media_session_open`), publishes what is playing with `_set_info` and `_set_state`, and reads commands with `_next` on a task of its own. The standby screen's music card shows the active session and sends it play, pause, next and previous. The session doesn't play anything itself; your app does, and it reports back with `_set_state`. The details are in the [SDK guide](../sdk.md#media-sessions), and `apps/examples/music` is a complete player. On the console, `media` shows the active session, and `media play`, `pause`, `toggle`, `next`, `prev` and `stop` send it commands.
+A player app opens a media session (`t5_media_session_open`), publishes what is playing with `_set_info` and `_set_state`, and reads commands with `_next` on a task of its own. The standby screen's music card shows the active session and sends it play, pause, next and previous. The session doesn't play anything itself; your app does, and it reports back with `_set_state`. The details are in the [SDK guide](../sdk.md#media-sessions), and [Music](https://github.com/tab5os/music) is a complete player. On the console, `media` shows the active session, and `media play`, `pause`, `toggle`, `next`, `prev` and `stop` send it commands.
 
 ## Microphone
 

@@ -201,7 +201,7 @@ for (int n; (n = t5_audio_dec_read(d, pcm, 480)) > 0;) process(pcm, n);
 t5_audio_dec_close(d);
 ```
 
-The decoder takes WAV: PCM 8, 16, 24 and 32-bit, 32 and 64-bit float, `WAVE_FORMAT_EXTENSIBLE`, any rate, up to 8 channels (it gives the first two). The player needs a rate the output takes, 8 to 48 kHz. MP3 is in the API (`T5_AUDIO_FMT_MP3`) but not in this OS build: `t5_audio_format_supported()` says false and the open calls return `T5_ERR_NOT_SUPPORTED`, because Espressif's decoder (`esp_audio_codec`, about 56 KB) doesn't fit the image's size budget. An app that needs MP3 can compile a decoder (minimp3, for example) into itself and play what it decodes through a stream: `apps/examples/music` does that for MP3 and FLAC. Files follow the app's file rules; decoders and players are closed when the app exits, at most 4 per app.
+The decoder takes WAV: PCM 8, 16, 24 and 32-bit, 32 and 64-bit float, `WAVE_FORMAT_EXTENSIBLE`, any rate, up to 8 channels (it gives the first two). The player needs a rate the output takes, 8 to 48 kHz. MP3 is in the API (`T5_AUDIO_FMT_MP3`) but not in this OS build: `t5_audio_format_supported()` says false and the open calls return `T5_ERR_NOT_SUPPORTED`, because Espressif's decoder (`esp_audio_codec`, about 56 KB) doesn't fit the image's size budget. An app that needs MP3 can compile a decoder (minimp3, for example) into itself and play what it decodes through a stream: [Music](https://github.com/tab5os/music) does that for MP3 and FLAC. Files follow the app's file rules; decoders and players are closed when the app exits, at most 4 per app.
 
 `T5_EV_AUDIO_ROUTE` is posted when headphones are plugged in or out, and `T5_EV_AUDIO_VOLUME` when the system volume or mute changes; both carry `t5_ev_audio_t` (volume, muted, headphones). Bluetooth audio isn't possible: the radio is an ESP32-C6, which has Bluetooth LE only (no Classic Bluetooth, so no A2DP or HFP), and LE Audio (isochronous channels, LC3) isn't available on the C6 with ESP-IDF v6.1's controller and NimBLE host.
 
@@ -232,7 +232,7 @@ while (t5_app_running(app)) {
 }
 ```
 
-The active session is the one most recently opened or set to `T5_MEDIA_PLAYING`; commands go to it. Up to 4 sessions are open at once, and 8 commands are queued per session. No permission is needed. Audio keeps playing under standby and with the screen off, because an open output stream holds an audio wake lock. `apps/examples/music` is a complete player.
+The active session is the one most recently opened or set to `T5_MEDIA_PLAYING`; commands go to it. Up to 4 sessions are open at once, and 8 commands are queued per session. No permission is needed. Audio keeps playing under standby and with the screen off, because an open output stream holds an audio wake lock. [Music](https://github.com/tab5os/music) is a complete player.
 
 ## Rules
 

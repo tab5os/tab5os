@@ -89,7 +89,7 @@ Store the newest value under a mutex, and let `show_latest` read it. That keeps 
 s->tick = lv_timer_create(tick, 200, s);
 ```
 
-`tick` checks a mutex-protected "result ready" flag. Weather uses this. It's the simplest design when the result is big, and the 200 ms poll is cheap. Note that LVGL timers stop while the screen is off.
+`tick` checks a mutex-protected "result ready" flag. [Weather](https://github.com/tab5os/weather) uses this. It's the simplest design when the result is big, and the 200 ms poll is cheap. Note that LVGL timers stop while the screen is off.
 
 ### 3. `t5_ui_lock`: when you must
 
@@ -144,7 +144,7 @@ while (t5_app_running(app)) {           /* every loop */
 ```
 
 - **Wait in slices of about 100 ms,** not forever, so you notice the exit.
-- **Don't `free()` shared state in `on_destroy`** while a worker might still be running. Leave it: the OS frees the heap after the task is gone. Weather has a comment saying exactly this.
+- **Don't `free()` shared state in `on_destroy`** while a worker might still be running. Leave it: the OS frees the heap after the task is gone. [Weather](https://github.com/tab5os/weather) has a comment saying exactly this.
 - **Don't wait for a worker from the UI task.** A worker blocked in `t5_ui_lock` or `t5_ui_sync` while the UI task waits for it is a deadlock. The camera service had this bug.
 - A blocking `t5_http_*` or `t5_ws_*` call ends within about 50 ms if another task closes its handle.
 - `t5_port_close` isn't safe while another task is using that handle. Close it from the task that uses it.

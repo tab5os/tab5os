@@ -117,4 +117,4 @@ target_compile_options(airlog.elf PRIVATE -Werror)
 
 ## Next
 
-Read [App lifecycle](App-Lifecycle.md) and [Threading](Threading.md) before writing anything that does I/O, then take a recipe from the [Cookbook](Cookbook.md). The [example apps](../../apps/examples) are real ones: Weather is the fullest (networking, caching, navigation, rotation), Logger shows background wakes, and UVC Monitor shows a fast image pipeline.
+Read [App lifecycle](App-Lifecycle.md) and [Threading](Threading.md) before writing anything that does I/O, then take a recipe from the [Cookbook](Cookbook.md). The [example apps](../../apps/examples) are real ones: Logger shows background wakes, and UVC Monitor shows a fast image pipeline. [Weather](https://github.com/tab5os/weather) (networking, caching, navigation, rotation) and [Music](https://github.com/tab5os/music) (audio, media sessions, decoders in the app) are fuller apps in their own repos.
