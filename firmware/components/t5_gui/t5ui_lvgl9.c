@@ -21,6 +21,7 @@
 #include "t5_core/os.h"
 #include "t5_core/res.h"
 #include "t5_ui/t5_ui.h"   /* t5_ui_async, t5_ui_touch_get */
+#include "t5_gui/t5ui_sys.h"
 #include "t5ui_backend.h"
 
 #define O(o) ((lv_obj_t *)(o))
@@ -43,6 +44,7 @@ typedef struct {
     uint8_t grid_rows, grid_cols;
     uint16_t kind;
     int16_t elevation;
+    int16_t ext_click;
     bool helper_error;
 } node_t;
 
@@ -179,7 +181,10 @@ static const lv_align_t ALIGNS[] = {
 static const lv_flex_flow_t FLOWS[] = {
     [T5UI_ROW] = LV_FLEX_FLOW_ROW, [T5UI_COLUMN] = LV_FLEX_FLOW_COLUMN,
     [T5UI_ROW_WRAP] = LV_FLEX_FLOW_ROW_WRAP, [T5UI_COLUMN_WRAP] = LV_FLEX_FLOW_COLUMN_WRAP,
+    [T5UI_ROW_REVERSE] = LV_FLEX_FLOW_ROW_REVERSE, [T5UI_COLUMN_REVERSE] = LV_FLEX_FLOW_COLUMN_REVERSE,
 };
+static const lv_scroll_snap_t SNAPS[] = { LV_SCROLL_SNAP_NONE, LV_SCROLL_SNAP_START, LV_SCROLL_SNAP_END,
+                                          LV_SCROLL_SNAP_CENTER };
 static const lv_flex_align_t PLACES[] = {
     [T5UI_PLACE_START] = LV_FLEX_ALIGN_START,               [T5UI_PLACE_END] = LV_FLEX_ALIGN_END,
     [T5UI_PLACE_CENTER] = LV_FLEX_ALIGN_CENTER,             [T5UI_PLACE_SPACE_EVENLY] = LV_FLEX_ALIGN_SPACE_EVENLY,
@@ -281,6 +286,8 @@ static bool look(t5ui_prop_t p, lv_style_prop_t *sp, uint8_t *cv)
     M(T5UI_P_BG_OPA, LV_STYLE_BG_OPA, CV_OPA);
     M(T5UI_P_BG_GRAD_COLOR, LV_STYLE_BG_GRAD_COLOR, CV_COLOR);
     M(T5UI_P_BG_GRAD_DIR, LV_STYLE_BG_GRAD_DIR, CV_GRAD);
+    M(T5UI_P_BG_MAIN_STOP, LV_STYLE_BG_MAIN_STOP, CV_OPA);
+    M(T5UI_P_BG_GRAD_STOP, LV_STYLE_BG_GRAD_STOP, CV_OPA);
     M(T5UI_P_BORDER_WIDTH, LV_STYLE_BORDER_WIDTH, CV_PX);
     M(T5UI_P_BORDER_COLOR, LV_STYLE_BORDER_COLOR, CV_COLOR);
     M(T5UI_P_BORDER_OPA, LV_STYLE_BORDER_OPA, CV_OPA);
@@ -417,7 +424,7 @@ static bool look_get(lv_obj_t *o, t5ui_prop_t p, t5ui_val_t *out)
             v = T5UI_FLOW_NONE;
             break;
         }
-        for (v = T5UI_COLUMN_WRAP; v > T5UI_ROW && FLOWS[v] != (lv_flex_flow_t)sv.num; v--) {}
+        for (v = N(FLOWS) - 1; v > T5UI_ROW && FLOWS[v] != (lv_flex_flow_t)sv.num; v--) {}
         break;
     case CV_PLACE: v = BACK(PLACES, (lv_flex_align_t)v, 0); break;
     case CV_GRAD: v = BACK(GRADS, (lv_grad_dir_t)v, 0); break;
@@ -459,7 +466,7 @@ typedef struct {
     int32_t index;
 } item_t;
 
-static uint32_t s_code_back, s_code_bind, s_code_item;
+static uint32_t s_code_back, s_code_bind, s_code_item, s_code_item_long, s_code_anim_end;
 
 static void codes_init(void)
 {
@@ -467,6 +474,8 @@ static void codes_init(void)
     s_code_back = lv_event_register_id();
     s_code_bind = lv_event_register_id();
     s_code_item = lv_event_register_id();
+    s_code_item_long = lv_event_register_id();
+    s_code_anim_end = lv_event_register_id();
 }
 
 static lv_event_code_t code_of(t5ui_ev_t ev)
@@ -488,6 +497,18 @@ static lv_event_code_t code_of(t5ui_ev_t ev)
     case T5UI_EV_ITEM: return (lv_event_code_t)s_code_item;
     case T5UI_EV_READY: return LV_EVENT_READY;
     case T5UI_EV_CANCEL: return LV_EVENT_CANCEL;
+    case T5UI_EV_SHORT_CLICK: return LV_EVENT_SHORT_CLICKED;
+    case T5UI_EV_DOUBLE_CLICK: return LV_EVENT_DOUBLE_CLICKED;
+    case T5UI_EV_PRESSING: return LV_EVENT_PRESSING;
+    case T5UI_EV_PRESS_LOST: return LV_EVENT_PRESS_LOST;
+    case T5UI_EV_SCROLL_END: return LV_EVENT_SCROLL_END;
+    case T5UI_EV_KEY: return (lv_event_code_t)(LV_EVENT_KEY | LV_EVENT_PREPROCESS);   /* before the widget */
+    case T5UI_EV_INSERT: return LV_EVENT_INSERT;
+    case T5UI_EV_GESTURE: return LV_EVENT_GESTURE;
+    case T5UI_EV_ANIM_END: return (lv_event_code_t)s_code_anim_end;
+    case T5UI_EV_ITEM_LONG: return (lv_event_code_t)s_code_item_long;
+    case T5UI_EV_CHILD_CREATED: return LV_EVENT_CHILD_CREATED;
+    case T5UI_EV_DRAW_BEHIND: return LV_EVENT_DRAW_MAIN;
     default: return LV_EVENT_ALL;
     }
 }
@@ -502,7 +523,7 @@ static void tramp(lv_event_t *e)
     rec_t *r = lv_event_get_user_data(e);
     t5ui_event_t ev = { .e = e, .r = r };
     t5ui_paint_t paint;
-    if (r->kind == T5UI_EV_DRAW) {
+    if (r->kind == T5UI_EV_DRAW || r->kind == T5UI_EV_DRAW_BEHIND) {
         lv_area_t a;
         lv_obj_get_coords(lv_event_get_current_target_obj(e), &a);
         paint = (t5ui_paint_t){ lv_event_get_layer(e), a.x1, a.y1 };
@@ -512,6 +533,15 @@ static void tramp(lv_event_t *e)
     if (r->kind == T5UI_EV_DELETE) free(r);    /* its own record goes last */
 }
 
+/* Events a text field's text area has. */
+static bool field_event(t5ui_ev_t ev)
+{
+    return ev == T5UI_EV_VALUE || ev == T5UI_EV_FOCUS || ev == T5UI_EV_DEFOCUS || ev == T5UI_EV_READY ||
+           ev == T5UI_EV_CANCEL || ev == T5UI_EV_KEY || ev == T5UI_EV_INSERT;
+}
+
+_Static_assert(T5UI_CHART_NONE == LV_CHART_POINT_NONE, "no-value points are LVGL's");
+
 t5_err_t t5ui_be_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *user)
 {
     codes_init();
@@ -519,10 +549,7 @@ t5_err_t t5ui_be_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *use
     t5ui_kind_t k = kind_of(o);
     lv_obj_t *on = o;
     /* A text field's events happen on its text area. */
-    if (is_field(k) && (ev == T5UI_EV_VALUE || ev == T5UI_EV_FOCUS || ev == T5UI_EV_DEFOCUS ||
-                        ev == T5UI_EV_READY || ev == T5UI_EV_CANCEL)) {
-        on = md_textfield_ta(o);
-    }
+    if (is_field(k) && field_event(ev)) on = md_textfield_ta(o);
     if (k == T5UI_MD_ROW && ev == T5UI_EV_CLICK && !lv_obj_is_clickable(o)) {
         md_row_set_clickable(o, NULL, NULL);   /* clickable with a ripple */
     }
@@ -531,8 +558,35 @@ t5_err_t t5ui_be_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *use
     *r = (rec_t){ cb, user, o, ev };
     lv_obj_add_event_cb(on, tramp, code_of(ev), r);
     if (ev != T5UI_EV_DELETE) lv_obj_add_event_cb(on, free_user, LV_EVENT_DELETE, r);
-    if (ev == T5UI_EV_DRAW) lv_obj_invalidate(o);
+    if (ev == T5UI_EV_DRAW || ev == T5UI_EV_DRAW_BEHIND) lv_obj_invalidate(o);
     return T5_OK;
+}
+
+void t5ui_be_off(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *user)
+{
+    lv_obj_t *o = O(obj);
+    lv_obj_t *on = is_field(kind_of(o)) && field_event(ev) ? md_textfield_ta(o) : o;
+    bool again = true;
+    while (again) {
+        again = false;
+        for (uint32_t i = 0; i < lv_obj_get_event_count(on); i++) {
+            lv_event_dsc_t *d = lv_obj_get_event_dsc(on, i);
+            rec_t *r = lv_event_dsc_get_user_data(d);
+            if (lv_event_dsc_get_cb(d) != tramp || r->obj != o || r->kind != ev || r->cb != cb) continue;
+            if (user && r->user != user) continue;
+            lv_obj_remove_event_dsc(on, d);
+            for (uint32_t j = 0; j < lv_obj_get_event_count(on); j++) {
+                lv_event_dsc_t *f = lv_obj_get_event_dsc(on, j);
+                if (lv_event_dsc_get_cb(f) == free_user && lv_event_dsc_get_user_data(f) == r) {
+                    lv_obj_remove_event_dsc(on, f);
+                    break;
+                }
+            }
+            free(r);
+            again = true;
+            break;
+        }
+    }
 }
 
 t5ui_obj_t *t5ui_event_obj(t5ui_event_t *e)
@@ -540,10 +594,19 @@ t5ui_obj_t *t5ui_event_obj(t5ui_event_t *e)
     return e ? H(e->r->obj) : NULL;
 }
 
+static bool indexed(t5ui_ev_t k)
+{
+    return k == T5UI_EV_BIND || k == T5UI_EV_ITEM || k == T5UI_EV_ITEM_LONG || k == T5UI_EV_ANIM_END;
+}
+
 t5ui_obj_t *t5ui_event_target(t5ui_event_t *e)
 {
     if (!e) return NULL;
-    if (e->r->kind == T5UI_EV_BIND || e->r->kind == T5UI_EV_ITEM) {
+    if (e->r->kind == T5UI_EV_CHILD_CREATED) {
+        lv_obj_t *child = lv_event_get_param(e->e);
+        return H(child ? child : lv_event_get_target_obj(e->e));
+    }
+    if (indexed(e->r->kind)) {
         item_t *it = lv_event_get_param(e->e);
         return H(it && it->row ? it->row : e->r->obj);
     }
@@ -562,7 +625,7 @@ t5ui_ev_t t5ui_event_kind(t5ui_event_t *e)
 
 int32_t t5ui_event_index(t5ui_event_t *e)
 {
-    if (!e || (e->r->kind != T5UI_EV_BIND && e->r->kind != T5UI_EV_ITEM)) return -1;
+    if (!e || !indexed(e->r->kind)) return -1;
     item_t *it = lv_event_get_param(e->e);
     return it ? it->index : -1;
 }
@@ -581,6 +644,42 @@ bool t5ui_event_point(t5ui_event_t *e, int32_t *x, int32_t *y)
 t5ui_paint_t *t5ui_event_paint(t5ui_event_t *e)
 {
     return e ? e->paint : NULL;
+}
+
+uint32_t t5ui_event_key(t5ui_event_t *e)
+{
+    return e && e->r->kind == T5UI_EV_KEY ? lv_event_get_key(e->e) : 0;
+}
+
+_Static_assert(T5UI_SWIPE_LEFT == LV_DIR_LEFT && T5UI_SWIPE_RIGHT == LV_DIR_RIGHT && T5UI_SWIPE_UP == LV_DIR_TOP &&
+               T5UI_SWIPE_DOWN == LV_DIR_BOTTOM, "swipe bits are LVGL's directions");
+_Static_assert(T5UI_KEY_UP == LV_KEY_UP && T5UI_KEY_DOWN == LV_KEY_DOWN && T5UI_KEY_RIGHT == LV_KEY_RIGHT &&
+               T5UI_KEY_LEFT == LV_KEY_LEFT && T5UI_KEY_ESC == LV_KEY_ESC && T5UI_KEY_DEL == LV_KEY_DEL &&
+               T5UI_KEY_BACKSPACE == LV_KEY_BACKSPACE && T5UI_KEY_ENTER == LV_KEY_ENTER &&
+               T5UI_KEY_NEXT == LV_KEY_NEXT && T5UI_KEY_PREV == LV_KEY_PREV && T5UI_KEY_HOME == LV_KEY_HOME &&
+               T5UI_KEY_END == LV_KEY_END, "key codes are LVGL's");
+
+uint32_t t5ui_event_dir(t5ui_event_t *e)
+{
+    lv_indev_t *in = lv_indev_active();
+    if (!e || e->r->kind != T5UI_EV_GESTURE || !in) return 0;
+    return (uint32_t)lv_indev_get_gesture_dir(in) & (T5UI_SWIPE_LEFT | T5UI_SWIPE_RIGHT | T5UI_SWIPE_UP | T5UI_SWIPE_DOWN);
+}
+
+const char *t5ui_event_text(t5ui_event_t *e)
+{
+    return e && e->r->kind == T5UI_EV_INSERT ? lv_event_get_param(e->e) : NULL;
+}
+
+void t5ui_event_set_text(t5ui_event_t *e, const char *s)
+{
+    if (!e || e->r->kind != T5UI_EV_INSERT) return;
+    lv_textarea_set_insert_replace(lv_event_get_current_target_obj(e->e), s ? s : "");
+}
+
+void t5ui_event_stop(t5ui_event_t *e)
+{
+    if (e) lv_event_stop_processing(e->e);
 }
 
 /* md's back arrows: T5UI_EV_BACK on the app bar or page that has it. */
@@ -613,6 +712,13 @@ static void list_click(uint32_t index, void *user)
     node_t *n = user;
     item_t it = { NULL, (int32_t)index };
     lv_obj_send_event(n->obj, (lv_event_code_t)s_code_item, &it);
+}
+
+static void list_long(uint32_t index, void *user)
+{
+    node_t *n = user;
+    item_t it = { NULL, (int32_t)index };
+    lv_obj_send_event(n->obj, (lv_event_code_t)s_code_item_long, &it);
 }
 
 /* ---- the tree --------------------------------------------------------------------------------- */
@@ -701,7 +807,12 @@ static lv_obj_t *make(lv_obj_t *parent, t5ui_kind_t kind, node_t *n)
     case T5UI_MD_TABS: return md_tabs_create(parent);
     case T5UI_MD_TAB: return md_tabs_add(parent, "");
     case T5UI_MD_PAGE: return md_page_create(parent, "", back_clicked, NULL, &n->bar);
-    case T5UI_MD_LIST: return md_list_create(parent, 0, MD_LIST_ROW_1_DP, list_bind, list_click, n);
+    case T5UI_MD_LIST: {
+        lv_obj_t *l = md_list_create(parent, 0, MD_LIST_ROW_1_DP, list_bind, list_click, n);
+        if (l) md_list_set_long_press(l, list_long);
+        return l;
+    }
+    case T5UI_MD_ROW_TRAILING: return md_row_trailing_text(parent, "");
     default: return NULL;
     }
 }
@@ -718,7 +829,7 @@ t5ui_obj_t *t5ui_be_create(t5ui_obj_t *parent, t5ui_kind_t kind)
         else if (!is_appbar(pk)) return NULL;
     } else if (kind == T5UI_MD_TAB) {
         if (pk != T5UI_MD_TABS) return NULL;
-    } else if (kind == T5UI_MD_ROW_SWITCH) {
+    } else if (kind == T5UI_MD_ROW_SWITCH || kind == T5UI_MD_ROW_TRAILING) {
         if (pk != T5UI_MD_ROW) return NULL;
     } else if (pk == T5UI_MD_TABS || pk == T5UI_MD_LIST) {
         return NULL;                           /* content goes in a tab; list rows are bound */
@@ -1050,6 +1161,42 @@ static t5_err_t set_widget(lv_obj_t *o, node_t *n, t5ui_kind_t k, t5ui_prop_t p,
     case T5UI_P_DISABLED: lv_obj_set_state(o, LV_STATE_DISABLED, v); return T5_OK;
     case T5UI_P_CHECKABLE: lv_obj_set_checkable(o, v); return T5_OK;
     case T5UI_P_BUBBLE: lv_obj_set_event_bubble(o, v); return T5_OK;
+    case T5UI_P_SCROLL_SNAP_X:
+    case T5UI_P_SCROLL_SNAP_Y:
+        if (!IN(v, SNAPS)) return T5_ERR_INVALID_ARG;
+        if (p == T5UI_P_SCROLL_SNAP_X) lv_obj_set_scroll_snap_x(o, SNAPS[v]);
+        else lv_obj_set_scroll_snap_y(o, SNAPS[v]);
+        return T5_OK;
+    case T5UI_P_SCROLL_ONE: lv_obj_set_scroll_one(o, v); return T5_OK;
+    case T5UI_P_SCROLL_ELASTIC: lv_obj_set_scroll_elastic(o, v); return T5_OK;
+    case T5UI_P_SCROLL_CHAIN: lv_obj_set_scroll_chain(o, v); return T5_OK;
+    case T5UI_P_SNAPPABLE: lv_obj_set_snappable(o, v); return T5_OK;
+    case T5UI_P_EXT_CLICK:
+        if (!n && !(n = node_need(o))) return T5_ERR_NO_MEM;
+        n->ext_click = (int16_t)clamp(v, 0, 1000);
+        lv_obj_set_ext_click_area(o, n->ext_click);
+        return T5_OK;
+    case T5UI_P_STATE: {
+        static const struct { uint32_t t; lv_state_t l; } S[] = {
+            { T5UI_STATE_CHECKED, LV_STATE_CHECKED }, { T5UI_STATE_FOCUSED, LV_STATE_FOCUSED },
+            { T5UI_STATE_PRESSED, LV_STATE_PRESSED }, { T5UI_STATE_DISABLED, LV_STATE_DISABLED },
+            { T5UI_STATE_EDITED, LV_STATE_EDITED },
+        };
+        if ((uint32_t)v & ~(uint32_t)T5UI_STATE_ALL) return T5_ERR_INVALID_ARG;
+        for (size_t i = 0; i < sizeof S / sizeof S[0]; i++) {
+            bool on = (uint32_t)v & S[i].t;
+            if (S[i].t == T5UI_STATE_CHECKED && is_chip(k)) md_chip_set_selected(o, on);
+            else lv_obj_set_state(o, S[i].l, on);
+        }
+        return T5_OK;
+    }
+    case T5UI_P_RIPPLE:
+        if (v) md_ripple_attach(o);
+        return T5_OK;
+    case T5UI_P_CURSOR:
+        if (!ta) return T5_ERR_NOT_SUPPORTED;
+        lv_textarea_set_cursor_pos(ta, v);
+        return T5_OK;
     case T5UI_P_VALUE:
         if (IS(o, lv_bar_class)) lv_bar_set_value(o, v, LV_ANIM_OFF);   /* sliders too */
         else if (IS(o, lv_arc_class)) lv_arc_set_value(o, v);
@@ -1209,6 +1356,24 @@ static bool get_widget(lv_obj_t *o, node_t *n, t5ui_kind_t k, t5ui_prop_t p, t5u
     case T5UI_P_DISABLED: v = lv_obj_has_state(o, LV_STATE_DISABLED); break;
     case T5UI_P_CHECKABLE: v = lv_obj_is_checkable(o); break;
     case T5UI_P_BUBBLE: v = lv_obj_is_event_bubble(o); break;
+    case T5UI_P_SCROLL_SNAP_X: v = BACK(SNAPS, lv_obj_get_scroll_snap_x(o), 0); break;
+    case T5UI_P_SCROLL_SNAP_Y: v = BACK(SNAPS, lv_obj_get_scroll_snap_y(o), 0); break;
+    case T5UI_P_SCROLL_ONE: v = lv_obj_is_scroll_one(o); break;
+    case T5UI_P_SCROLL_ELASTIC: v = lv_obj_is_scroll_elastic(o); break;
+    case T5UI_P_SCROLL_CHAIN: v = lv_obj_is_scroll_chain_hor(o) || lv_obj_is_scroll_chain_ver(o); break;
+    case T5UI_P_SNAPPABLE: v = lv_obj_is_snappable(o); break;
+    case T5UI_P_EXT_CLICK: v = n ? n->ext_click : 0; break;
+    case T5UI_P_STATE: {
+        lv_state_t st = lv_obj_get_state(o);
+        v = ((st & LV_STATE_CHECKED) ? T5UI_STATE_CHECKED : 0) | ((st & LV_STATE_FOCUSED) ? T5UI_STATE_FOCUSED : 0) |
+            ((st & LV_STATE_PRESSED) ? T5UI_STATE_PRESSED : 0) | ((st & LV_STATE_DISABLED) ? T5UI_STATE_DISABLED : 0) |
+            ((st & LV_STATE_EDITED) ? T5UI_STATE_EDITED : 0);
+        break;
+    }
+    case T5UI_P_CURSOR:
+        if (!ta) return false;
+        v = (int32_t)lv_textarea_get_cursor_pos(ta);
+        break;
     case T5UI_P_VALUE:
         if (IS(o, lv_bar_class)) v = lv_bar_get_value(o);
         else if (IS(o, lv_arc_class)) v = lv_arc_get_value(o);
@@ -1279,6 +1444,9 @@ static bool get_widget(lv_obj_t *o, node_t *n, t5ui_kind_t k, t5ui_prop_t p, t5u
         if (!ta) return false;
         v = (int32_t)lv_textarea_get_max_length(ta);
         break;
+    case T5UI_P_CONTENT:
+        out->o = H(k == T5UI_MD_PAGE ? md_page_body(o) : o);
+        return true;
     case T5UI_P_TARGET: {
         if (!IS(o, lv_keyboard_class)) return false;
         lv_obj_t *t = lv_keyboard_get_textarea(o);
@@ -1413,12 +1581,20 @@ static void anim_exec(void *var, int32_t v)
     set_prop(r->obj, r->prop, 0, &(t5ui_val_t){ .type = T5UI_T_INT, .i = v });
 }
 
+static void anim_done(lv_anim_t *a)
+{
+    anim_rec_t *r = a->var;
+    item_t it = { NULL, (int32_t)r->prop };
+    lv_obj_send_event(r->obj, (lv_event_code_t)s_code_anim_end, &it);
+}
+
 t5_err_t t5ui_be_animate(t5ui_obj_t *obj, t5ui_prop_t p, int32_t from, int32_t to, uint32_t ms, uint32_t delay_ms,
                          t5ui_ease_t ease)
 {
     static const lv_anim_path_cb_t PATHS[] = { lv_anim_path_linear, lv_anim_path_ease_in, lv_anim_path_ease_out,
                                                lv_anim_path_ease_in_out, lv_anim_path_overshoot,
                                                lv_anim_path_bounce };
+    codes_init();
     lv_obj_t *o = O(obj);
     /* Check it applies before animating it. */
     t5_err_t err = set_prop(o, p, 0, &(t5ui_val_t){ .type = T5UI_T_INT, .i = from });
@@ -1441,7 +1617,10 @@ t5_err_t t5ui_be_animate(t5ui_obj_t *obj, t5ui_prop_t p, int32_t from, int32_t t
     lv_anim_set_values(&a, from, to);
     lv_anim_set_duration(&a, ms);
     lv_anim_set_delay(&a, delay_ms);
-    lv_anim_set_path_cb(&a, PATHS[ease]);
+    if (ease <= T5UI_EASE_BOUNCE) lv_anim_set_path_cb(&a, PATHS[ease]);
+    else md_anim_set_curve(&a, ease == T5UI_EASE_STANDARD ? MD_CURVE_STANDARD
+                               : ease == T5UI_EASE_DECELERATE ? MD_CURVE_DECELERATION : MD_CURVE_ACCELERATION);
+    lv_anim_set_completed_cb(&a, anim_done);
     return lv_anim_start(&a) ? T5_OK : T5_ERR_NO_MEM;
 }
 
@@ -1469,6 +1648,9 @@ int32_t t5ui_be_cmd(t5ui_obj_t *obj, t5ui_cmd_t cmd, int32_t a, int32_t b, int32
         return lv_chart_add_series(o, col((t5ui_color_t)a), LV_CHART_AXIS_PRIMARY_Y) ? count : T5_ERR_NO_MEM;
     }
     case T5UI_CMD_CHART_PUSH:
+    case T5UI_CMD_CHART_SET_ALL:
+    case T5UI_CMD_CHART_COLOR:
+    case T5UI_CMD_CHART_X_START:
     case T5UI_CMD_CHART_SET:
     case T5UI_CMD_CHART_CLEAR: {
         if (!IS(o, lv_chart_class)) return T5_ERR_NOT_SUPPORTED;
@@ -1476,6 +1658,13 @@ int32_t t5ui_be_cmd(t5ui_obj_t *obj, t5ui_cmd_t cmd, int32_t a, int32_t b, int32
         if (!s) return T5_ERR_INVALID_ARG;
         if (cmd == T5UI_CMD_CHART_PUSH) {
             lv_chart_set_next_value(o, s, b);
+        } else if (cmd == T5UI_CMD_CHART_SET_ALL) {
+            lv_chart_set_all_values(o, s, b);
+        } else if (cmd == T5UI_CMD_CHART_COLOR) {
+            lv_chart_set_series_color(o, s, col((t5ui_color_t)b));
+        } else if (cmd == T5UI_CMD_CHART_X_START) {
+            if (b < 0 || (uint32_t)b >= lv_chart_get_point_count(o)) return T5_ERR_INVALID_ARG;
+            lv_chart_set_x_start_point(o, s, (uint32_t)b);
         } else if (cmd == T5UI_CMD_CHART_SET) {
             if (b < 0 || (uint32_t)b >= lv_chart_get_point_count(o)) return T5_ERR_INVALID_ARG;
             lv_chart_set_series_value_by_id(o, s, (uint32_t)b, c);
@@ -1483,6 +1672,7 @@ int32_t t5ui_be_cmd(t5ui_obj_t *obj, t5ui_cmd_t cmd, int32_t a, int32_t b, int32
         } else {
             lv_chart_set_all_values(o, s, LV_CHART_POINT_NONE);
         }
+        lv_chart_refresh(o);
         return T5_OK;
     }
     case T5UI_CMD_TABLE_SET_CELL:
@@ -1512,8 +1702,30 @@ int32_t t5ui_be_cmd(t5ui_obj_t *obj, t5ui_cmd_t cmd, int32_t a, int32_t b, int32
         return T5_OK;
     case T5UI_CMD_FOCUS: {
         lv_obj_t *f = ta ? ta : o;
-        if (!lv_obj_get_group(f)) return T5_ERR_NOT_SUPPORTED;
+        lv_group_t *g = lv_obj_get_group(f);
+        if (!g) {
+            g = lv_group_get_default();
+            if (!g) return T5_ERR_NOT_SUPPORTED;
+            lv_group_add_obj(g, f);
+        }
         lv_group_focus_obj(f);
+        lv_group_set_editing(g, a != 0);
+        return T5_OK;
+    }
+    case T5UI_CMD_IGNORE_PRESS: {
+        lv_indev_t *in = lv_indev_active();
+        if (in) lv_indev_wait_release(in);
+        return T5_OK;
+    }
+    case T5UI_CMD_DELETE_LATER: lv_obj_delete_async(o); return T5_OK;
+    case T5UI_CMD_SEND: {
+        if (a < T5UI_EV_CLICK || a > T5UI_EV_DRAW_BEHIND || a == T5UI_EV_DELETE || a == T5UI_EV_DRAW ||
+            a == T5UI_EV_DRAW_BEHIND) {
+            return T5_ERR_INVALID_ARG;
+        }
+        codes_init();
+        lv_obj_t *to = is_field(k) && field_event((t5ui_ev_t)a) ? ta : o;
+        lv_obj_send_event(to, (lv_event_code_t)(code_of((t5ui_ev_t)a) & ~LV_EVENT_PREPROCESS), NULL);
         return T5_OK;
     }
     default: return T5_ERR_NOT_SUPPORTED;
@@ -1540,6 +1752,17 @@ uint32_t t5ui_ticks_ms(void)
 t5_err_t t5ui_async(t5ui_fn_t fn, void *arg)
 {
     return fn ? t5_ui_async(fn, arg) : T5_ERR_INVALID_ARG;
+}
+
+t5_err_t t5ui_later(t5ui_fn_t fn, void *arg)
+{
+    if (!fn) return T5_ERR_INVALID_ARG;
+    return lv_async_call(fn, arg) == LV_RESULT_OK ? T5_OK : T5_ERR_NO_MEM;
+}
+
+void t5ui_later_cancel(t5ui_fn_t fn, void *arg)
+{
+    if (fn) lv_async_call_cancel(fn, arg);
 }
 
 _Static_assert(sizeof(t5ui_touch_t) == sizeof(t5_ui_touch_t) && T5UI_TOUCH_MAX == T5_UI_TOUCH_MAX,
@@ -1593,6 +1816,91 @@ t5ui_color_t t5ui_mix(t5ui_color_t fg, t5ui_color_t bg, t5ui_opa_t opa)
     return md_mix(fg, bg, opa);
 }
 
+t5ui_color_t t5ui_theme_surface(int32_t elevation_dp)
+{
+    return md_surface_at(md_scheme(), (int)elevation_dp);
+}
+
+_Static_assert(T5UI_ACCENT_COUNT == MD_ACCENT_COUNT && (int)T5UI_ACCENT_RED == (int)MD_ACCENT_RED,
+               "t5ui accents are md's");
+
+t5ui_color_t t5ui_accent_color(t5ui_accent_t a, t5ui_tone_t tone)
+{
+    if ((unsigned)a >= T5UI_ACCENT_COUNT) a = T5UI_ACCENT_PURPLE;
+    const md_accent_def_t *d = md_accent((md_accent_t)a);
+    switch (tone) {
+    case T5UI_TONE_LIGHT_VARIANT: return d->light_variant;
+    case T5UI_TONE_DARK: return d->dark;
+    case T5UI_TONE_DARK_VARIANT: return d->dark_variant;
+    case T5UI_TONE_ON_LIGHT: return d->on_light;
+    case T5UI_TONE_ON_DARK: return d->on_dark;
+    default: return d->light;
+    }
+}
+
+const char *t5ui_accent_name(t5ui_accent_t a)
+{
+    return (unsigned)a < T5UI_ACCENT_COUNT ? md_accent((md_accent_t)a)->name : "";
+}
+
+t5ui_accent_t t5ui_theme_accent(void)
+{
+    return (t5ui_accent_t)md_get_accent();
+}
+
+/* ---- the OS's own (t5ui_sys.h) ------------------------------------------------------- */
+t5ui_obj_t *t5ui_sys_layer(t5ui_layer_t layer)
+{
+    switch (layer) {
+    case T5UI_LAYER_TOP: return H(lv_layer_top());
+    case T5UI_LAYER_BOTTOM: return H(lv_layer_bottom());
+    case T5UI_LAYER_SCREEN: return H(lv_screen_active());
+    default: return NULL;
+    }
+}
+
+void t5ui_sys_set_accent(t5ui_accent_t primary, t5ui_accent_t secondary)
+{
+    if ((unsigned)primary < T5UI_ACCENT_COUNT && (unsigned)secondary < T5UI_ACCENT_COUNT) {
+        md_set_accent((md_accent_t)primary, (md_accent_t)secondary);
+    }
+}
+
+t5_err_t t5ui_sys_snapshot(t5ui_obj_t *obj, t5ui_pixels_t *out)
+{
+    if (!obj || !out) return T5_ERR_INVALID_ARG;
+    lv_draw_buf_t *b = lv_snapshot_take(O(obj), LV_COLOR_FORMAT_RGB565);
+    if (!b) return T5_ERR_NO_MEM;
+    uint32_t w = b->header.w, h = b->header.h, row = w * 2;
+    uint8_t *px = malloc((size_t)row * h);
+    if (!px) {
+        lv_draw_buf_destroy(b);
+        return T5_ERR_NO_MEM;
+    }
+    for (uint32_t y = 0; y < h; y++) memcpy(px + y * row, b->data + y * b->header.stride, row);
+    lv_draw_buf_destroy(b);
+    *out = (t5ui_pixels_t){ .size = sizeof *out, .w = (uint16_t)w, .h = (uint16_t)h, .stride = row,
+                            .format = T5UI_PX_RGB565, .data = px };
+    return T5_OK;
+}
+
+void t5ui_sys_snapshot_free(t5ui_pixels_t *px)
+{
+    if (!px) return;
+    free((void *)px->data);
+    px->data = NULL;
+}
+
+t5ui_obj_t *t5ui_sys_obj(void *native)
+{
+    return H(native);
+}
+
+void *t5ui_sys_native(t5ui_obj_t *obj)
+{
+    return O(obj);
+}
+
 /* ---- timers -------------------------------------------------------------------------- */
 struct t5ui_timer {
     lv_timer_t *t;
@@ -1629,6 +1937,11 @@ t5ui_timer_t *t5ui_timer(uint32_t period_ms, t5ui_timer_cb_t cb, void *user)
 void t5ui_timer_period(t5ui_timer_t *t, uint32_t period_ms)
 {
     if (t) lv_timer_set_period(t->t, period_ms);
+}
+
+void t5ui_timer_reset(t5ui_timer_t *t)
+{
+    if (t) lv_timer_reset(t->t);
 }
 
 void t5ui_timer_delete(t5ui_timer_t *t)

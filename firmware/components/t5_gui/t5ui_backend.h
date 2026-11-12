@@ -56,6 +56,7 @@ t5_err_t t5ui_be_animate(t5ui_obj_t *obj, t5ui_prop_t p, int32_t from, int32_t t
                          t5ui_ease_t ease);
 /* ev is a known event; cb isn't NULL. */
 t5_err_t t5ui_be_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *user);
+void t5ui_be_off(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *user);
 /* cmd is a known command. */
 int32_t t5ui_be_cmd(t5ui_obj_t *obj, t5ui_cmd_t cmd, int32_t a, int32_t b, int32_t c, const char *text);
 /* px is complete: a known format, a size, data. */

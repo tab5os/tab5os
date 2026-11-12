@@ -103,6 +103,14 @@ t5_err_t t5ui_be_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *use
     return T5_OK;
 }
 
+void t5ui_be_off(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *user)
+{
+    (void)obj;
+    (void)ev;
+    (void)cb;
+    (void)user;
+}
+
 int32_t t5ui_be_cmd(t5ui_obj_t *obj, t5ui_cmd_t cmd, int32_t a, int32_t b, int32_t c, const char *text)
 {
     (void)obj;
@@ -247,7 +255,7 @@ static void test_create(void)
     TEST_ASSERT_NULL(t5ui_create(OBJ, (t5ui_kind_t)0));
     TEST_ASSERT_NULL(t5ui_create(OBJ, (t5ui_kind_t)20));
     TEST_ASSERT_NULL(t5ui_create(OBJ, (t5ui_kind_t)99));
-    TEST_ASSERT_NULL(t5ui_create(OBJ, (t5ui_kind_t)127));
+    TEST_ASSERT_NULL(t5ui_create(OBJ, (t5ui_kind_t)128));
     TEST_ASSERT_NULL(t5ui_create(NULL, T5UI_BOX));
     TEST_ASSERT_EQUAL(2, be.creates);
 }
@@ -267,12 +275,12 @@ static void test_styles_anims_events(void)
     TEST_ASSERT_EQUAL(1, be.anims);
 
     TEST_ASSERT_EQUAL(T5_OK, t5ui_on(OBJ, T5UI_EV_CLICK, cb, NULL));
-    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5ui_on(OBJ, (t5ui_ev_t)17, cb, NULL));
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5ui_on(OBJ, (t5ui_ev_t)29, cb, NULL));
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5ui_on(OBJ, T5UI_EV_CLICK, NULL, NULL));
     TEST_ASSERT_EQUAL(1, be.ons);
 
     TEST_ASSERT_EQUAL(7, t5ui_cmd(OBJ, T5UI_CMD_SCROLL_TO, 7, 0, 0, NULL));
-    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5ui_cmd(OBJ, (t5ui_cmd_t)0, 0, 0, 0, NULL));
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5ui_cmd(OBJ, (t5ui_cmd_t)20, 0, 0, 0, NULL));
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5ui_cmd(NULL, T5UI_CMD_FOCUS, 0, 0, 0, NULL));
     TEST_ASSERT_EQUAL(1, be.cmds);
 }
