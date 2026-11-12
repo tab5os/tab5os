@@ -135,6 +135,9 @@ t5_err_t t5_ui_overlay_show(const uint16_t *rgb565, int32_t w, int32_t h, int32_
 t5_err_t t5_ui_overlay_restore(void);
 /* The last touch, in logical coordinates (works while the UI task is stuck). */
 bool t5_ui_touch_peek(int32_t *x, int32_t *y);
+/* Every finger down now, up to max, in logical coordinates: LVGL sees only
+ * the first (pinch gestures read the rest here). Returns how many. */
+int t5_ui_touch_points(int32_t *x, int32_t *y, int max);
 
 /* ---- surviving app faults (t5_core/fault.h) ------------------------------- */
 /* The UI task runs each loop iteration under a recovery point. When app

@@ -612,6 +612,29 @@ File picker (`ui tap` and `ui swipe` on the device): Cancel, close button, Back 
 
 Seen and not explained: `net reset` while the device was in Sleep left the radio at "starting" until a reboot. Not run: USB class drivers with a device attached on PSRAM stacks.
 
+## Video planes, Motion JPEG and the player — 2026-11-10
+
+Unit A, 360 MHz. The preview, the player and the photo viewer now show their pictures as video planes (`t5_core/plane.h`, `t5_ui/plane.h`): the producer posts where its frame is, and the display pipeline scales, converts and turns it into the framebuffer in one PPA pass, with LVGL redrawing only what lies over it.
+
+| Measured | Result |
+| --- | --- |
+| PPA, 1600x900 frame to the preview's size | ~80 ms, YUV420 or RGB565, scaled down or not, turned or not: the time goes with the pixels read |
+| The same, every other row (RGB565, preview under ~60% of the frame's height) | ~40 ms |
+| PPA, 1280x720 RGB565 turned into the framebuffer | ~51 ms |
+| Camera app preview (1600x900 frames), portrait and landscape | **15 fps** (11 before). Capture stays at 30 |
+| Recording, `.avi` from the RGB565 video mode, 15 s | **453 frames in 15.0 s (30 fps), 0 repeats**, 24.7 MB (~1.65 MB/s at quality 70), JPEG encode max 24 ms, write buffer peak 692 KB of 4 MB |
+| The recording, checked on a Mac | The same container from `avi.c` with JPEG frames: ffprobe reads MJPEG at the right rate and length, ffmpeg decodes it, empty chunks come out as repeats |
+| Playing it back, full screen 1280x720 | **19 fps** with the controls hidden (one 51 ms pass a frame), ~12 fps with them showing; the rest are skipped, so it keeps time |
+
+### Problems found and fixed
+
+- **Converting into a buffer, then copying that to the screen, was slower than before** (7.5 fps): two PPA passes a frame, and the PPA is one engine. The plane now carries the producer's own buffer and its crop, scale and turn, so a frame is one pass. The camera keeps the frame until the plane releases it, at most two lent.
+- **The PPA's YUV420 input costs as much as reading RGB565 at 1600x900**, and the PPA turns for free. The system Camera now captures RGB565 from the ISP, which also skips the PPA pass before the JPEG encoder for stills and MJPEG. H.264 needs YUV420, so `t5_camera_open` (apps) still captures that.
+- **Scaling down first, then turning the smaller frame, was slower** (8 fps): the scaling pass still read the whole frame. Reading every other row instead (the frame as a picture twice as wide and half as tall) halved it.
+- **A frame with no new picture redrew the whole plane** when something on screen changed under it, which wiped what lay over it (the photo viewer's back button). Now only a new frame goes into the framebuffer; LVGL takes the pixels under its own areas from the image's copy.
+- **A transparent object counted as lying over the picture.** The standby screen stays on the top layer at zero opacity after it leaves, and made every frame a full redraw after a rotation. Objects LVGL doesn't draw are skipped.
+- **The player paused itself on its first frame**: during the app's opening animation its screen isn't the active one, which looked like going to the background. It now pauses after a second away.
+
 ## Still to answer
 
 | Item | Needs | Status |

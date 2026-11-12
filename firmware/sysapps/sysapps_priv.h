@@ -62,11 +62,38 @@ lv_obj_t *sa_button_row(lv_obj_t *parent);                /* a row for buttons, 
 
 /* Full-screen photo (.jpg) viewer over an app's screen (photo.c). One at
  * a time; on_close runs when it is closed (by its close button or
- * sa_photo_close). Apps close it in on_destroy. */
+ * sa_photo_close). Apps close it in on_destroy. Pinch, double tap or
+ * drag to zoom and pan. */
 bool sa_photo_can_open(const char *path);
 bool sa_photo_open(lv_obj_t *screen, const char *path, void (*on_close)(void));
 bool sa_photo_is_open(void);
 void sa_photo_close(void);
+
+/* Full-screen video player (video.c), the same way: Motion JPEG in AVI,
+ * with PCM sound if it has any. */
+bool sa_video_can_open(const char *path);
+bool sa_video_open(lv_obj_t *screen, const char *path, void (*on_close)(void));
+bool sa_video_is_open(void);
+void sa_video_close(void);
+
+/* Case-insensitive suffix match. */
+bool sa_ends_with(const char *s, const char *suffix);
+
+/* PPA work for the viewers (ppa.c), blocking. Client 0 for the UI task,
+ * 1 for the video player's task. Pictures are RGB565 in PSRAM. */
+#define SA_PPA_CLIENTS 2
+typedef struct {
+    void *px;
+    int w, h;
+    size_t bytes;
+} sa_pic_t;
+/* n pixels at k/16, as the PPA rounds them. */
+int sa_ppa_scaled(int n, int k);
+/* The block (bx, by, bw, bh) of src, scaled by k/16, into dst at (ox, oy). */
+t5_err_t sa_ppa_scale(int client, const sa_pic_t *src, int bx, int by, int bw, int bh, int k, const sa_pic_t *dst,
+                      int ox, int oy);
+/* Black. */
+t5_err_t sa_ppa_fill(int client, const sa_pic_t *dst, int x, int y, int w, int h);
 
 /* The apps */
 #include "t5_app/apps.h"
@@ -79,6 +106,7 @@ extern const t5_builtin_app_t sysapp_ports;
 extern const t5_builtin_app_t sysapp_camera;
 extern const t5_builtin_app_t sysapp_terminal;
 extern const t5_builtin_app_t sysapp_editor;
+extern const t5_builtin_app_t sysapp_videos;
 /* The ports a script run in Terminal or Editor may open: those in
  * t5_ports/ports_table.c except mbus.debug and the single M5-Bus GPIOs. A
  * hand copy of the table's names: keep the two in step. */

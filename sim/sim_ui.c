@@ -145,4 +145,5 @@ uint32_t t5_ui_stalled_ms(void) { return 0; }
 t5_err_t t5_ui_overlay_show(const uint16_t *img, int32_t w, int32_t h, int32_t x, int32_t y) { return T5_ERR_NOT_SUPPORTED; }
 t5_err_t t5_ui_overlay_restore(void) { return T5_OK; }
 bool t5_ui_touch_peek(int32_t *x, int32_t *y) { return false; }
+int t5_ui_touch_points(int32_t *x, int32_t *y, int max) { return 0; }
 void t5_ui_reveal(void) {}

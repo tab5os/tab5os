@@ -264,30 +264,9 @@ static void flush_wait(lv_display_t *d)
     s_flog[s_flog_n % T5_UI_FRAME_LOG].flush_wait_us += (uint32_t)(t5_time_us() - t0);
 }
 
-static void frame_begin(void)
+/* Catch the back buffer up, except where this frame redraws. */
+static void catch_up_target(void)
 {
-    s_target = t5_fbt_pick(T5_DISPLAY_FBS, t5_display_scanout(), t5_display_queued());
-    s_flushed = false;
-    s_nframe = 0;
-    t5_ui_frame_rec_t *fr = &s_flog[s_flog_n % T5_UI_FRAME_LOG];
-    *fr = (t5_ui_frame_rec_t){ .start_ms = t5_time_ms() };
-    t5_ui_ppa_draw_us = t5_ui_ppa_draw_n = 0;
-    for (uint32_t i = 0; i < s_disp->inv_p && s_nframe < FRAME_MAX_AREAS; i++) {
-        if (s_disp->inv_area_joined[i]) continue;
-        const lv_area_t *a = &s_disp->inv_areas[i];
-        s_frame[s_nframe++] = (t5_rect_t){ a->x1, a->y1, a->x2, a->y2 };
-        s_st.render_px_sum += (uint64_t)lv_area_get_size(a);
-        if (!fr->nareas) {
-            fr->x1 = (int16_t)a->x1;
-            fr->y1 = (int16_t)a->y1;
-            fr->x2 = (int16_t)a->x2;
-            fr->y2 = (int16_t)a->y2;
-        }
-        fr->px += lv_area_get_size(a);
-        fr->nareas++;
-    }
-    if (s_target < 0) return;
-    /* Catch the back buffer up, except where this frame redraws. */
     t5_rect_t lag[T5_FBT_RECTS], need[48];
     int nl = t5_fbt_take(&s_fbt, s_target, lag, T5_FBT_RECTS);
     int nn = t5_fbt_subtract(lag, nl, s_frame, s_nframe, need, 48);
@@ -304,6 +283,51 @@ static void frame_begin(void)
         if (t5_ui_hw_fb_copy_async(src, dst, p, NULL) == T5_OK)
             s_st.copy_bytes += (uint32_t)t5_rect_w(&p) * (uint32_t)t5_rect_h(&p) * 2;
     }
+}
+
+/* lvgl: LVGL is about to draw the areas it has invalidated; false for a
+ * frame of video planes alone (ui_plane_present), when they aren't drawn. */
+static void frame_begin_ex(bool lvgl)
+{
+    s_target = t5_fbt_pick(T5_DISPLAY_FBS, t5_display_scanout(), t5_display_queued());
+    s_flushed = false;
+    s_nframe = 0;
+    t5_ui_frame_rec_t *fr = &s_flog[s_flog_n % T5_UI_FRAME_LOG];
+    *fr = (t5_ui_frame_rec_t){ .start_ms = t5_time_ms() };
+    t5_ui_ppa_draw_us = t5_ui_ppa_draw_n = 0;
+    for (uint32_t i = 0; lvgl && i < s_disp->inv_p && s_nframe < FRAME_MAX_AREAS; i++) {
+        if (s_disp->inv_area_joined[i]) continue;
+        const lv_area_t *a = &s_disp->inv_areas[i];
+        s_frame[s_nframe++] = (t5_rect_t){ a->x1, a->y1, a->x2, a->y2 };
+        s_st.render_px_sum += (uint64_t)lv_area_get_size(a);
+        if (!fr->nareas) {
+            fr->x1 = (int16_t)a->x1;
+            fr->y1 = (int16_t)a->y1;
+            fr->x2 = (int16_t)a->x2;
+            fr->y2 = (int16_t)a->y2;
+        }
+        fr->px += lv_area_get_size(a);
+        fr->nareas++;
+    }
+    if (s_target < 0) return;
+    /* Video planes (plane.c): straight into the target first, so whatever
+     * LVGL draws over them lands on top (the PPA keeps order). */
+    uint32_t plane_bytes = 0;
+    bool wait = false;
+    s_nframe = ui_planes_begin(t5_display_fb_n(s_target), s_rot, s_frame, s_nframe, FRAME_MAX_AREAS, &plane_bytes,
+                               &wait);
+    if (plane_bytes) {
+        s_flushed = true;
+        s_st.copy_bytes += plane_bytes;
+    }
+    catch_up_target();
+    /* LVGL reads parts of a plane read back from the target: let them land. */
+    if (wait && !t5_ui_hw_wait_idle(200)) T5_LOGW(TAG, "PPA didn't finish a plane in 200 ms");
+}
+
+static void frame_begin(void)
+{
+    frame_begin_ex(true);
 }
 
 static void frame_end(void)
@@ -367,6 +391,14 @@ static void catch_up_now(void)
                 s_st.copy_bytes += (uint32_t)t5_rect_w(&p) * (uint32_t)t5_rect_h(&p) * 2;
         }
     }
+}
+
+void ui_plane_present(void)
+{
+    /* Between frames on the UI task (a timer), so LVGL isn't drawing. */
+    if (s_paused || !s_disp || s_disp->rendering_in_progress || s_target >= 0) return;
+    frame_begin_ex(false);
+    frame_end();
 }
 
 bool t5_ui_settled(void)
@@ -519,6 +551,15 @@ bool t5_ui_touch_peek(int32_t *x, int32_t *y)
     if (t5_touch_read(&st) != T5_OK || st.count == 0) return false;
     t5_rot_from_panel(s_rot, st.p[0].x, st.p[0].y, x, y);
     return true;
+}
+
+int t5_ui_touch_points(int32_t *x, int32_t *y, int max)
+{
+    t5_touch_state_t st;
+    if (t5_touch_read(&st) != T5_OK) return 0;
+    int n = st.count < max ? st.count : max;
+    for (int i = 0; i < n; i++) t5_rot_from_panel(s_rot, st.p[i].x, st.p[i].y, &x[i], &y[i]);
+    return n;
 }
 
 static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)

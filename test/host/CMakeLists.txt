@@ -64,7 +64,7 @@ add_test(NAME test_calc COMMAND test_calc)
 # Tests of a component's internals see its private directory.
 target_include_directories(test_app PRIVATE ${FW}/t5_app)
 target_include_directories(test_display_touch PRIVATE ${FW}/t5_display)
-target_include_directories(test_media PRIVATE ${FW}/t5_usb)
+target_include_directories(test_media PRIVATE ${FW}/t5_usb ${FW}/t5_camera)
 target_include_directories(test_net PRIVATE ${FW}/t5_net)
 target_include_directories(test_ota PRIVATE ${FW}/t5_ota)
 target_include_directories(test_pkg PRIVATE ${FW}/t5_pkg)

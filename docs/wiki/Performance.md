@@ -19,7 +19,8 @@ The second is a hard wall. **An animation that changes the whole screen runs at 
 | Dialog appearing | about 33 to 40 fps while animating |
 | App launch fade | about 31 fps |
 | Full-screen slide | 27 fps, at the PSRAM floor |
-| Camera preview | 11 to 13 fps through LVGL |
+| Camera preview, the Camera app (1600x900 frames) | 15 fps, a [video plane](Media-and-USB.md#video-planes) (11 to 13 fps through LVGL before) |
+| Video, full-screen 1280x720 Motion JPEG | about 19 fps, a video plane |
 
 ## What a pixel costs
 
@@ -125,6 +126,7 @@ The time to first frame is your `on_create` plus ELF loading.
 | --- | --- | --- |
 | SD card, the card in Unit A | about 210 KB/s FAT32 sequential write at 512-byte clusters | Card and format dominate. Reformat with 32 KB clusters |
 | H.264 encoder output | up to about 535 KB/s | Bitrate is lowered if the card falls behind |
+| Motion JPEG recording (`.avi`, 720p, quality 70) | about 1.7 MB/s | Quality is lowered if the card falls behind; Unit A's card kept up at 30 fps |
 | Wi-Fi app push | about 3 s end to end for a small app | |
 | USB-C console transfer | about 20 KB/s | |
 

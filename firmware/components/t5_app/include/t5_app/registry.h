@@ -18,6 +18,7 @@
 #define T5_APP_ID_CAMERA "com.t5.camera"
 #define T5_APP_ID_TERMINAL "com.t5.terminal"
 #define T5_APP_ID_EDITOR "com.t5.editor"
+#define T5_APP_ID_VIDEOS "com.t5.videos"
 
 /* The Settings pages, by the launch argument that opens each one (the
  * quick settings tiles link to some). */

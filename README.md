@@ -85,7 +85,7 @@ Commands marked "bench builds only" are left out unless the firmware is built wi
 | `shell home\|qs\|toast <text>\|launch <id> [arg]` | Shell: go home, quick settings, a snackbar, open an app with an argument |
 | `audio` / `audio vol\|mute\|sounds\|sound\|tone ...` | Audio state, volume, system sounds, a test tone |
 | `audio play <s>` / `rec <s> [aec]` / `echo <s>` | Playback (underruns), recording (levels), echo cancellation with and without |
-| `cam open\|close\|stats\|photo <path>\|rec <path> <s>\|snap` | Camera: stats, a JPEG, an H.264 recording, the preview as base64 |
+| `cam open [photo\|rgb]\|close\|stats\|photo <path>\|rec <path> <s>\|snap` | Camera: stats, a JPEG, a recording (`.avi` is Motion JPEG, else H.264), the preview as base64 |
 | `usb` / `usb host on\|off\|eject\|midi <s>\|serial <baud> <text>` | USB-A devices and classes |
 | `usbc console\|storage [s]\|trace` | USB-C role: hand the SD card to a computer until it ejects it (or for s seconds); the console is gone meanwhile |
 | `py exec <code>\|run <file>\|test` | MicroPython: run code (statements separated by `;`), a script, or the containment checks |
