@@ -16,7 +16,7 @@ extern "C" {
 /* API level this firmware implements. An app built against level N runs on
  * any OS whose level is >= N (sdk/abi/api_v<N>.sym never loses or changes a
  * symbol). */
-#define T5_API_LEVEL 1
+#define T5_API_LEVEL 2
 
 typedef enum { T5_RUNTIME_NATIVE, T5_RUNTIME_MICROPYTHON, T5_RUNTIME_COUNT } t5_runtime_t;
 typedef enum { T5_ORIENT_ANY, T5_ORIENT_LANDSCAPE, T5_ORIENT_PORTRAIT } t5_orient_pref_t;
