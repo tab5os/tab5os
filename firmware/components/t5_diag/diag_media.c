@@ -779,6 +779,46 @@ static int cmd_usbc(int argc, char **argv)
     return 1;
 }
 
+/* later MS COMMAND...: run a console command after MS, on a task of its
+ * own. For tests that lose the console meanwhile (USB-C device mode):
+ * queue what should happen while it's gone. */
+typedef struct {
+    uint32_t ms;
+    char line[160];
+} later_t;
+
+static void later_task(void *arg)
+{
+    later_t *l = arg;
+    vTaskDelay(pdMS_TO_TICKS(l->ms));
+    int ret = 0;
+    esp_err_t e = esp_console_run(l->line, &ret);
+    T5_LOGI("t5.diag", "later: \"%s\" -> %s %d", l->line, esp_err_to_name(e), ret);
+    free(l);
+    vTaskDelete(NULL);
+}
+
+static int cmd_later(int argc, char **argv)
+{
+    uint32_t ms = 0;
+    if (argc < 3 || !diag_parse_u32(argv[1], 0, 600000, &ms)) {
+        printf("usage: later <ms> <command...>\n");
+        return 1;
+    }
+    later_t *l = calloc(1, sizeof *l);
+    if (!l) return 1;
+    l->ms = ms;
+    for (int i = 2; i < argc; i++) {
+        size_t n = strlen(l->line);
+        snprintf(l->line + n, sizeof l->line - n, "%s%s", i > 2 ? " " : "", argv[i]);
+    }
+    if (xTaskCreatePinnedToCore(later_task, "later", 6144, l, 4, NULL, 1) != pdPASS) {
+        free(l);
+        return 1;
+    }
+    return 0;
+}
+
 void diag_register_media(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -792,6 +832,8 @@ void diag_register_media(void)
         { .command = "cam", .help = "Camera: open, stats, photo, record, snapshot",
           .hint = "[open|close|stats|photo|rec|snap]", .func = cmd_cam },
         { .command = "usb", .help = "USB-A devices and classes", .hint = "[host|eject|midi|serial]", .func = cmd_usb },
+        { .command = "later", .help = "Run a console command after a delay (on its own task)",
+          .hint = "<ms> <command...>", .func = cmd_later },
         { .command = "usbc", .help = "USB-C role (console, mass storage, device-mode self-test)", .hint = "console|storage [s]|device [s|status]",
           .func = cmd_usbc },
     };

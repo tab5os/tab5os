@@ -262,7 +262,10 @@ t5_err_t t5_wifimon_open(const t5_wifimon_cfg_t *cfg, t5_wifimon_t **out)
     if (e == T5_OK) e = make_room(m, cfg->channel);
     if (e == T5_OK) {
         m->lock = t5_wakelock_acquire_system(T5_LOCK_NET, "wifimon");
-        esp_wifi_set_ps(WIFI_PS_NONE);              /* power save sleeps through most frames */
+        esp_err_t pe = esp_wifi_set_ps(WIFI_PS_NONE);   /* power save sleeps through most frames */
+        wifi_ps_type_t ps = WIFI_PS_MAX_MODEM;
+        esp_wifi_get_ps(&ps);
+        T5_LOGD(TAG, "power save off: set %s, now %d", esp_err_to_name(pe), (int)ps);
         t5wm_cmd_t lim = { .op = T5WM_OP_TX_LIMIT, .tx_limit = cfg->tx_per_s ? cfg->tx_per_s : 50 };
         T5_IGNORE(cmd(&lim, NULL, 0, NULL));
         t5wm_cmd_t c = { .op = T5WM_OP_START, .channel = cfg->channel, .types = cfg->types ? cfg->types : T5WM_TYPE_MGMT,

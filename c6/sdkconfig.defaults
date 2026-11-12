@@ -43,3 +43,8 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
 CONFIG_ESP_WIFI_RX_IRAM_OPT=y
 CONFIG_ESP_WIFI_IRAM_OPT=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# The C6's log goes to a UART nothing reads on the Tab5: keep warnings and
+# errors, drop the rest and the error-name table (image space, c6fw is 1.5 MB).
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_ESP_ERR_TO_NAME_LOOKUP=n

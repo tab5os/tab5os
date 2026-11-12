@@ -13,7 +13,11 @@
  * (T5_ERR_BUSY). Wi-Fi must be on in Settings (T5_ERR_STATE).
  *
  * Channels: while the Tab5 is connected to a network, the monitor shares
- * the radio with it and listens on its channel; networking keeps working.
+ * the radio with it and listens on its channel; networking keeps working,
+ * but the radio passes on only part of the traffic while associated (about
+ * 1 beacon in 10, measured on the C6 with power save off). For a complete
+ * capture, pause the connection: an exclusive monitor that sets a channel,
+ * or exclusive Wi-Fi (t5/excl.h), which saw every beacon.
  * A monitor opened with exclusive set may change channel or hop: the first
  * change pauses the connection for every app and the system (their network
  * calls fail) until the monitor closes, when it rejoins.

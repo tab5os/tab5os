@@ -226,7 +226,8 @@ Not built as its own API: an app can already do it with the GATT server (`t5_ble
 - **Throughput is the main risk.** A busy 2.4 GHz channel carries 1,000 to 3,000 frames a second, about 400 KB/s at a 128-byte snap length. Peer data travels with RPC messages. If measurement shows it can't keep up, frames move to their own esp_hosted interface type on the SDIO data path, which already carries Wi-Fi traffic at several MB/s. The default filter is management frames only, which is enough for scanners and much lighter.
 - **Raw transmit** uses `esp_wifi_80211_tx` as ESP-IDF provides it, including the frame types it refuses in its sanity check. Tab5 OS doesn't patch around those. A rate limit (default 50 frames/s, at most 500, set at open) is enforced on the C6.
 - **Hopping** is the app's loop over `t5_wifimon_set_channel`; there is no separate call.
-- **Size.** The C6 image grew to 1,504,480 bytes of the 1,572,864-byte `c6fw` partition (96%).
+- **Capture while connected is partial.** Measured on Unit A over 10 s on the network's channel: connected, the radio passed 7 to 10 of about 100 beacons per access point, with power save off and with Bluetooth off; with the station paused (exclusive), 93 to 95 of 100, nothing dropped on the way. The C6's Wi-Fi driver hands promiscuous mode only part of the traffic while associated, so apps that need everything pause the connection.
+- **Size.** The C6 image is 1,458,912 bytes of the 1,572,864-byte `c6fw` partition (92.8%), with its log at WARN and no error-name table (its UART isn't reachable on the Tab5).
 
 ### P4 API
 
@@ -374,14 +375,22 @@ All new symbols are level 2 (`since=2` in `sdk/abi/api_v1.sym`, `T5_API_LEVEL` 2
 
 ## Status
 
-Everything above is built on the `io-access` branch: host tests pass (`t5_hid`, the claims, pcap records), the firmware and the C6 image build, and the ABI and lint checks pass. **None of it has run on hardware yet.** Next, on Unit A, in order:
+Built on the `io-access` branch and run on Unit A (Nov 12, 2026):
 
-1. `t5 hil usbc_device` (USB-C HID and MIDI echo against this Mac, with the console coming back).
-2. `net mon 10` and `net mon 10 6 all` (monitor frames, drops; needs the new C6 image: `t5 c6-stage`, then `net update`).
-3. Bluetooth HID: pair the Mac with the Tab5 from System Settings, confirm the code, type from a test app.
-4. USB-A raw access with a gamepad or vendor device; exclusive USB-A with a drive mounted.
-5. Exclusive Wi-Fi and Bluetooth: release brings the network and NimBLE back.
-6. Exclusive USB-C with a vendor-class loopback.
+| Feature | Result |
+| --- | --- |
+| USB-C device mode | HID echo 50/50 (worst 2.1 ms), MIDI echo 50/50 (1.5 ms median), console and sound back after (`test/hil/usbc_device.py`) |
+| Exclusive USB-C | vendor request and bulk echo 50/50 (worst 11 ms), console back (`test/hil/usbc_raw.py`) |
+| Bluetooth HID | paired with a Mac (code confirmed on both), typing and trackpad work |
+| Quick Settings Stop | ends Bluetooth HID and USB-C device mode (console back after 12 s of a 40 s test) |
+| Wi-Fi monitor | all frame types, nothing dropped; partial capture while connected (above), complete when exclusive |
+| Exclusive Wi-Fi | scan, monitor on another channel, network rejoined on release |
+| Exclusive Bluetooth | raw HCI Reset and Read BD_ADDR; NimBLE scans again after release |
+| Exclusive USB-A | power switching and release on an empty bus |
+| Raw USB-A access | not run: needs a device other than a keyboard or mouse on USB-A |
+
+- **MIDI's first note.** A new USB MIDI port answers macOS's MIDI-CI discovery (SysEx) first; a note sent in its first moments waited about 370 ms behind it. After 2 s every round trip is about 1.5 ms. Not the link.
+- **OS image size.** The branch adds 70,496 bytes (origin/main 3,663,408, branch 3,733,904), leaving 40,969 bytes under the 90%-of-a-slot budget. The biggest additions: t5_usb 14.8 KB, t5_net 12.3 KB, the Python bindings 11.4 KB, TinyUSB's HID and MIDI classes 6.7 KB, NimBLE's security manager and store 6.7 KB.
 
 ## Decisions
 

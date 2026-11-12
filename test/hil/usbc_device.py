@@ -89,7 +89,12 @@ def midi_echo(n):
     if not out or not inp:
         print("  no Tab5 MIDI port")
         return 0, 0.0
-    ok, worst = 0, 0.0
+    # A new MIDI port answers macOS's MIDI-CI discovery (SysEx) first: notes
+    # sent meanwhile wait behind it. Let it settle so the times are the link's.
+    time.sleep(2)
+    while inp.get_message():
+        pass
+    ok, times = 0, []
     for i in range(n):
         msg = [0x90, 36 + i % 48, 1 + i % 126]
         t0 = time.time()
@@ -101,7 +106,7 @@ def midi_echo(n):
                 got = m[0]
                 break
             time.sleep(0.001)
-        worst = max(worst, time.time() - t0)
+        times.append(time.time() - t0)
         if got == msg:
             ok += 1
         else:
@@ -109,7 +114,10 @@ def midi_echo(n):
     out.send_message([0x80, 36, 0])
     inp.close_port()
     out.close_port()
-    return ok, worst
+    rest = sorted(times[1:]) or [0.0]
+    print(f"  midi first {times[0] * 1000:.1f} ms, then median {rest[len(rest) // 2] * 1000:.1f} ms, "
+          f"worst {rest[-1] * 1000:.1f} ms")
+    return ok, max(times)
 
 
 def main():

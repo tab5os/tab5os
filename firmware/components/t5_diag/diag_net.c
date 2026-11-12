@@ -16,6 +16,7 @@
 #include "t5_net/net.h"
 #include "t5_net/sock.h"
 #include "t5_net/wifimon.h"
+#include "t5_core/excl.h"
 #include "t5_power/power.h"
 #include "diag_priv.h"
 
@@ -88,14 +89,23 @@ out:
 
 /* net mon S [CH] [all]: a Wi-Fi monitor self-test. Counts frames by type
  * and lists the networks whose beacons it heard, then the drop counts. */
-static int net_mon(uint32_t secs, uint8_t ch, bool all)
+static int net_mon(uint32_t secs, uint8_t ch, bool all, bool excl)
 {
+    t5_excl_t *x = NULL;
+    if (excl) {
+        t5_err_t xe = t5_excl_claim(T5_EXCL_WIFI, &x);
+        if (xe != T5_OK) {
+            printf("exclusive: %s\n", t5_err_str(xe));
+            return 1;
+        }
+    }
     t5_wifimon_cfg_t cfg = { .size = sizeof cfg, .channel = ch, .snaplen = 128,
                              .types = all ? (T5_WIFIMON_MGMT | T5_WIFIMON_DATA | T5_WIFIMON_CTRL) : T5_WIFIMON_MGMT };
     t5_wifimon_t *m;
     t5_err_t e = t5_wifimon_open(&cfg, &m);
     if (e != T5_OK) {
         printf("monitor: %s\n", t5_err_str(e));
+        if (x) T5_IGNORE(t5_excl_release(x));
         return 1;
     }
     struct { uint8_t bssid[6]; char ssid[33]; int8_t rssi; uint8_t ch; uint32_t n; } seen[16];
@@ -131,6 +141,7 @@ static int net_mon(uint32_t secs, uint8_t ch, bool all)
     t5_wifimon_stats_t st;
     t5_wifimon_stats(m, &st);
     T5_IGNORE(t5_wifimon_close(m));
+    if (x) T5_IGNORE(t5_excl_release(x));
     printf("monitor ch %u, %u s: %u frames (mgmt %u, ctrl %u, data %u, misc %u), %u bytes on air\n", st.channel,
            (unsigned)secs, (unsigned)st.frames, (unsigned)by_type[1], (unsigned)by_type[2], (unsigned)by_type[4],
            (unsigned)by_type[8], (unsigned)bytes);
@@ -149,9 +160,13 @@ static int cmd_net(int argc, char **argv)
     if (argc >= 3 && !strcmp(argv[1], "mon")) {
         uint32_t secs = 0, ch = 0;
         if (!diag_parse_u32(argv[2], 1, 60, &secs)) return 1;
-        if (argc >= 4 && strcmp(argv[3], "all") && !diag_parse_u32(argv[3], 1, 13, &ch)) return 1;
-        bool all = !strcmp(argv[argc - 1], "all");
-        return net_mon(secs, (uint8_t)ch, all);
+        bool all = false, excl = false;
+        for (int i = 3; i < argc; i++) {
+            if (!strcmp(argv[i], "all")) all = true;
+            else if (!strcmp(argv[i], "excl")) excl = true;
+            else if (!diag_parse_u32(argv[i], 1, 13, &ch)) return 1;
+        }
+        return net_mon(secs, (uint8_t)ch, all, excl);
     }
     if (argc == 1) { print_status(); return 0; }
     const char *c = argv[1];
@@ -224,7 +239,7 @@ static int cmd_net(int argc, char **argv)
         return 0;
     }
 usage:
-    printf("usage: net [mon <s> [ch] [all] | on | off | scan | connect <ssid> [pass] [nosave] | disconnect | forget <ssid> | saved\n"
+    printf("usage: net [mon <s> [ch] [all] [excl] | on | off | scan | connect <ssid> [pass] [nosave] | disconnect | forget <ssid> | saved\n"
            "           | reset | update [--force] | ant int|ext | echo <port>|stop | handles]\n");
     return 1;
 }
