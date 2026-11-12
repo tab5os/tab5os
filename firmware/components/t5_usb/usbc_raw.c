@@ -323,13 +323,15 @@ t5_err_t t5_usbc_raw_start(t5_excl_t *h, const t5_usbc_raw_desc_t *d)
     }
     t5_err_t e = s.cfg && (!d->bos || s.bos) ? T5_OK : T5_ERR_NO_MEM;
     if (e == T5_OK) memcpy(s.cfg, d->config, total);
-    for (int dir = 0; dir < 2 && e == T5_OK; dir++) {
-        for (int n = 1; n < EP_MAX && e == T5_OK; n++) {
-            ep_t *ep = &s.ep[dir][n];
-            ep->buf = heap_caps_malloc(XFER_MAX, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-            ep->done = xSemaphoreCreateBinary();
-            if (!ep->buf || !ep->done) e = T5_ERR_NO_MEM;
-        }
+    /* Buffers only for the endpoints the configuration has: internal RAM is
+     * scarce, and ten 4 KB blocks fragment it for everything else. */
+    for (uint16_t i = 0; e == T5_OK && i + 2 <= total; i += d->config[i]) {
+        if (d->config[i + 1] != TUSB_DESC_ENDPOINT) continue;
+        ep_t *ep = ep_of(d->config[i + 2]);
+        if (!ep || ep->buf) continue;
+        ep->buf = heap_caps_malloc(XFER_MAX, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        ep->done = xSemaphoreCreateBinary();
+        if (!ep->buf || !ep->done) e = T5_ERR_NO_MEM;
     }
     static const char lang[] = { 0x09, 0x04 };
     s.str_ptrs[0] = lang;
@@ -411,7 +413,7 @@ int t5_usbc_raw_xfer(t5_excl_t *h, uint8_t ep, void *buf, size_t len, uint32_t t
     ep_t *e = ep_of(ep);
     if (!e || !buf || !len || len > XFER_MAX) return T5_ERR_INVALID_ARG;
     if (!t5_excl_holds(h, T5_EXCL_USBC) || !s.running || !s.mounted) return T5_ERR_STATE;
-    if (!e->open) return T5_ERR_NOT_FOUND;
+    if (!e->open || !e->buf) return T5_ERR_NOT_FOUND;
     bool in_dev = ep & 0x80;                              /* device to computer */
     if (!e->busy) {
         if (in_dev) memcpy(e->buf, buf, len);
