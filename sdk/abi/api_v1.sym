@@ -2442,6 +2442,7 @@ t5_ui_low_power |  | bool t5_ui_low_power(void);
 t5_ui_on_ui_task |  | bool t5_ui_on_ui_task(void);
 t5_ui_rotation |  | t5_rotation_t t5_ui_rotation(void);
 t5_ui_sync | wrap=t5_app_ui_sync | t5_err_t t5_ui_sync(t5_ui_fn_t fn, void * arg, uint32_t timeout_ms);
+t5_ui_touch_get | since=2 | int t5_ui_touch_get(t5_ui_touch_t * out, int max);
 t5_ui_unlock |  | void t5_ui_unlock(void);
 t5_usb_claim | perm=usb,since=2 | t5_err_t t5_usb_claim(t5_usb_handle_t * h, uint8_t iface, uint8_t alt, uint32_t flags);
 t5_usb_class_name |  | const char * t5_usb_class_name(t5_usb_class_t c);

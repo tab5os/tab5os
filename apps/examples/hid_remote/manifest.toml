@@ -1,0 +1,12 @@
+id = "com.t5.example.hidremote"
+name = "Keyboard & Trackpad"
+version = "1.0.0"
+api = 2
+runtime = "native"
+entry = "app.elf"
+icon = "icon.png"
+description = "Use the Tab5 as a computer's keyboard, trackpad and media remote, over USB-C or Bluetooth"
+
+[permissions]
+usb = true
+ble = true

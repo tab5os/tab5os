@@ -21,6 +21,7 @@
 #include "t5_core/os.h"
 #include "t5_display/t5_display.h"
 #include "t5_imu/t5_imu.h"
+#include "t5_core/res.h"   /* t5_core_app_foreground */
 #include "t5_input/t5_touch.h"
 #include "t5_power/autosave.h"
 #include "t5_power/power.h"
@@ -559,6 +560,20 @@ int t5_ui_touch_points(int32_t *x, int32_t *y, int max)
     if (t5_touch_read(&st) != T5_OK) return 0;
     int n = st.count < max ? st.count : max;
     for (int i = 0; i < n; i++) t5_rot_from_panel(s_rot, st.p[i].x, st.p[i].y, &x[i], &y[i]);
+    return n;
+}
+
+int t5_ui_touch_get(t5_ui_touch_t *out, int max)
+{
+    if (!out || max <= 0 || !t5_core_app_foreground()) return 0;
+    t5_touch_state_t st;
+    if (t5_touch_read(&st) != T5_OK) return 0;
+    int n = st.count < max ? st.count : max;
+    for (int i = 0; i < n; i++) {
+        int32_t x, y;
+        t5_rot_from_panel(s_rot, st.p[i].x, st.p[i].y, &x, &y);
+        out[i] = (t5_ui_touch_t){ (int16_t)x, (int16_t)y, st.p[i].id };
+    }
     return n;
 }
 
