@@ -1,6 +1,6 @@
 # Tab5 OS: device emulation and raw radio access for apps
 
-Nov 12, 2026 · @Kanishka · built on branch io-access (not yet run on hardware) · API level 2
+Nov 12, 2026 · @Kanishka · released in 0.2.0, run on hardware (Status below) · API level 2
 
 ## Summary
 
@@ -371,7 +371,7 @@ The same calls with the same permissions and questions (`t5_py/mod_io.c`):
 
 ## ABI
 
-All new symbols are level 2 (`since=2` in `sdk/abi/api_v1.sym`, `T5_API_LEVEL` 2), together with notifications. The new headers (`t5/hid.h`, `t5/usbdev.h`, `t5/wifi.h`) and the additions to `t5/usb.h` and `t5/ble.h` go through the layout lock as usual. Nothing in level 1 changes.
+All new symbols are level 2 (`since=2` in `sdk/abi/api_v1.sym`, `T5_API_LEVEL` 2). Notifications, also planned for level 2, are not built yet. The new headers (`t5/hid.h`, `t5/usbdev.h`, `t5/wifi.h`) and the additions to `t5/usb.h` and `t5/ble.h` go through the layout lock as usual. Nothing in level 1 changes.
 
 ## Status
 
