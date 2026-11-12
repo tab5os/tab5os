@@ -2476,6 +2476,12 @@ t5_usb_uvc_close | perm=usb,wrap=t5_app_usb_uvc_close | t5_err_t t5_usb_uvc_clos
 t5_usb_uvc_open | perm=usb,wrap=t5_app_usb_uvc_open | t5_err_t t5_usb_uvc_open(uint16_t w, uint16_t h, uint8_t fps, t5_usb_uvc_frame_cb_t cb, void * arg, t5_usb_uvc_t ** out);
 t5_usb_uvc_present |  | bool t5_usb_uvc_present(void);
 t5_usba_power | perm=usb,since=2 | t5_err_t t5_usba_power(t5_excl_t * h, bool on);
+t5_usbc_raw_ctrl_reply | perm=usb,since=2 | t5_err_t t5_usbc_raw_ctrl_reply(t5_excl_t * h, const void * data, size_t len);
+t5_usbc_raw_ctrl_stall | perm=usb,since=2 | t5_err_t t5_usbc_raw_ctrl_stall(t5_excl_t * h);
+t5_usbc_raw_next | perm=usb,since=2 | int t5_usbc_raw_next(t5_excl_t * h, t5_usbc_raw_ev_t * ev, void * buf, size_t cap, uint32_t timeout_ms);
+t5_usbc_raw_stall | perm=usb,since=2 | t5_err_t t5_usbc_raw_stall(t5_excl_t * h, uint8_t ep, bool on);
+t5_usbc_raw_start | perm=usb,since=2 | t5_err_t t5_usbc_raw_start(t5_excl_t * h, const t5_usbc_raw_desc_t * desc);
+t5_usbc_raw_xfer | perm=usb,since=2 | int t5_usbc_raw_xfer(t5_excl_t * h, uint8_t ep, void * buf, size_t len, uint32_t timeout_ms);
 t5_usbdev_close | perm=usb,since=2 | t5_err_t t5_usbdev_close(t5_usbdev_t * d);
 t5_usbdev_hid_send | perm=usb,since=2 | t5_err_t t5_usbdev_hid_send(t5_usbdev_t * d, int hid, uint8_t report_id, const void * data, size_t len, uint32_t timeout_ms);
 t5_usbdev_midi_send | perm=usb,since=2 | t5_err_t t5_usbdev_midi_send(t5_usbdev_t * d, const uint8_t * msg, size_t len);

@@ -26,6 +26,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_core/excl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -104,6 +105,64 @@ typedef struct {
 int t5_usbdev_next(t5_usbdev_t *d, t5_usbdev_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
 /* Give USB-C back to the console. */
 t5_err_t t5_usbdev_close(t5_usbdev_t *d);
+
+/* ---- a device of the app's own design: exclusive USB-C (API level 2) -------
+ * With t5_excl_claim(T5_EXCL_USBC) (t5/excl.h) the app describes the whole
+ * device (descriptors byte for byte) and runs every interface itself: any
+ * class, vendor-specific with WebUSB or WinUSB (give a BOS descriptor with
+ * Microsoft OS 2.0 and answer its vendor request), CDC, audio... at full
+ * speed (12 Mbit/s), with endpoints 1..5 each way, interrupt and bulk.
+ * Standard requests (addresses, configurations, descriptors) are answered
+ * by the OS from what the app gave; every class and vendor request comes to
+ * the app as a T5_USBC_RAW_SETUP event. One with needs_reply must be
+ * answered (t5_usbc_raw_ctrl_reply or _ctrl_stall) within about a second,
+ * or the computer gives up; one that carried data to the device arrives
+ * with its bytes in buf and is already acknowledged. Console and sound are
+ * off while it runs, as in t5_usbdev_open. */
+#define T5_USBC_RAW_MAX_STRINGS 7
+#define T5_USBC_RAW_CTRL_MAX 512       /* bytes of one control transfer's data */
+
+typedef struct {
+    uint32_t size;                     /* sizeof(t5_usbc_raw_desc_t) */
+    const uint8_t *device;             /* the 18-byte device descriptor */
+    const uint8_t *config;             /* the whole configuration descriptor (wTotalLength bytes) */
+    const char *const *strings;        /* string descriptors 1..n, UTF-8 (ASCII shown best); NULL entries allowed */
+    uint8_t string_count;              /* 0..T5_USBC_RAW_MAX_STRINGS */
+    const uint8_t *bos;                /* NULL, or a BOS descriptor (wTotalLength bytes) */
+} t5_usbc_raw_desc_t;
+
+/* Copy the descriptors and go: the computer sees the device. T5_ERR_STATE
+ * without the claim, T5_ERR_INVALID_ARG for descriptors the controller
+ * can't do. */
+t5_err_t t5_usbc_raw_start(t5_excl_t *h, const t5_usbc_raw_desc_t *desc);
+
+typedef enum {
+    T5_USBC_RAW_MOUNTED,               /* configured by the computer */
+    T5_USBC_RAW_UNMOUNTED,
+    T5_USBC_RAW_SUSPENDED,
+    T5_USBC_RAW_RESUMED,
+    T5_USBC_RAW_SETUP,                 /* a class or vendor control request */
+} t5_usbc_raw_ev_type_t;
+typedef struct {
+    t5_usbc_raw_ev_type_t type;
+    uint8_t bm_request_type, b_request;
+    uint16_t w_value, w_index, w_length;
+    bool needs_reply;                  /* the computer waits for reply or stall */
+} t5_usbc_raw_ev_t;
+/* The next event; a SETUP that carried data puts its bytes in buf (cut to
+ * cap) and returns the count. 0 for others, T5_ERR_TIMEOUT, T5_ERR_STATE
+ * once the claim ended. */
+int t5_usbc_raw_next(t5_excl_t *h, t5_usbc_raw_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
+/* Answer the pending request: data for an IN request (cut to its
+ * wLength), or nothing (len 0) to acknowledge one without data. */
+t5_err_t t5_usbc_raw_ctrl_reply(t5_excl_t *h, const void *data, size_t len);
+t5_err_t t5_usbc_raw_ctrl_stall(t5_excl_t *h);
+/* A bulk or interrupt transfer on an endpoint of the configuration (0x81 IN,
+ * 0x01 OUT). Up to 4096 bytes; an OUT-direction (receive) ends at a short
+ * packet. Returns the bytes moved, T5_ERR_TIMEOUT (the transfer stays
+ * queued: call again to wait on), or T5_ERR_STATE when not mounted. */
+int t5_usbc_raw_xfer(t5_excl_t *h, uint8_t ep, void *buf, size_t len, uint32_t timeout_ms);
+t5_err_t t5_usbc_raw_stall(t5_excl_t *h, uint8_t ep, bool on);
 
 #ifdef __cplusplus
 }

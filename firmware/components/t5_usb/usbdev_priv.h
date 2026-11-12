@@ -18,3 +18,6 @@ void usbdev_revoke(void);
 
 /* usbdev.c: once at boot, from usbc_init. */
 void usbdev_init(void);
+
+/* usbc_raw.c: registers exclusive USB-C (from usbc_init). */
+void usbc_raw_init(void);

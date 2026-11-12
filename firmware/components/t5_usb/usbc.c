@@ -311,6 +311,7 @@ void usbc_init(void)
 {
     s_mx = t5_mutex_create();
     usbdev_init();
+    usbc_raw_init();
     const esp_timer_create_args_t a = { .callback = timeout_cb, .name = "usbc", .dispatch_method = ESP_TIMER_TASK };
     esp_timer_create(&a, &s_timer);
 }
