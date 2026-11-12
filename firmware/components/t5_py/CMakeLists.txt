@@ -38,7 +38,7 @@ set(T5_PY_SHARED
     ${MICROPY_DIR}/shared/readline/readline.c
     ${MICROPY_DIR}/shared/timeutils/timeutils.c
 )
-set(T5_PY_PORT vm.c fs.c console.c runtime.c mod_t5.c mod_port.c mod_ui.c pynet.c mod_net.c mod_socket.c frozen.c)
+set(T5_PY_PORT vm.c fs.c console.c runtime.c mod_t5.c mod_port.c mod_io.c mod_ui.c pynet.c mod_net.c mod_socket.c frozen.c)
 set(T5_PY_PORT_ABS)
 foreach(f ${T5_PY_PORT})
     list(APPEND T5_PY_PORT_ABS "${CMAKE_CURRENT_LIST_DIR}/${f}")
@@ -85,7 +85,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "." "${MICROPY_DIR}" "${BIND_DIR}" "${CMAKE_BINARY_DIR}"
     REQUIRES t5_core lvgl__lvgl
-    PRIV_REQUIRES t5_app t5_pkg t5_ui md t5_ports t5_power t5_battery t5_time t5_audio t5_imu t5_usb t5_net t5_shell
+    PRIV_REQUIRES t5_app t5_pkg t5_ui md t5_ports t5_power t5_battery t5_time t5_audio t5_imu t5_usb t5_hid t5_net t5_shell
                   t5_storage esp_timer esp_hw_support heap esp_app_format esp_rom freertos log
 )
 
