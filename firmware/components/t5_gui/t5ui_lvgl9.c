@@ -1753,8 +1753,8 @@ int32_t t5ui_dp(int32_t dp)
 
 void t5ui_screen_size(int32_t *w, int32_t *h)
 {
-    if (w) *w = lv_display_get_horizontal_resolution(NULL);
-    if (h) *h = lv_display_get_vertical_resolution(NULL);
+    if (w) *w = lv_display_get_horizontal_resolution(lv_display_get_default());
+    if (h) *h = lv_display_get_vertical_resolution(lv_display_get_default());
 }
 
 uint32_t t5ui_ticks_ms(void)

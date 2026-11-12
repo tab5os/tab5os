@@ -362,6 +362,8 @@ static int audio_duck(void)
     return drop < 9 || drop > 15;
 }
 
+void t5_audio_dry_print(void);   /* t5_audio/audio.c: what each kept underrun found */
+
 static int cmd_audio(int argc, char **argv)
 {
     if (argc == 1) {
@@ -398,6 +400,10 @@ static int cmd_audio(int argc, char **argv)
     if (!strcmp(c, "echo") && argc == 3 && diag_parse_u32(argv[2], 1, 60, &a)) return audio_echo(a);
     if (!strcmp(c, "file") && argc == 3) return audio_file(argv[2]);
     if (!strcmp(c, "duck") && argc == 2) return audio_duck();
+    if (!strcmp(c, "dry") && argc == 2) {
+        t5_audio_dry_print();
+        return 0;
+    }
     if (!strcmp(c, "wav") && argc >= 5 && diag_parse_u32(argv[3], 1, 60, &a) && diag_parse_u32(argv[4], 20, 20000, &b)) {
         uint32_t rate = 44100, ch = 2;
         if (argc >= 6 && !diag_parse_u32(argv[5], 8000, 48000, &rate)) return 1;
@@ -407,7 +413,7 @@ static int cmd_audio(int argc, char **argv)
     if (!strcmp(c, "rec") && argc >= 3 && diag_parse_u32(argv[2], 1, 600, &a))
         return audio_rec(a, argc >= 4 && !strcmp(argv[3], "aec"));
     printf("usage: audio [vol <n> | mute on|off | sounds on|off | sound <name> | tone <hz> <ms> |\n"
-           "              play <s> [hz] | rec <s> [aec] | echo <s> | duck |\n"
+           "              play <s> [hz] | rec <s> [aec] | echo <s> | duck | dry |\n"
            "              wav <path> <s> <hz> [rate] [ch] | file <path>]\n");
     return 1;
 }

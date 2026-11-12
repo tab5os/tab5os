@@ -27,6 +27,7 @@
  * Wake lock: an open, unpaused output stream holds T5_LOCK_AUDIO, so the
  * screen can go off while playback continues.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "esp_heap_caps.h"
@@ -104,7 +105,32 @@ struct t5_audio_out {
     bool had_data;                        /* this block (output task) */
     volatile bool fade_out;               /* asked: fade to silence */
     volatile bool faded;                  /* done: the block that reaches silence is mixed */
+    /* Who feeds it and how (t5_audio_out_write), to explain underruns. */
+    volatile TaskHandle_t writer;
+    volatile int64_t write_in_us;         /* inside a write since; 0 when not */
+    volatile int64_t write_out_us;        /* the last write returned */
+    volatile uint32_t write_max_us;
+    int64_t slow_seen;                    /* the write a slow-write snapshot was taken in */
+    uint8_t slow_n;                       /* snapshots taken in it */
 };
+
+/* What was going on when a stream ran dry, kept if it was an underrun
+ * (data came again): the writer's state and where the cores were. */
+typedef struct {
+    char kind;                            /* 'U' an underrun, 'S' a write still going */
+    uint32_t space;                       /* free bytes in the stream then */
+    int64_t at_us;
+    uint32_t gap_ms;
+    int64_t in_write_us, since_write_us;
+    uint32_t write_max_us;
+    eTaskState state;
+    UBaseType_t prio;
+    char writer[configMAX_TASK_NAME_LEN];
+    char core[2][configMAX_TASK_NAME_LEN];
+} dry_t;
+#define DRY_KEEP 6
+static dry_t s_dry[DRY_KEEP], s_dry_now;
+static uint32_t s_ndry;
 
 struct t5_audio_in {
     uint32_t magic;
@@ -346,19 +372,76 @@ static int take_streams(t5_audio_out_t **sts)
 
 /* One stream's block into buf (zeros past what it had), with the underrun
  * bookkeeping. Returns the frames it gave. */
+static void copy_name(char *out, TaskHandle_t t)
+{
+    const char *n = t ? pcTaskGetName(t) : "-";
+    strncpy(out, n ? n : "?", configMAX_TASK_NAME_LEN - 1);
+    out[configMAX_TASK_NAME_LEN - 1] = 0;
+}
+
+/* The moment a stream runs dry (output task). */
+static void snapshot(t5_audio_out_t *st, dry_t *d)
+{
+    int64_t now = esp_timer_get_time();
+    TaskHandle_t w = st->writer;
+    *d = (dry_t){ .at_us = now, .write_max_us = st->write_max_us };
+    int64_t in = st->write_in_us, out = st->write_out_us;
+    d->in_write_us = in ? now - in : -1;
+    d->since_write_us = out ? now - out : -1;
+    if (w) {
+        d->state = eTaskGetState(w);
+        d->prio = uxTaskPriorityGet(w);
+    }
+    copy_name(d->writer, w);
+    copy_name(d->core[0], xTaskGetCurrentTaskHandleForCore(0));
+    copy_name(d->core[1], xTaskGetCurrentTaskHandleForCore(1));
+    d->space = (uint32_t)xStreamBufferSpacesAvailable(st->sb);
+}
+
+static void dry_snapshot(t5_audio_out_t *st)
+{
+    snapshot(st, &s_dry_now);
+    s_dry_now.kind = 'U';
+}
+
+/* A write that has gone on far past any sane timeout: what its task is doing. */
+#define SLOW_WRITE_US 300000
+static void slow_check(t5_audio_out_t *st)
+{
+    int64_t in = st->write_in_us;
+    if (!in) return;
+    if (in != st->slow_seen) {
+        st->slow_seen = in;
+        st->slow_n = 0;
+    }
+    int64_t now = esp_timer_get_time();
+    if (st->slow_n >= 3 || now - in < (int64_t)SLOW_WRITE_US * (1 + st->slow_n * 2)) return;   /* 300, 900, 1500 ms */
+    st->slow_n++;
+    dry_t d;
+    snapshot(st, &d);
+    d.kind = 'S';
+    s_dry[s_ndry++ % DRY_KEEP] = d;
+}
+
 static size_t pull_block(t5_audio_out_t *st, int16_t *buf)
 {
+    slow_check(st);
     size_t got = stream_pull(st, buf);
     st->had_data = got > 0;
     if (got) {
         /* Data after running dry: that gap was an underrun (running dry
          * at the end of a stream is not). */
-        if (st->starved) s_st.underruns++;
+        if (st->starved) {
+            s_st.underruns++;
+            s_dry_now.gap_ms = (uint32_t)((esp_timer_get_time() - s_dry_now.at_us) / 1000);
+            s_dry[s_ndry++ % DRY_KEEP] = s_dry_now;
+        }
         st->primed = true;
         st->starved = false;
     }
     if (got < BLOCK_FRAMES) {
         memset(buf + got * 2, 0, (BLOCK_FRAMES - got) * 2 * sizeof buf[0]);
+        if (st->primed && !st->starved) dry_snapshot(st);
         if (st->primed) st->starved = true;
     }
     if (!st->npend && xStreamBufferIsEmpty(st->sb)) xEventGroupSetBits(s_ev, EV_DRAINED);
@@ -677,6 +760,9 @@ int t5_audio_out_write(t5_audio_out_t *o, const void *pcm, size_t bytes, uint32_
     if (!o || o->magic != OUT_MAGIC || o->closing) return T5_ERR_INVALID_ARG;
     bytes -= bytes % o->frame_bytes;
     size_t done = 0;
+    int64_t in_us = esp_timer_get_time();
+    o->writer = xTaskGetCurrentTaskHandle();
+    o->write_in_us = in_us;
     uint32_t t0 = t5_time_ms();
     while (done < bytes) {
         uint32_t el = t5_time_ms() - t0;
@@ -686,6 +772,10 @@ int t5_audio_out_write(t5_audio_out_t *o, const void *pcm, size_t bytes, uint32_
         done += n;
         if (!n && !w) break;
     }
+    int64_t out_us = esp_timer_get_time();
+    if ((uint32_t)(out_us - in_us) > o->write_max_us) o->write_max_us = (uint32_t)(out_us - in_us);
+    o->write_out_us = out_us;
+    o->write_in_us = 0;
     return (int)(done - done % o->frame_bytes);
 }
 
@@ -1006,4 +1096,20 @@ t5_err_t t5_audio_init(void)
     T5_LOGI(TAG, "audio up: volume %d%s, speaker/headphones %s", s_set.volume, s_set.muted ? " (muted)" : "",
             s_st.headphones ? "headphones" : "speaker");
     return T5_OK;
+}
+
+/* The underruns kept (t5_diag "audio dry"). */
+void t5_audio_dry_print(void)
+{
+    static const char *const ST[] = { "running", "ready", "blocked", "suspended", "deleted", "invalid" };
+    uint32_t n = s_ndry < DRY_KEEP ? s_ndry : DRY_KEEP;
+    printf("%u underruns and slow writes recorded (last %u):\n", (unsigned)s_ndry, (unsigned)n);
+    for (uint32_t i = 0; i < n; i++) {
+        const dry_t *d = &s_dry[(s_ndry - n + i) % DRY_KEEP];
+        printf("  %s at %lld ms: gap %u ms, %u bytes free; writer %s %s prio %u, %s %lld ms, slowest write %u ms; cores: %s, %s\n",
+               d->kind == 'S' ? "SLOW WRITE" : "underrun", d->at_us / 1000, (unsigned)d->gap_ms, (unsigned)d->space, d->writer, (unsigned)d->state < 6 ? ST[d->state] : "?",
+               (unsigned)d->prio, d->in_write_us >= 0 ? "inside a write for" : "out of writes for",
+               (d->in_write_us >= 0 ? d->in_write_us : d->since_write_us) / 1000, (unsigned)(d->write_max_us / 1000),
+               d->core[0], d->core[1]);
+    }
 }

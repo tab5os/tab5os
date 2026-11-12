@@ -21,6 +21,7 @@ void diag_register_prof(void);
 void diag_register_py(void);
 void diag_register_ota(void);
 void diag_register_devmode(void);
+void diag_register_starve(void);
 void diag_print_boot_banner(void);
 
 /* Parse "0x43", "67" etc. Returns false if not a number in [min, max]. */

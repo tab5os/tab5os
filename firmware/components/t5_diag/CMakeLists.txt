@@ -1,5 +1,5 @@
 set(srcs "t5_diag.c" "diag_sys.c" "diag_i2c.c" "diag_exp.c" "diag_dev.c" "diag_log.c" "diag_power.c" "diag_net.c" "diag_ports.c"
-         "diag_ui.c" "diag_app.c" "diag_media.c" "diag_prof.c" "diag_py.c" "diag_ota.c" "diag_devmode.c")
+         "diag_ui.c" "diag_app.c" "diag_media.c" "diag_prof.c" "diag_py.c" "diag_ota.c" "diag_devmode.c" "diag_starve.c")
 # The Phase 0 bench commands (Kconfig T5_DIAG_BENCH) are off in normal builds.
 if(CONFIG_T5_DIAG_BENCH)
     list(APPEND srcs "diag_bench.c" "diag_elf.c")
@@ -11,7 +11,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "."
     REQUIRES console
     PRIV_REQUIRES t5_core t5_ui md t5_app t5_pins t5_i2c t5_bsp t5_time t5_imu t5_storage t5_display t5_input t5_power t5_battery t5_net t5_ports t5_audio t5_camera t5_usb t5_hid t5_shell t5_py t5_dev t5_ota t5_ota_net mbedtls lwip
-                  esp_psram esp_timer esp_hw_support app_update spi_flash efuse esp_system esp_driver_gpio esp_pm
+                  esp_psram esp_timer esp_driver_gptimer esp_hw_support app_update spi_flash efuse esp_system esp_driver_gpio esp_pm
 )
 
 # Bench check 11: build elfbench.elf with the target compiler and embed it.
