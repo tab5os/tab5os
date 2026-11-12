@@ -1,26 +1,30 @@
 /* SPDX-License-Identifier: Apache-2.0
  * t5ui: the app UI API (API level 2; in the SDK through t5/t5ui.h).
  *
- * Everything an app compiles in from here is Tab5 OS's own: opaque
- * handles, plain integers for colours (0xRRGGBB) and opacity (0..255), and
- * Tab5 enums. The OS draws with LVGL (and its Material widgets, md), but
- * no LVGL type, macro or struct layout reaches an app through this header,
- * so the OS can move to another LVGL major version (or another renderer)
- * and apps built against t5ui keep working unchanged. Native apps built
- * against level 1 call LVGL 9 directly; those calls stay frozen at LVGL 9
- * and keep working through a compatibility layer, but new apps should use
- * t5ui only (docs/t5ui.md).
+ * A UI API that belongs to Tab5 OS, not to the library that draws it.
+ * Today a backend on LVGL 9 and Tab5's Material widgets draws it. A later
+ * OS can put another backend behind the same API (a newer LVGL, or
+ * something else), and apps built against t5ui keep working unchanged.
+ * Nothing of LVGL reaches an app through this header.
  *
- * Threads: like LVGL, everything here runs on the UI task: in the app's
- * callbacks (on_create, events, timers), or through t5_ui_async from
- * another task. Objects belong to the app: they go when the app exits.
+ * The model is small on purpose, so it can stay stable:
+ *   - objects: t5ui_create(parent, kind) makes a tree; children go with
+ *     their parent
+ *   - properties: t5ui_set_int / _color / _str / _obj (obj, T5UI_P_*, value)
+ *     and the getters; look properties also for a part and states
+ *     (t5ui_set_int_at: a slider's knob, a pressed button)
+ *   - events: t5ui_on(obj, T5UI_EV_*, cb, user)
+ *   - commands for what isn't a property: t5ui_cmd(obj, T5UI_CMD_*, ...)
+ *   - reusable styles, property animations, timers, canvases and drawing
+ * New abilities come as new kinds, properties, events and commands (new
+ * numbers), never as changes to these functions. The numbers never change
+ * meaning. Something a kind doesn't have returns T5_ERR_NOT_SUPPORTED.
  *
- * Coordinates are pixels (t5ui_dp converts density-independent units). A
- * size may also be T5UI_PCT(n), a percentage of the parent's content area,
- * or T5UI_CONTENT, fit to the children or text.
+ * Threads: call t5ui from the UI task (the app's on_create, events, timers)
+ * or hand work to it with t5ui_async. Objects, styles, timers and
+ * animations belong to the app and go when it exits.
  */
 #pragma once
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -30,270 +34,342 @@
 extern "C" {
 #endif
 
-/* ---- basic types ------------------------------------------------------------ */
-typedef struct t5ui_obj t5ui_obj_t;          /* any element on screen */
-typedef struct t5ui_event t5ui_event_t;      /* valid during its callback only */
+/* ---- values ------------------------------------------------------------------------ */
+typedef struct t5ui_obj t5ui_obj_t;
+typedef struct t5ui_event t5ui_event_t;        /* valid during its callback only */
 typedef struct t5ui_timer t5ui_timer_t;
-typedef struct t5ui_paint t5ui_paint_t;      /* a drawing target, during its callback only */
-typedef uint32_t t5ui_color_t;               /* 0xRRGGBB */
-typedef uint8_t t5ui_opa_t;                  /* 0 transparent .. 255 opaque */
+typedef struct t5ui_style t5ui_style_t;
+typedef struct t5ui_paint t5ui_paint_t;        /* a drawing target, valid while drawing */
+typedef uint32_t t5ui_color_t;                 /* 0xRRGGBB */
+typedef uint8_t t5ui_opa_t;                    /* 0 clear .. 255 opaque */
 
 #define T5UI_RGB(r, g, b) ((t5ui_color_t)(((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b)))
 #define T5UI_OPA_COVER 255
 #define T5UI_OPA_TRANSP 0
-
-/* Sizes: pixels, or one of these. */
-#define T5UI_PCT(n) ((int32_t)(0x40000000 | ((n) & 0xffff)))    /* 0..1000 percent of the parent */
-#define T5UI_CONTENT ((int32_t)0x7ffffffe)                      /* fit the content */
+/* Sizes and positions are pixels, or one of these. */
+#define T5UI_PCT(n) ((int32_t)(0x40000000 | ((n) & 0xffff)))   /* percent of the parent's content */
+#define T5UI_CONTENT ((int32_t)0x7ffffffe)                     /* fit the content */
 #define T5UI_RADIUS_CIRCLE 0x7fff
 
 typedef struct {
-    int32_t x1, y1, x2, y2;                  /* inclusive */
+    int32_t x1, y1, x2, y2;                    /* inclusive */
 } t5ui_rect_t;
 
-/* Density-independent units to pixels (2 px per dp on the Tab5). */
-int32_t t5ui_dp(int32_t dp);
-/* The display in pixels, as the app sees it (rotation applied). */
-void t5ui_screen_size(int32_t *w, int32_t *h);
-uint32_t t5ui_ticks_ms(void);
-/* Run fn(arg) on the UI task soon (from any task): how other tasks touch
- * the UI. T5_ERR_NO_MEM if it can't be queued. */
+/* ---- kinds of object ---------------------------------------------------------------- */
+typedef enum {
+    T5UI_BOX = 1,                              /* a container with no look of its own */
+    T5UI_PANEL = 2,                            /* a surface: background, rounded, padded */
+    T5UI_LABEL = 3,
+    T5UI_BUTTON = 4,                           /* a plain button; T5UI_P_TEXT puts a label in it */
+    T5UI_IMAGE = 5,                            /* shows t5ui_image_pixels */
+    T5UI_CANVAS = 6,                           /* keeps what's drawn on it: t5ui_canvas_* */
+    T5UI_SWITCH = 7,
+    T5UI_CHECKBOX = 8,
+    T5UI_SLIDER = 9,
+    T5UI_ARC = 10,
+    T5UI_BAR = 11,
+    T5UI_SPINNER = 12,
+    T5UI_LED = 13,
+    T5UI_TEXTAREA = 14,
+    T5UI_DROPDOWN = 15,
+    T5UI_ROLLER = 16,
+    T5UI_CHART = 17,
+    T5UI_TABLE = 18,
+    T5UI_KEYBOARD = 19,
+    /* Material, the Tab5 look. Choices fixed at creation are separate kinds. */
+    T5UI_MD_TEXT = 100,                        /* text in a Material type style (T5UI_P_TEXT_STYLE) */
+    T5UI_MD_ICON = 101,                        /* T5UI_P_ICON, T5UI_P_ICON_SIZE */
+    T5UI_MD_BUTTON_TEXT = 102,
+    T5UI_MD_BUTTON_OUTLINED = 103,
+    T5UI_MD_BUTTON_CONTAINED = 104,
+    T5UI_MD_FAB = 105,                         /* T5UI_P_ICON */
+    T5UI_MD_FAB_MINI = 106,
+    T5UI_MD_CARD = 107,
+    T5UI_MD_DIVIDER = 108,
+    T5UI_MD_APPBAR = 109,                      /* T5UI_P_TITLE */
+    T5UI_MD_APPBAR_BACK = 110,                 /* with a back arrow: T5UI_EV_BACK */
+    T5UI_MD_APPBAR_ACTION = 111,               /* an icon button, made in an app bar or page */
+    T5UI_MD_ROW = 112,                         /* T5UI_P_ICON, T5UI_P_TEXT, T5UI_P_SECONDARY */
+    T5UI_MD_ROW_SWITCH = 113,                  /* a switch at a row's end, made in the row */
+    T5UI_MD_SECTION = 114,                     /* a section header: T5UI_P_TEXT */
+    T5UI_MD_SWITCH = 115,
+    T5UI_MD_CHECKBOX = 116,
+    T5UI_MD_SLIDER = 117,
+    T5UI_MD_TEXTFIELD = 118,                   /* T5UI_P_PLACEHOLDER is its label */
+    T5UI_MD_PASSWORD = 119,
+    T5UI_MD_CHIP_ACTION = 120,
+    T5UI_MD_CHIP_FILTER = 121,                 /* toggles T5UI_P_CHECKED */
+    T5UI_MD_CHIP_CHOICE = 122,                 /* one checked among its siblings */
+    T5UI_MD_TABS = 123,                        /* T5UI_P_SELECTED; make T5UI_MD_TAB in it */
+    T5UI_MD_TAB = 124,                         /* T5UI_P_TEXT; the tab's content goes in it */
+    T5UI_MD_PAGE = 125,                        /* full screen, back arrow, T5UI_P_TITLE; content goes in it */
+    T5UI_MD_LIST = 126,                        /* a long list: T5UI_P_COUNT rows, T5UI_EV_BIND fills them */
+} t5ui_kind_t;
+
+/* ---- properties --------------------------------------------------------------------- */
+/* Each has one type: int (also bools and enums), color, str or obj. Look
+ * properties (marked L) can also be set for a part and states, and in a
+ * style. */
+typedef enum {
+    /* geometry, int: pixels, T5UI_PCT, T5UI_CONTENT (L) */
+    T5UI_P_X = 1, T5UI_P_Y = 2, T5UI_P_WIDTH = 3, T5UI_P_HEIGHT = 4,
+    T5UI_P_MIN_WIDTH = 5, T5UI_P_MAX_WIDTH = 6, T5UI_P_MIN_HEIGHT = 7, T5UI_P_MAX_HEIGHT = 8,
+    T5UI_P_ALIGN = 9,                          /* t5ui_align_t; X and Y then offset from it */
+    /* layout of the children (L) */
+    T5UI_P_FLOW = 20,                          /* t5ui_flow_t */
+    T5UI_P_PLACE_MAIN = 21, T5UI_P_PLACE_CROSS = 22, T5UI_P_PLACE_TRACK = 23,   /* t5ui_place_t */
+    T5UI_P_GROW = 24,                          /* share of the free space in the parent's flow */
+    T5UI_P_FLOATING = 25,                      /* bool: placed by X, Y and ALIGN, outside the flow */
+    /* spacing, int pixels (L) */
+    T5UI_P_PAD_TOP = 40, T5UI_P_PAD_BOTTOM = 41, T5UI_P_PAD_LEFT = 42, T5UI_P_PAD_RIGHT = 43,
+    T5UI_P_PAD_ALL = 44,                       /* sets the four; can't be read */
+    T5UI_P_PAD_ROW = 45, T5UI_P_PAD_COLUMN = 46,   /* gaps between children */
+    T5UI_P_MARGIN_TOP = 47, T5UI_P_MARGIN_BOTTOM = 48, T5UI_P_MARGIN_LEFT = 49, T5UI_P_MARGIN_RIGHT = 50,
+    /* look (L) */
+    T5UI_P_BG_COLOR = 60, T5UI_P_BG_OPA = 61, T5UI_P_BG_GRAD_COLOR = 62,
+    T5UI_P_BG_GRAD_DIR = 63,                   /* t5ui_grad_t */
+    T5UI_P_BORDER_WIDTH = 64, T5UI_P_BORDER_COLOR = 65, T5UI_P_BORDER_OPA = 66,
+    T5UI_P_BORDER_SIDES = 67,                  /* T5UI_SIDE_* bits */
+    T5UI_P_OUTLINE_WIDTH = 68, T5UI_P_OUTLINE_COLOR = 69, T5UI_P_OUTLINE_OPA = 70, T5UI_P_OUTLINE_PAD = 71,
+    T5UI_P_SHADOW_WIDTH = 72, T5UI_P_SHADOW_COLOR = 73, T5UI_P_SHADOW_OPA = 74,
+    T5UI_P_SHADOW_OFFSET_X = 75, T5UI_P_SHADOW_OFFSET_Y = 76, T5UI_P_SHADOW_SPREAD = 77,
+    T5UI_P_RADIUS = 78,                        /* T5UI_RADIUS_CIRCLE: round */
+    T5UI_P_CLIP_CORNER = 79,                   /* bool: children cut to the rounded corners */
+    T5UI_P_OPA = 80,                           /* the object with its children */
+    T5UI_P_ELEVATION = 81,                     /* Material elevation, dp: shadow and dark-theme tint; not L */
+    /* transform: drawn moved, not laid out (L) */
+    T5UI_P_TRANSLATE_X = 90, T5UI_P_TRANSLATE_Y = 91,
+    T5UI_P_SCALE = 92,                         /* 256 = 1x */
+    T5UI_P_ROTATION = 93,                      /* 0.1 degree */
+    /* text */
+    T5UI_P_TEXT = 100,                         /* str: a label's, button's, row's, tab's, textarea's... */
+    T5UI_P_TEXT_COLOR = 101, T5UI_P_TEXT_OPA = 102,   /* L */
+    T5UI_P_TEXT_STYLE = 103,                   /* t5ui_text_t: font, size and weight (L) */
+    T5UI_P_TEXT_ALIGN = 104,                   /* t5ui_text_align_t (L) */
+    T5UI_P_LETTER_SPACE = 105, T5UI_P_LINE_SPACE = 106,   /* L */
+    T5UI_P_TEXT_DECOR = 107,                   /* T5UI_DECOR_* bits (L) */
+    T5UI_P_LONG_MODE = 108,                    /* t5ui_long_t: text too long for a label's width */
+    T5UI_P_SECONDARY = 109,                    /* str: a row's second line */
+    T5UI_P_ICON = 110,                         /* str, a T5UI_ICON_*: of an icon, row, FAB, chip, action */
+    T5UI_P_ICON_SIZE = 111,                    /* dp */
+    T5UI_P_PLACEHOLDER = 112,                  /* str: a text field's label, a textarea's hint */
+    T5UI_P_HELPER = 113,                       /* str: a text field's helper line */
+    T5UI_P_HELPER_ERROR = 114,                 /* bool: the helper line is an error */
+    T5UI_P_TITLE = 115,                        /* str: an app bar's or page's */
+    /* lines and arcs (L) */
+    T5UI_P_LINE_WIDTH = 130, T5UI_P_LINE_COLOR = 131, T5UI_P_LINE_OPA = 132, T5UI_P_LINE_ROUNDED = 133,
+    T5UI_P_ARC_WIDTH = 134, T5UI_P_ARC_COLOR = 135, T5UI_P_ARC_OPA = 136, T5UI_P_ARC_ROUNDED = 137,
+    /* images */
+    T5UI_P_IMAGE_RECOLOR = 150, T5UI_P_IMAGE_RECOLOR_OPA = 151,   /* L */
+    T5UI_P_IMAGE_SCALE = 152,                  /* 256 = 1x */
+    T5UI_P_IMAGE_ROTATION = 153,               /* 0.1 degree */
+    /* flags and state, int (bool unless noted) */
+    T5UI_P_HIDDEN = 170, T5UI_P_CLICKABLE = 171, T5UI_P_SCROLLABLE = 172,
+    T5UI_P_SCROLL_DIR = 173,                   /* t5ui_dir_t */
+    T5UI_P_SCROLLBAR = 174,                    /* t5ui_scrollbar_t */
+    T5UI_P_SCROLL_X = 175, T5UI_P_SCROLL_Y = 176,   /* scrolled by, px; setting scrolls at once */
+    T5UI_P_CHECKED = 177, T5UI_P_DISABLED = 178,
+    T5UI_P_CHECKABLE = 179,                    /* a click toggles CHECKED */
+    T5UI_P_BUBBLE = 180,                       /* events go on to the parent too */
+    /* values, int unless noted */
+    T5UI_P_VALUE = 200,                        /* slider, arc, bar; LED brightness 0..255 */
+    T5UI_P_MIN = 201, T5UI_P_MAX = 202,        /* slider, arc, bar; a chart's Y range */
+    T5UI_P_START_VALUE = 203,                  /* a bar or slider showing a range */
+    T5UI_P_ARC_START = 204, T5UI_P_ARC_END = 205,   /* an arc's track, degrees */
+    T5UI_P_ARC_ROTATION = 206,                 /* degrees */
+    T5UI_P_SELECTED = 207,                     /* dropdown, roller, tabs: index */
+    T5UI_P_OPTIONS = 208,                      /* str: dropdown, roller; '\n' between choices */
+    T5UI_P_COUNT = 209,                        /* MD list rows, chart points */
+    T5UI_P_ROWS = 210, T5UI_P_COLUMNS = 211,   /* table */
+    T5UI_P_ONE_LINE = 212, T5UI_P_PASSWORD = 213, T5UI_P_MAX_LENGTH = 214,   /* textarea, text field */
+    T5UI_P_TARGET = 215,                       /* obj: the textarea or text field a keyboard types into */
+    T5UI_P_KEYBOARD_MODE = 216,                /* t5ui_kb_mode_t */
+    T5UI_P_CHART_TYPE = 217,                   /* t5ui_chart_type_t */
+    T5UI_P_CHART_GRID_ROWS = 218, T5UI_P_CHART_GRID_COLUMNS = 219,
+    T5UI_P_ROW_DP = 220,                       /* MD list row height: 48, 64 (two lines) or 72 */
+    T5UI_P_ANIM_TIME = 221,                    /* ms: a spinner's turn */
+} t5ui_prop_t;
+
+/* Where a look property applies: a part of the object, in states. */
+typedef enum {
+    T5UI_PART_MAIN = 0, T5UI_PART_SCROLLBAR = 1, T5UI_PART_INDICATOR = 2, T5UI_PART_KNOB = 3,
+    T5UI_PART_SELECTED = 4, T5UI_PART_ITEMS = 5, T5UI_PART_CURSOR = 6,
+} t5ui_part_t;
+#define T5UI_STATE_DEFAULT 0x00
+#define T5UI_STATE_CHECKED 0x01
+#define T5UI_STATE_FOCUSED 0x02
+#define T5UI_STATE_PRESSED 0x04
+#define T5UI_STATE_DISABLED 0x08
+#define T5UI_STATE_EDITED 0x10
+#define T5UI_AT(part, states) (((uint32_t)(part) << 16) | (uint32_t)(states))
+
+typedef enum {
+    T5UI_ALIGN_DEFAULT = 0, T5UI_ALIGN_TOP_LEFT = 1, T5UI_ALIGN_TOP_MID = 2, T5UI_ALIGN_TOP_RIGHT = 3,
+    T5UI_ALIGN_LEFT_MID = 4, T5UI_ALIGN_CENTER = 5, T5UI_ALIGN_RIGHT_MID = 6,
+    T5UI_ALIGN_BOTTOM_LEFT = 7, T5UI_ALIGN_BOTTOM_MID = 8, T5UI_ALIGN_BOTTOM_RIGHT = 9,
+} t5ui_align_t;
+typedef enum { T5UI_FLOW_NONE = 0, T5UI_ROW = 1, T5UI_COLUMN = 2, T5UI_ROW_WRAP = 3, T5UI_COLUMN_WRAP = 4 } t5ui_flow_t;
+typedef enum {
+    T5UI_PLACE_START = 0, T5UI_PLACE_END = 1, T5UI_PLACE_CENTER = 2,
+    T5UI_PLACE_SPACE_EVENLY = 3, T5UI_PLACE_SPACE_AROUND = 4, T5UI_PLACE_SPACE_BETWEEN = 5,
+} t5ui_place_t;
+typedef enum { T5UI_GRAD_NONE = 0, T5UI_GRAD_VER = 1, T5UI_GRAD_HOR = 2 } t5ui_grad_t;
+#define T5UI_SIDE_TOP 0x1
+#define T5UI_SIDE_BOTTOM 0x2
+#define T5UI_SIDE_LEFT 0x4
+#define T5UI_SIDE_RIGHT 0x8
+#define T5UI_SIDE_ALL 0xf
+typedef enum { T5UI_TEXT_LEFT = 0, T5UI_TEXT_CENTER = 1, T5UI_TEXT_RIGHT = 2 } t5ui_text_align_t;
+#define T5UI_DECOR_UNDERLINE 0x1
+#define T5UI_DECOR_STRIKE 0x2
+typedef enum { T5UI_LONG_WRAP = 0, T5UI_LONG_DOTS = 1, T5UI_LONG_SCROLL = 2, T5UI_LONG_CLIP = 3 } t5ui_long_t;
+typedef enum { T5UI_DIR_NONE = 0, T5UI_DIR_HOR = 1, T5UI_DIR_VER = 2, T5UI_DIR_ALL = 3 } t5ui_dir_t;
+typedef enum {
+    T5UI_SCROLLBAR_OFF = 0, T5UI_SCROLLBAR_ON = 1, T5UI_SCROLLBAR_ACTIVE = 2, T5UI_SCROLLBAR_AUTO = 3,
+} t5ui_scrollbar_t;
+typedef enum { T5UI_KB_TEXT = 0, T5UI_KB_NUMBER = 1 } t5ui_kb_mode_t;
+typedef enum { T5UI_CHART_LINE = 0, T5UI_CHART_BAR = 1 } t5ui_chart_type_t;
+/* Text styles: the theme's font, size, weight and spacing for each role. */
+typedef enum {
+    T5UI_TEXT_HEADLINE4 = 0, T5UI_TEXT_HEADLINE5 = 1, T5UI_TEXT_HEADLINE6 = 2, T5UI_TEXT_SUBTITLE1 = 3,
+    T5UI_TEXT_BODY1 = 4, T5UI_TEXT_BODY2 = 5, T5UI_TEXT_BUTTON = 6, T5UI_TEXT_CAPTION = 7,
+    T5UI_TEXT_OVERLINE = 8, T5UI_TEXT_MONO = 9,
+} t5ui_text_t;
+
+/* ---- objects ------------------------------------------------------------------------ */
+struct t5_app;
+/* The app's screen, from on_create on: the root of its UI. */
+t5ui_obj_t *t5ui_root(struct t5_app *app);
+/* NULL if parent can't hold kind (a T5UI_MD_TAB outside tabs) or memory ran out. */
+t5ui_obj_t *t5ui_create(t5ui_obj_t *parent, t5ui_kind_t kind);
+t5ui_kind_t t5ui_kind(t5ui_obj_t *obj);        /* 0 for an object t5ui didn't make */
+void t5ui_delete(t5ui_obj_t *obj);
+void t5ui_clean(t5ui_obj_t *obj);              /* delete its children */
+t5ui_obj_t *t5ui_parent(t5ui_obj_t *obj);
+t5ui_obj_t *t5ui_child(t5ui_obj_t *obj, int32_t index);   /* negative counts from the end */
+uint32_t t5ui_child_count(t5ui_obj_t *obj);
+void t5ui_move_to(t5ui_obj_t *obj, int32_t index);       /* among its siblings */
+void t5ui_set_user(t5ui_obj_t *obj, void *user);
+void *t5ui_user(t5ui_obj_t *obj);
+/* Where obj is on screen, and its content area inside the padding. */
+void t5ui_coords(t5ui_obj_t *obj, t5ui_rect_t *out);
+void t5ui_content_coords(t5ui_obj_t *obj, t5ui_rect_t *out);
+void t5ui_layout_now(t5ui_obj_t *obj);         /* positions settle before the next frame otherwise */
+void t5ui_invalidate(t5ui_obj_t *obj);         /* redraw it on the next frame */
+void t5ui_scroll_into_view(t5ui_obj_t *obj, bool animate);
+
+/* ---- properties ----------------------------------------------------------------------- */
+/* T5_ERR_NOT_SUPPORTED: obj's kind has no such property, or it's another type. */
+t5_err_t t5ui_set_int(t5ui_obj_t *obj, t5ui_prop_t p, int32_t v);
+t5_err_t t5ui_set_color(t5ui_obj_t *obj, t5ui_prop_t p, t5ui_color_t c);
+t5_err_t t5ui_set_str(t5ui_obj_t *obj, t5ui_prop_t p, const char *s);   /* copied */
+t5_err_t t5ui_set_strf(t5ui_obj_t *obj, t5ui_prop_t p, const char *fmt, ...);   /* printf, to 255 bytes */
+t5_err_t t5ui_set_obj(t5ui_obj_t *obj, t5ui_prop_t p, t5ui_obj_t *v);
+/* A look property for a part and states, e.g. T5UI_AT(T5UI_PART_KNOB, T5UI_STATE_PRESSED). */
+t5_err_t t5ui_set_int_at(t5ui_obj_t *obj, t5ui_prop_t p, uint32_t at, int32_t v);
+t5_err_t t5ui_set_color_at(t5ui_obj_t *obj, t5ui_prop_t p, uint32_t at, t5ui_color_t c);
+/* The value now, or def when obj has no such property. */
+int32_t t5ui_get_int(t5ui_obj_t *obj, t5ui_prop_t p, int32_t def);
+t5ui_color_t t5ui_get_color(t5ui_obj_t *obj, t5ui_prop_t p, t5ui_color_t def);
+const char *t5ui_get_str(t5ui_obj_t *obj, t5ui_prop_t p, const char *def);   /* until it changes */
+t5ui_obj_t *t5ui_get_obj(t5ui_obj_t *obj, t5ui_prop_t p);
+
+/* Styles: shared sets of look properties. Changing one shows on every
+ * object that has it. */
+t5ui_style_t *t5ui_style_create(void);
+t5_err_t t5ui_style_set_int(t5ui_style_t *s, t5ui_prop_t p, int32_t v);
+t5_err_t t5ui_style_set_color(t5ui_style_t *s, t5ui_prop_t p, t5ui_color_t c);
+t5_err_t t5ui_style_add(t5ui_obj_t *obj, t5ui_style_t *s, uint32_t at);   /* at: T5UI_AT(...) */
+void t5ui_style_remove(t5ui_obj_t *obj, t5ui_style_t *s);
+void t5ui_style_clear(t5ui_obj_t *obj);        /* every style, the theme's too: a bare object */
+void t5ui_style_delete(t5ui_style_t *s);       /* also takes it off the app's objects */
+
+/* Animate an int property from..to over ms, after delay_ms. Starting
+ * another on the same property replaces it. */
+typedef enum {
+    T5UI_EASE_LINEAR = 0, T5UI_EASE_IN = 1, T5UI_EASE_OUT = 2, T5UI_EASE_IN_OUT = 3, T5UI_EASE_OVERSHOOT = 4,
+    T5UI_EASE_BOUNCE = 5,
+} t5ui_ease_t;
+t5_err_t t5ui_animate(t5ui_obj_t *obj, t5ui_prop_t p, int32_t from, int32_t to, uint32_t ms, uint32_t delay_ms,
+                      t5ui_ease_t ease);
+void t5ui_animate_stop(t5ui_obj_t *obj, t5ui_prop_t p);   /* 0: every one of obj's */
+
+/* ---- commands: what isn't a property ----------------------------------------------------- */
+typedef enum {
+    T5UI_CMD_CHART_ADD_SERIES = 1,             /* a = color: the new series' index */
+    T5UI_CMD_CHART_PUSH = 2,                   /* a = series, b = value: shifts the others left */
+    T5UI_CMD_CHART_SET = 3,                    /* a = series, b = point, c = value */
+    T5UI_CMD_CHART_CLEAR = 4,                  /* a = series */
+    T5UI_CMD_TABLE_SET_CELL = 5,               /* a = row, b = column, text */
+    T5UI_CMD_TEXT_INSERT = 6,                  /* textarea, text field: text at the cursor */
+    T5UI_CMD_TEXT_DELETE = 7,                  /* the character before the cursor */
+    T5UI_CMD_LIST_REFRESH = 8,                 /* MD list: bind the visible rows again */
+    T5UI_CMD_SCROLL_TO = 9,                    /* a = x, b = y, c = animate */
+    T5UI_CMD_SCROLL_BY = 10,                   /* a = dx, b = dy, c = animate */
+    T5UI_CMD_OPEN = 11, T5UI_CMD_CLOSE = 12,   /* a dropdown's list */
+    T5UI_CMD_FOCUS = 13,                       /* give obj the keyboard focus */
+} t5ui_cmd_t;
+/* The result (>= 0), or a negative t5_err_t. */
+int32_t t5ui_cmd(t5ui_obj_t *obj, t5ui_cmd_t cmd, int32_t a, int32_t b, int32_t c, const char *text);
+
+/* ---- events -------------------------------------------------------------------------------- */
+typedef enum {
+    T5UI_EV_CLICK = 1, T5UI_EV_LONG_PRESS = 2, T5UI_EV_PRESS = 3, T5UI_EV_RELEASE = 4,
+    T5UI_EV_VALUE = 5,                         /* the user changed its value, state or text */
+    T5UI_EV_FOCUS = 6, T5UI_EV_DEFOCUS = 7, T5UI_EV_SCROLL = 8, T5UI_EV_RESIZE = 9,
+    T5UI_EV_DELETE = 10,                       /* obj is going: free what its user pointer holds */
+    T5UI_EV_DRAW = 11,                         /* draw over obj with t5ui_event_paint */
+    T5UI_EV_BACK = 12,                         /* an app bar's or page's back arrow */
+    T5UI_EV_BIND = 13,                         /* MD list: fill row t5ui_event_target for t5ui_event_index */
+    T5UI_EV_ITEM = 14,                         /* MD list: row t5ui_event_index tapped */
+    T5UI_EV_READY = 15, T5UI_EV_CANCEL = 16,   /* keyboard OK or close; Enter in a one-line textarea */
+} t5ui_ev_t;
+typedef void (*t5ui_event_cb_t)(t5ui_event_t *e);
+/* cb(e) each time ev happens to obj; an object can have several. */
+t5_err_t t5ui_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *user);
+t5ui_obj_t *t5ui_event_obj(t5ui_event_t *e);           /* the object cb was added to */
+t5ui_obj_t *t5ui_event_target(t5ui_event_t *e);        /* where it happened: a child, a list row */
+void *t5ui_event_user(t5ui_event_t *e);
+t5ui_ev_t t5ui_event_kind(t5ui_event_t *e);
+int32_t t5ui_event_index(t5ui_event_t *e);             /* T5UI_EV_BIND, T5UI_EV_ITEM; else -1 */
+bool t5ui_event_point(t5ui_event_t *e, int32_t *x, int32_t *y);   /* the pointer, screen pixels */
+t5ui_paint_t *t5ui_event_paint(t5ui_event_t *e);       /* T5UI_EV_DRAW */
+
+/* ---- timers, other tasks, input --------------------------------------------------------- */
+typedef void (*t5ui_timer_cb_t)(t5ui_timer_t *t, void *user);
+t5ui_timer_t *t5ui_timer(uint32_t period_ms, t5ui_timer_cb_t cb, void *user);
+void t5ui_timer_period(t5ui_timer_t *t, uint32_t period_ms);
+void t5ui_timer_delete(t5ui_timer_t *t);
+/* fn(arg) on the UI task soon; from any task. */
 typedef void (*t5ui_fn_t)(void *arg);
 t5_err_t t5ui_async(t5ui_fn_t fn, void *arg);
-
-/* Every finger on the screen for the app in front, in screen pixels, with
- * an id that stays the same while that finger is down. Returns how many
- * (0..T5UI_TOUCH_MAX); 0 when the app isn't the resumed foreground app. */
+/* Every finger on the screen while the app is in front: how many (0 when
+ * it isn't). Screen pixels; id stays the same while the finger is down. */
 typedef struct {
     int16_t x, y;
     uint8_t id;
 } t5ui_touch_t;
 #define T5UI_TOUCH_MAX 5
 int t5ui_touches(t5ui_touch_t *out, int max);
+uint32_t t5ui_ticks_ms(void);
+int32_t t5ui_dp(int32_t dp);                   /* density-independent units to pixels */
+void t5ui_screen_size(int32_t *w, int32_t *h);
+void t5ui_text_size(const char *text, t5ui_text_t style, int32_t max_w, int32_t *w, int32_t *h);
 
-/* ---- theme -------------------------------------------------------------------- */
+/* ---- theme ------------------------------------------------------------------------------- */
 typedef enum {
-    T5UI_COLOR_PRIMARY,
-    T5UI_COLOR_PRIMARY_VARIANT,
-    T5UI_COLOR_SECONDARY,
-    T5UI_COLOR_BACKGROUND,
-    T5UI_COLOR_SURFACE,
-    T5UI_COLOR_ERROR,
-    T5UI_COLOR_ON_PRIMARY,
-    T5UI_COLOR_ON_SECONDARY,
-    T5UI_COLOR_ON_BACKGROUND,
-    T5UI_COLOR_ON_SURFACE,
-    T5UI_COLOR_ON_ERROR,
-    T5UI_COLOR_COUNT,
+    T5UI_COLOR_PRIMARY = 0, T5UI_COLOR_PRIMARY_VARIANT = 1, T5UI_COLOR_SECONDARY = 2, T5UI_COLOR_BACKGROUND = 3,
+    T5UI_COLOR_SURFACE = 4, T5UI_COLOR_ERROR = 5, T5UI_COLOR_ON_PRIMARY = 6, T5UI_COLOR_ON_SECONDARY = 7,
+    T5UI_COLOR_ON_BACKGROUND = 8, T5UI_COLOR_ON_SURFACE = 9, T5UI_COLOR_ON_ERROR = 10,
 } t5ui_color_role_t;
-/* The current theme's colour for role (follows dark mode and the accent). */
 t5ui_color_t t5ui_theme_color(t5ui_color_role_t role);
 bool t5ui_theme_dark(void);
-/* Text emphasis on a surface: high, medium, disabled (0..255 opacity). */
-typedef enum { T5UI_EMPHASIS_HIGH, T5UI_EMPHASIS_MEDIUM, T5UI_EMPHASIS_DISABLED } t5ui_emphasis_t;
-t5ui_opa_t t5ui_theme_emphasis(t5ui_emphasis_t e);
-/* fg over bg at opa. */
+typedef enum { T5UI_EMPHASIS_HIGH = 0, T5UI_EMPHASIS_MEDIUM = 1, T5UI_EMPHASIS_DISABLED = 2 } t5ui_emphasis_t;
+t5ui_opa_t t5ui_theme_emphasis(t5ui_emphasis_t e);       /* text opacity on a surface */
 t5ui_color_t t5ui_mix(t5ui_color_t fg, t5ui_color_t bg, t5ui_opa_t opa);
 
-/* Text styles (fonts, sizes, weights and letter spacing come with them). */
-typedef enum {
-    T5UI_TEXT_HEADLINE4,
-    T5UI_TEXT_HEADLINE5,
-    T5UI_TEXT_HEADLINE6,
-    T5UI_TEXT_SUBTITLE1,
-    T5UI_TEXT_BODY1,
-    T5UI_TEXT_BODY2,
-    T5UI_TEXT_BUTTON,
-    T5UI_TEXT_CAPTION,
-    T5UI_TEXT_OVERLINE,
-    T5UI_TEXT_MONO,                          /* fixed width, body size */
-    T5UI_TEXT_COUNT,
-} t5ui_text_t;
-
-/* ---- the object tree ---------------------------------------------------------- */
-/* The app's screen (from on_create on). */
-struct t5_app;
-t5ui_obj_t *t5ui_root(struct t5_app *app);
-/* A plain container: no background, border or padding. */
-t5ui_obj_t *t5ui_box(t5ui_obj_t *parent);
-/* A surface: the theme's surface colour, rounded, padded. */
-t5ui_obj_t *t5ui_panel(t5ui_obj_t *parent);
-void t5ui_delete(t5ui_obj_t *obj);
-void t5ui_clean(t5ui_obj_t *obj);            /* delete the children */
-t5ui_obj_t *t5ui_parent(t5ui_obj_t *obj);
-t5ui_obj_t *t5ui_child(t5ui_obj_t *obj, int32_t index);   /* negative: from the end; NULL if none */
-uint32_t t5ui_child_count(t5ui_obj_t *obj);
-void t5ui_set_user(t5ui_obj_t *obj, void *user);
-void *t5ui_user(t5ui_obj_t *obj);
-
-/* ---- geometry and layout ------------------------------------------------------ */
-void t5ui_size(t5ui_obj_t *obj, int32_t w, int32_t h);
-void t5ui_width(t5ui_obj_t *obj, int32_t w);
-void t5ui_height(t5ui_obj_t *obj, int32_t h);
-void t5ui_min_size(t5ui_obj_t *obj, int32_t min_w, int32_t min_h);   /* 0: none */
-void t5ui_pos(t5ui_obj_t *obj, int32_t x, int32_t y);
-typedef enum {
-    T5UI_ALIGN_TOP_LEFT, T5UI_ALIGN_TOP_MID, T5UI_ALIGN_TOP_RIGHT,
-    T5UI_ALIGN_LEFT_MID, T5UI_ALIGN_CENTER, T5UI_ALIGN_RIGHT_MID,
-    T5UI_ALIGN_BOTTOM_LEFT, T5UI_ALIGN_BOTTOM_MID, T5UI_ALIGN_BOTTOM_RIGHT,
-} t5ui_align_t;
-/* Place obj in its parent (outside any flex layout). */
-void t5ui_align(t5ui_obj_t *obj, t5ui_align_t where, int32_t dx, int32_t dy);
-void t5ui_center(t5ui_obj_t *obj);
-/* Where obj is on screen, and its content area (after padding). Lays out
- * first if anything changed. */
-void t5ui_coords(t5ui_obj_t *obj, t5ui_rect_t *out);
-void t5ui_content_coords(t5ui_obj_t *obj, t5ui_rect_t *out);
-
-/* Flex layout: children in a row or column. */
-typedef enum { T5UI_ROW, T5UI_COLUMN, T5UI_ROW_WRAP, T5UI_COLUMN_WRAP } t5ui_flow_t;
-typedef enum {
-    T5UI_PLACE_START, T5UI_PLACE_END, T5UI_PLACE_CENTER,
-    T5UI_PLACE_SPACE_EVENLY, T5UI_PLACE_SPACE_AROUND, T5UI_PLACE_SPACE_BETWEEN,
-} t5ui_place_t;
-void t5ui_flex(t5ui_obj_t *obj, t5ui_flow_t flow);
-/* main: along the flow; cross: across it; track: of the lines when wrapping. */
-void t5ui_flex_place(t5ui_obj_t *obj, t5ui_place_t main, t5ui_place_t cross, t5ui_place_t track);
-/* Share the free space along the flow among children with grow > 0. */
-void t5ui_grow(t5ui_obj_t *obj, uint8_t grow);
-void t5ui_pad(t5ui_obj_t *obj, int32_t top, int32_t right, int32_t bottom, int32_t left);
-void t5ui_pad_all(t5ui_obj_t *obj, int32_t pad);
-void t5ui_gap(t5ui_obj_t *obj, int32_t row_gap, int32_t column_gap);
-void t5ui_margin(t5ui_obj_t *obj, int32_t top, int32_t right, int32_t bottom, int32_t left);
-/* Lay out now (coordinates are otherwise settled before the next frame). */
-void t5ui_layout_now(t5ui_obj_t *obj);
-
-/* ---- appearance --------------------------------------------------------------- */
-/* Drop every style, theme included (a bare box). */
-void t5ui_unstyle(t5ui_obj_t *obj);
-void t5ui_bg(t5ui_obj_t *obj, t5ui_color_t color, t5ui_opa_t opa);
-void t5ui_border(t5ui_obj_t *obj, int32_t width, t5ui_color_t color, t5ui_opa_t opa);
-void t5ui_radius(t5ui_obj_t *obj, int32_t radius);
-void t5ui_shadow(t5ui_obj_t *obj, int32_t width, t5ui_color_t color, t5ui_opa_t opa);
-/* Material elevation: shadow (and the dark theme's surface tint). */
-void t5ui_elevation(t5ui_obj_t *obj, int32_t dp);
-void t5ui_opacity(t5ui_obj_t *obj, t5ui_opa_t opa);
-void t5ui_text_color(t5ui_obj_t *obj, t5ui_color_t color, t5ui_opa_t opa);
-void t5ui_text_style(t5ui_obj_t *obj, t5ui_text_t style);
-typedef enum { T5UI_TEXT_LEFT, T5UI_TEXT_CENTER, T5UI_TEXT_RIGHT } t5ui_text_align_t;
-void t5ui_text_align(t5ui_obj_t *obj, t5ui_text_align_t a);
-/* Line, arc and chart strokes. */
-void t5ui_stroke(t5ui_obj_t *obj, int32_t width, t5ui_color_t color, t5ui_opa_t opa);
-
-/* ---- state -------------------------------------------------------------------- */
-void t5ui_hide(t5ui_obj_t *obj, bool hidden);
-bool t5ui_hidden(t5ui_obj_t *obj);
-void t5ui_clickable(t5ui_obj_t *obj, bool on);
-typedef enum { T5UI_SCROLL_NONE, T5UI_SCROLL_HOR, T5UI_SCROLL_VER, T5UI_SCROLL_ALL } t5ui_scroll_t;
-void t5ui_scrollable(t5ui_obj_t *obj, t5ui_scroll_t dirs);
-void t5ui_scroll_to(t5ui_obj_t *obj, int32_t x, int32_t y, bool animate);
-/* Make obj visible in its scrolling ancestors. */
-void t5ui_scroll_into_view(t5ui_obj_t *obj, bool animate);
-void t5ui_set_checked(t5ui_obj_t *obj, bool on);       /* switches, checkboxes, toggle buttons */
-bool t5ui_checked(t5ui_obj_t *obj);
-void t5ui_set_disabled(t5ui_obj_t *obj, bool on);
-bool t5ui_disabled(t5ui_obj_t *obj);
-/* Redraw obj on the next frame (after the app changed what it draws). */
-void t5ui_invalidate(t5ui_obj_t *obj);
-
-/* ---- events ------------------------------------------------------------------- */
-typedef enum {
-    T5UI_EV_CLICK,                           /* pressed and released on it */
-    T5UI_EV_LONG_PRESS,
-    T5UI_EV_PRESS,
-    T5UI_EV_RELEASE,
-    T5UI_EV_VALUE,                           /* a switch, slider, text field... changed */
-    T5UI_EV_FOCUS,
-    T5UI_EV_DEFOCUS,
-    T5UI_EV_SCROLL,
-    T5UI_EV_RESIZE,
-    T5UI_EV_DELETE,                          /* obj is about to go: free what user points at */
-    T5UI_EV_DRAW,                            /* draw on top of obj: t5ui_event_paint() */
-    T5UI_EV_COUNT,
-} t5ui_ev_t;
-typedef void (*t5ui_event_cb_t)(t5ui_event_t *e);
-/* cb(e) when ev happens to obj. Several may be added; each runs once per event. */
-t5_err_t t5ui_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *user);
-t5ui_obj_t *t5ui_event_obj(t5ui_event_t *e);
-void *t5ui_event_user(t5ui_event_t *e);
-t5ui_ev_t t5ui_event_kind(t5ui_event_t *e);
-/* Where the pointer is (screen pixels), for press and click events. */
-bool t5ui_event_point(t5ui_event_t *e, int32_t *x, int32_t *y);
-/* For T5UI_EV_DRAW: where to draw (coordinates relative to obj's top left). */
-t5ui_paint_t *t5ui_event_paint(t5ui_event_t *e);
-
-/* ---- timers ------------------------------------------------------------------- */
-typedef void (*t5ui_timer_cb_t)(t5ui_timer_t *t, void *user);
-/* Every period_ms on the UI task until deleted (or the app exits). */
-t5ui_timer_t *t5ui_timer(uint32_t period_ms, t5ui_timer_cb_t cb, void *user);
-void t5ui_timer_period(t5ui_timer_t *t, uint32_t period_ms);
-void t5ui_timer_delete(t5ui_timer_t *t);
-
-/* ---- text --------------------------------------------------------------------- */
-t5ui_obj_t *t5ui_label(t5ui_obj_t *parent, const char *text, t5ui_text_t style);
-void t5ui_label_set(t5ui_obj_t *label, const char *text);   /* copied */
-void t5ui_label_setf(t5ui_obj_t *label, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-typedef enum { T5UI_LONG_WRAP, T5UI_LONG_DOTS, T5UI_LONG_SCROLL, T5UI_LONG_CLIP } t5ui_long_t;
-/* What a label too long for its width does (give it a width first). */
-void t5ui_label_long(t5ui_obj_t *label, t5ui_long_t mode);
-/* The size text takes in style, wrapped at max_w (0: one line). */
-void t5ui_text_size(const char *text, t5ui_text_t style, int32_t max_w, int32_t *w, int32_t *h);
-/* Material icons by name ("T5UI_ICON_*" strings in t5ui_icons.h), at size_dp. */
-t5ui_obj_t *t5ui_icon(t5ui_obj_t *parent, const char *icon, int32_t size_dp);
-
-/* ---- Material widgets ----------------------------------------------------------- */
-typedef enum { T5UI_BUTTON_TEXT, T5UI_BUTTON_OUTLINED, T5UI_BUTTON_CONTAINED } t5ui_button_t;
-t5ui_obj_t *t5ui_button(t5ui_obj_t *parent, const char *text, t5ui_button_t kind);
-/* A floating action button (mini: the small one). */
-t5ui_obj_t *t5ui_fab(t5ui_obj_t *parent, const char *icon, bool mini);
-t5ui_obj_t *t5ui_card(t5ui_obj_t *parent);
-t5ui_obj_t *t5ui_divider(t5ui_obj_t *parent);
-/* The top app bar: title, a navigation icon (NULL: none) and its click. */
-t5ui_obj_t *t5ui_appbar(t5ui_obj_t *parent, const char *title, const char *nav_icon, t5ui_event_cb_t nav, void *user);
-t5ui_obj_t *t5ui_appbar_action(t5ui_obj_t *bar, const char *icon, t5ui_event_cb_t cb, void *user);
-void t5ui_appbar_title(t5ui_obj_t *bar, const char *title);
-/* A list row: leading icon (NULL: none), primary and secondary text. */
-t5ui_obj_t *t5ui_row(t5ui_obj_t *parent, const char *icon, const char *primary, const char *secondary);
-void t5ui_row_text(t5ui_obj_t *row, const char *primary, const char *secondary);   /* NULL: leave */
-void t5ui_row_on_click(t5ui_obj_t *row, t5ui_event_cb_t cb, void *user);
-t5ui_obj_t *t5ui_row_switch(t5ui_obj_t *row, bool on);         /* a trailing switch */
-t5ui_obj_t *t5ui_row_trailing(t5ui_obj_t *row, const char *text);
-t5ui_obj_t *t5ui_section(t5ui_obj_t *parent, const char *title);
-t5ui_obj_t *t5ui_switch(t5ui_obj_t *parent, bool on);
-t5ui_obj_t *t5ui_checkbox(t5ui_obj_t *parent, const char *text, bool checked);
-t5ui_obj_t *t5ui_slider(t5ui_obj_t *parent, int32_t min, int32_t max, int32_t value);
-t5ui_obj_t *t5ui_arc(t5ui_obj_t *parent, int32_t min, int32_t max, int32_t value);   /* a dial */
-t5ui_obj_t *t5ui_bar(t5ui_obj_t *parent, int32_t min, int32_t max, int32_t value);   /* progress */
-/* Sliders, arcs and bars. */
-void t5ui_set_value(t5ui_obj_t *obj, int32_t value, bool animate);
-int32_t t5ui_value(t5ui_obj_t *obj);
-/* A labelled text field (Material), or a plain text area. */
-t5ui_obj_t *t5ui_textfield(t5ui_obj_t *parent, const char *label, bool password);
-void t5ui_textfield_helper(t5ui_obj_t *field, const char *text, bool error);
-t5ui_obj_t *t5ui_textarea(t5ui_obj_t *parent, bool one_line, const char *placeholder);
-/* Text fields and text areas: the text (valid until it changes). */
-const char *t5ui_text(t5ui_obj_t *obj);
-void t5ui_set_text(t5ui_obj_t *obj, const char *text);
-typedef enum { T5UI_CHIP_ACTION, T5UI_CHIP_FILTER, T5UI_CHIP_CHOICE } t5ui_chip_t;
-t5ui_obj_t *t5ui_chip(t5ui_obj_t *parent, const char *text, const char *icon, t5ui_chip_t kind);
-/* Tabs: add returns the page that shows under that tab. */
-t5ui_obj_t *t5ui_tabs(t5ui_obj_t *parent);
-t5ui_obj_t *t5ui_tabs_add(t5ui_obj_t *tabs, const char *name);
-/* A full-screen page with an app bar and a back arrow; put content in body. */
-t5ui_obj_t *t5ui_page(t5ui_obj_t *parent, const char *title, t5ui_event_cb_t back, void *user);
-t5ui_obj_t *t5ui_page_body(t5ui_obj_t *page);
-t5ui_obj_t *t5ui_page_bar(t5ui_obj_t *page);
-
-/* A long list that recycles its rows: bind fills row index's texts. */
-typedef void (*t5ui_list_bind_cb_t)(t5ui_obj_t *row, uint32_t index, void *user);
-typedef void (*t5ui_list_click_cb_t)(uint32_t index, void *user);
-t5ui_obj_t *t5ui_list(t5ui_obj_t *parent, uint32_t count, int32_t row_dp, t5ui_list_bind_cb_t bind,
-                      t5ui_list_click_cb_t click, void *user);
-void t5ui_list_count(t5ui_obj_t *list, uint32_t count);
-void t5ui_list_refresh(t5ui_obj_t *list);
-
-/* Modal and transient. */
-typedef void (*t5ui_answer_cb_t)(int choice, void *user);   /* 0 first button, 1 second, -1 dismissed */
+/* ---- dialogs and messages ---------------------------------------------------------------- */
+typedef void (*t5ui_answer_cb_t)(int choice, void *user);  /* 0 first button or item, 1 second..., -1 dismissed */
 t5ui_obj_t *t5ui_dialog(const char *title, const char *text, const char *confirm, const char *dismiss,
                         t5ui_answer_cb_t cb, void *user);
 void t5ui_dialog_close(t5ui_obj_t *dialog);
@@ -301,51 +377,33 @@ t5ui_obj_t *t5ui_menu(t5ui_obj_t *anchor, const char *const *items, int n, t5ui_
 typedef void (*t5ui_action_cb_t)(void *user);
 void t5ui_snackbar(const char *text, const char *action, t5ui_action_cb_t cb, void *user);
 
-/* ---- images -------------------------------------------------------------------- */
-typedef enum { T5UI_PX_RGB565, T5UI_PX_RGB888, T5UI_PX_ARGB8888, T5UI_PX_A8 } t5ui_px_t;
+/* ---- images and drawing ------------------------------------------------------------------ */
+typedef enum { T5UI_PX_RGB565 = 0, T5UI_PX_RGB888 = 1, T5UI_PX_ARGB8888 = 2, T5UI_PX_A8 = 3 } t5ui_px_t;
 typedef struct {
-    uint32_t size;                           /* sizeof(t5ui_pixels_t) */
+    uint32_t size;                             /* sizeof(t5ui_pixels_t) */
     uint16_t w, h;
-    uint32_t stride;                         /* bytes per row, 0: packed */
-    uint8_t format;                          /* t5ui_px_t */
+    uint32_t stride;                           /* bytes per row; 0: packed */
+    uint8_t format;                            /* t5ui_px_t */
     const void *data;
 } t5ui_pixels_t;
-t5ui_obj_t *t5ui_image(t5ui_obj_t *parent);
-/* Show pixels (copied: the app's buffer may go). Decode compressed images
- * first (t5/camera.h decodes JPEG). */
+/* A T5UI_IMAGE shows a copy of px. */
 t5_err_t t5ui_image_pixels(t5ui_obj_t *img, const t5ui_pixels_t *px);
-
-/* ---- drawing ------------------------------------------------------------------- */
-/* A canvas keeps what is drawn on it (an OS-owned w x h buffer). */
-t5ui_obj_t *t5ui_canvas(t5ui_obj_t *parent, int32_t w, int32_t h);
+/* A T5UI_CANVAS keeps what's drawn on it. Size it first (clear), then draw. */
+t5_err_t t5ui_canvas_size(t5ui_obj_t *canvas, int32_t w, int32_t h);
 void t5ui_canvas_fill(t5ui_obj_t *canvas, t5ui_color_t color, t5ui_opa_t opa);
-/* Draw into the canvas between begin and end. */
 t5ui_paint_t *t5ui_canvas_begin(t5ui_obj_t *canvas);
 void t5ui_canvas_end(t5ui_obj_t *canvas, t5ui_paint_t *p);
-/* Drawing on a paint target (a canvas, or a T5UI_EV_DRAW): coordinates are
- * relative to its top left. */
+/* On a canvas, or in T5UI_EV_DRAW; coordinates from its top left. */
 void t5ui_draw_line(t5ui_paint_t *p, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t width,
                     t5ui_color_t color, t5ui_opa_t opa);
 void t5ui_draw_rect(t5ui_paint_t *p, const t5ui_rect_t *r, int32_t radius, t5ui_color_t fill, t5ui_opa_t fill_opa,
                     int32_t border_w, t5ui_color_t border, t5ui_opa_t border_opa);
-/* An arc around (cx, cy), angles in degrees clockwise from 3 o'clock. */
+/* Degrees, clockwise from 3 o'clock. */
 void t5ui_draw_arc(t5ui_paint_t *p, int32_t cx, int32_t cy, int32_t radius, int32_t start_deg, int32_t end_deg,
                    int32_t width, t5ui_color_t color, t5ui_opa_t opa, bool rounded);
 void t5ui_draw_text(t5ui_paint_t *p, const t5ui_rect_t *r, const char *text, t5ui_text_t style, t5ui_color_t color,
                     t5ui_text_align_t align);
 void t5ui_draw_pixels(t5ui_paint_t *p, int32_t x, int32_t y, const t5ui_pixels_t *px);
-
-/* ---- charts -------------------------------------------------------------------- */
-typedef enum { T5UI_CHART_LINE, T5UI_CHART_BAR } t5ui_chart_t;
-t5ui_obj_t *t5ui_chart(t5ui_obj_t *parent, t5ui_chart_t kind, uint32_t points);
-/* A series in color: its index (0..7), or a negative t5_err_t. */
-int t5ui_chart_series(t5ui_obj_t *chart, t5ui_color_t color);
-void t5ui_chart_range(t5ui_obj_t *chart, int32_t min, int32_t max);
-/* Shift the series left and add value on the right. */
-void t5ui_chart_push(t5ui_obj_t *chart, int series, int32_t value);
-void t5ui_chart_set(t5ui_obj_t *chart, int series, uint32_t index, int32_t value);
-void t5ui_chart_points(t5ui_obj_t *chart, uint32_t points);
-void t5ui_chart_grid(t5ui_obj_t *chart, uint8_t rows, uint8_t columns);
 
 #ifdef __cplusplus
 }

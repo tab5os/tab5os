@@ -71,6 +71,9 @@ target_include_directories(test_pkg PRIVATE ${FW}/t5_pkg)
 target_include_directories(test_ports PRIVATE ${FW}/t5_ports)
 target_include_directories(test_power PRIVATE ${FW}/t5_power ${FW}/../main)
 target_include_directories(test_ui PRIVATE ${FW}/t5_shell)
+# t5ui's core runs against a fake backend in the test.
+target_sources(test_t5ui PRIVATE ${FW}/t5_gui/t5ui_core.c)
+target_include_directories(test_t5ui PRIVATE ${FW}/t5_gui)
 # test_ota runs tools/ota/t5ota.py (the .t5os header both sides agree on),
 # test_pkg tools/t5/t5pack.py (the manifest rules).
 target_compile_definitions(test_ota PRIVATE T5_REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../..")

@@ -123,6 +123,12 @@ void md_appbar_set_title(lv_obj_t *bar, const char *title)
     if (ab) lv_label_set_text(ab->title, title);
 }
 
+lv_obj_t *md_appbar_title(lv_obj_t *bar)
+{
+    appbar_t *ab = bar ? lv_obj_get_user_data(bar) : NULL;
+    return ab ? ab->title : NULL;
+}
+
 /* ---- recycled list ------------------------------------------------------------ */
 #define LIST_EXTRA_ROWS 3
 
@@ -291,6 +297,24 @@ void md_list_set_count(lv_obj_t *list, uint32_t count)
     l->count = count;
     set_spacer(list, l);
     list_layout(list, true);
+}
+
+uint32_t md_list_count(lv_obj_t *list)
+{
+    list_t *l = lv_obj_get_user_data(list);
+    return l ? l->count : 0;
+}
+
+void md_list_set_row_dp(lv_obj_t *list, int row_dp)
+{
+    list_t *l = lv_obj_get_user_data(list);
+    if (!l || row_dp <= 0 || T5_DP(row_dp) == l->row_h) return;
+    for (uint32_t i = 0; i < l->nrows; i++) lv_obj_delete(l->rows[i].row);
+    l->nrows = 0;
+    l->row_h = T5_DP(row_dp);
+    l->two_line = row_dp >= MD_LIST_ROW_2_DP;
+    set_spacer(list, l);
+    lv_obj_send_event(list, LV_EVENT_SIZE_CHANGED, NULL);   /* makes the rows again */
 }
 
 void md_list_refresh(lv_obj_t *list)

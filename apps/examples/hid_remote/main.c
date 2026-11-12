@@ -150,10 +150,10 @@ static int stroke(uint8_t key, uint8_t mods, void *arg)
 static void type_clicked(t5ui_event_t *e)
 {
     (void)e;
-    const char *t = t5ui_text(s.text);
+    const char *t = t5ui_get_str(s.text, T5UI_P_TEXT, "");
     int done = t5_hid_text(t, T5_HID_LAYOUT_US, stroke, NULL);
     if (done >= 0 && (size_t)done < strlen(t)) t5ui_snackbar("Stopped at a character the US layout can't type", NULL, NULL, NULL);
-    t5ui_set_text(s.text, "");
+    t5ui_set_str(s.text, T5UI_P_TEXT, "");
 }
 
 static void media_clicked(t5ui_event_t *e)
@@ -168,13 +168,13 @@ static void media_clicked(t5ui_event_t *e)
 
 static void bt_changed(t5ui_event_t *e)
 {
-    s.want_bt = t5ui_checked(t5ui_event_obj(e));
+    s.want_bt = t5ui_get_int(t5ui_event_obj(e), T5UI_P_CHECKED, 0);
     s.switch_now = true;
 }
 
 static void set_status_ui(void *text)
 {
-    t5ui_label_set(s.status, text);
+    t5ui_set_str(s.status, T5UI_P_TEXT, text);
     free(text);
 }
 
@@ -249,8 +249,18 @@ static void back(t5ui_event_t *e)
 
 static void media_button(t5ui_obj_t *row, const char *icon, uint16_t usage)
 {
-    t5ui_obj_t *b = t5ui_fab(row, icon, true);
+    t5ui_obj_t *b = t5ui_create(row, T5UI_MD_FAB_MINI);
+    t5ui_set_str(b, T5UI_P_ICON, icon);
     t5ui_on(b, T5UI_EV_CLICK, media_clicked, (void *)(uintptr_t)usage);
+}
+
+/* A full-width row of children. */
+static t5ui_obj_t *strip(t5ui_obj_t *parent)
+{
+    t5ui_obj_t *b = t5ui_create(parent, T5UI_BOX);
+    t5ui_set_int(b, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(b, T5UI_P_FLOW, T5UI_ROW);
+    return b;
 }
 
 static void on_create(t5_app_t *app)
@@ -258,52 +268,65 @@ static void on_create(t5_app_t *app)
     s.app = app;
     s.q = xQueueCreate(64, sizeof(report_t));
     t5ui_obj_t *scr = t5ui_root(app);
-    t5ui_flex(scr, T5UI_COLUMN);
-    t5ui_gap(scr, 0, 0);
-    t5ui_appbar(scr, "Keyboard & Trackpad", T5UI_ICON_ARROW_BACK, back, NULL);
+    t5ui_set_int(scr, T5UI_P_FLOW, T5UI_COLUMN);
+    t5ui_set_int(scr, T5UI_P_PAD_ROW, 0);
+    t5ui_obj_t *bar = t5ui_create(scr, T5UI_MD_APPBAR_BACK);
+    t5ui_set_str(bar, T5UI_P_TITLE, "Keyboard & Trackpad");
+    t5ui_on(bar, T5UI_EV_BACK, back, NULL);
 
-    t5ui_obj_t *row = t5ui_row(scr, T5UI_ICON_BLUETOOTH, "Use Bluetooth", "Off: USB-C (the console and sound are off meanwhile)");
-    s.bt = t5ui_row_switch(row, false);
+    t5ui_obj_t *row = t5ui_create(scr, T5UI_MD_ROW);
+    t5ui_set_str(row, T5UI_P_ICON, T5UI_ICON_BLUETOOTH);
+    t5ui_set_str(row, T5UI_P_TEXT, "Use Bluetooth");
+    t5ui_set_str(row, T5UI_P_SECONDARY, "Off: USB-C (the console and sound are off meanwhile)");
+    s.bt = t5ui_create(row, T5UI_MD_ROW_SWITCH);
     t5ui_on(s.bt, T5UI_EV_VALUE, bt_changed, NULL);
 
-    s.status = t5ui_label(scr, "Starting...", T5UI_TEXT_BODY2);
-    t5ui_width(s.status, T5UI_PCT(100));
-    t5ui_pad(s.status, 0, t5ui_dp(16), 0, t5ui_dp(16));
-    t5ui_label_long(s.status, T5UI_LONG_WRAP);
+    s.status = t5ui_create(scr, T5UI_MD_TEXT);
+    t5ui_set_int(s.status, T5UI_P_TEXT_STYLE, T5UI_TEXT_BODY2);
+    t5ui_set_str(s.status, T5UI_P_TEXT, "Starting...");
+    t5ui_set_int(s.status, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(s.status, T5UI_P_PAD_LEFT, t5ui_dp(16));
+    t5ui_set_int(s.status, T5UI_P_PAD_RIGHT, t5ui_dp(16));
+    t5ui_set_int(s.status, T5UI_P_LONG_MODE, T5UI_LONG_WRAP);
 
     /* The trackpad: a plain surface the timer reads fingers on. */
-    s.pad = t5ui_panel(scr);
-    t5ui_width(s.pad, T5UI_PCT(100));
-    t5ui_grow(s.pad, 1);
-    t5ui_radius(s.pad, t5ui_dp(16));
-    t5ui_margin(s.pad, t5ui_dp(12), t5ui_dp(12), t5ui_dp(12), t5ui_dp(12));
-    t5ui_scrollable(s.pad, T5UI_SCROLL_NONE);
-    t5ui_obj_t *hint = t5ui_label(s.pad, "Trackpad: one finger moves, tap clicks, two fingers scroll", T5UI_TEXT_CAPTION);
-    t5ui_center(hint);
+    s.pad = t5ui_create(scr, T5UI_PANEL);
+    t5ui_set_int(s.pad, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(s.pad, T5UI_P_GROW, 1);
+    t5ui_set_int(s.pad, T5UI_P_RADIUS, t5ui_dp(16));
+    t5ui_set_int(s.pad, T5UI_P_MARGIN_TOP, t5ui_dp(12));
+    t5ui_set_int(s.pad, T5UI_P_MARGIN_BOTTOM, t5ui_dp(12));
+    t5ui_set_int(s.pad, T5UI_P_MARGIN_LEFT, t5ui_dp(12));
+    t5ui_set_int(s.pad, T5UI_P_MARGIN_RIGHT, t5ui_dp(12));
+    t5ui_set_int(s.pad, T5UI_P_SCROLLABLE, false);
+    t5ui_obj_t *hint = t5ui_create(s.pad, T5UI_MD_TEXT);
+    t5ui_set_int(hint, T5UI_P_TEXT_STYLE, T5UI_TEXT_CAPTION);
+    t5ui_set_str(hint, T5UI_P_TEXT, "Trackpad: one finger moves, tap clicks, two fingers scroll");
+    t5ui_set_int(hint, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
 
-    t5ui_obj_t *media = t5ui_box(scr);
-    t5ui_size(media, T5UI_PCT(100), T5UI_CONTENT);
-    t5ui_flex(media, T5UI_ROW);
-    t5ui_flex_place(media, T5UI_PLACE_SPACE_EVENLY, T5UI_PLACE_CENTER, T5UI_PLACE_CENTER);
+    t5ui_obj_t *media = strip(scr);
+    t5ui_set_int(media, T5UI_P_PLACE_MAIN, T5UI_PLACE_SPACE_EVENLY);
+    t5ui_set_int(media, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
     media_button(media, T5UI_ICON_SKIP_PREVIOUS, T5_HID_CC_PREV);
     media_button(media, T5UI_ICON_PLAY_ARROW, T5_HID_CC_PLAY_PAUSE);
     media_button(media, T5UI_ICON_SKIP_NEXT, T5_HID_CC_NEXT);
     media_button(media, T5UI_ICON_VOLUME_DOWN, T5_HID_CC_VOL_DOWN);
     media_button(media, T5UI_ICON_VOLUME_UP, T5_HID_CC_VOL_UP);
 
-    t5ui_obj_t *trow = t5ui_box(scr);
-    t5ui_size(trow, T5UI_PCT(100), T5UI_CONTENT);
-    t5ui_flex(trow, T5UI_ROW);
-    t5ui_pad_all(trow, t5ui_dp(12));
-    t5ui_gap(trow, t5ui_dp(8), t5ui_dp(8));
-    s.text = t5ui_textarea(trow, true, "Text to type on the computer");
-    t5ui_grow(s.text, 1);
-    t5ui_obj_t *type = t5ui_button(trow, "Type", T5UI_BUTTON_CONTAINED);
+    t5ui_obj_t *trow = strip(scr);
+    t5ui_set_int(trow, T5UI_P_PAD_ALL, t5ui_dp(12));
+    t5ui_set_int(trow, T5UI_P_PAD_COLUMN, t5ui_dp(8));
+    s.text = t5ui_create(trow, T5UI_TEXTAREA);
+    t5ui_set_int(s.text, T5UI_P_ONE_LINE, true);
+    t5ui_set_str(s.text, T5UI_P_PLACEHOLDER, "Text to type on the computer");
+    t5ui_set_int(s.text, T5UI_P_GROW, 1);
+    t5ui_obj_t *type = t5ui_create(trow, T5UI_MD_BUTTON_CONTAINED);
+    t5ui_set_str(type, T5UI_P_TEXT, "Type");
     t5ui_on(type, T5UI_EV_CLICK, type_clicked, NULL);
 
     t5ui_timer(10, pad_timer, NULL);
     if (!s.q || t5_task_create("hid.worker", worker, NULL, 4096, 3, T5_CORE_ANY, NULL) != T5_OK) {
-        t5ui_label_set(s.status, "Couldn't start: not enough memory.");
+        t5ui_set_str(s.status, T5UI_P_TEXT, "Couldn't start: not enough memory.");
     }
 }
 
