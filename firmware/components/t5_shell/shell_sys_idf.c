@@ -21,6 +21,7 @@
 #include "t5_power/power.h"
 #include "t5_time/t5_time.h"
 #include "t5_ui/t5_ui.h"
+#include "t5_core/io_hold.h"
 #include "t5_usb/usb.h"
 #include "t5_shell/accent.h"
 #include "t5_shell/app_icon.h"
@@ -89,6 +90,17 @@ static void act(shell_activity_t *a, const char *icon, const char *who, const ch
 int shell_sys_activities(shell_activity_t *out, int max)
 {
     int n = 0;
+    /* Ports and radios an app holds beyond what the OS shares: each with
+     * a Stop button. */
+    for (int k = 0; k < T5_IO_COUNT && n < max; k++) {
+        char who[T5_APP_NAME_LEN];
+        if (!t5_io_hold_get((t5_io_kind_t)k, who, sizeof who)) continue;
+        act(&out[n], k == T5_IO_WIFI_MONITOR || k == T5_IO_EXCL_WIFI ? MD_ICON_WIFI
+                     : k == T5_IO_BLE_HID || k == T5_IO_EXCL_BT   ? MD_ICON_BLUETOOTH
+                                                                  : MD_ICON_USB,
+            who, t5_io_kind_text((t5_io_kind_t)k), -1);
+        out[n++].stop = (uint8_t)(k + 1);
+    }
     t5_ota_status_t ota;
     t5_ota_status(&ota);
     if (n < max && (ota.state == T5_OTA_RECEIVING || ota.state == T5_OTA_VERIFYING)) {
@@ -223,7 +235,7 @@ void shell_sys_status(shell_status_t *o)
     o->mic_active = t5_audio_in_active();
     o->cam_active = t5_camera_active();
     o->usb_devices = t5_usb_device_count() > 0;
-    o->usb_storage = t5_usbc_mode() == T5_USBC_STORAGE;
+    o->usb_storage = t5_usbc_mode() != T5_USBC_CONSOLE;
     o->audio_playing = t5_audio_out_active();
     o->net_handles = t5_net_handles_open();
     t5_ota_status_t ota;
@@ -400,13 +412,27 @@ static void input_added(t5_event_id_t id, const void *data, size_t len, void *ar
     T5_LOG_ON_ERR(TAG, t5_ui_async(input_added_ui, NULL));
 }
 
+void shell_sys_stop(uint8_t stop)
+{
+    if (stop) t5_io_hold_stop((t5_io_kind_t)(stop - 1));
+}
+
 static void usbc_event(t5_event_id_t id, const void *data, size_t len, void *arg)
 {
     (void)id; (void)len; (void)arg;
+    static t5_usbc_mode_t s_was = T5_USBC_CONSOLE;
     const t5_ev_usb_t *e = data;
-    if (e->mounted) t5_shell_toast("The SD card is with the computer. Eject it there to get it back.");
-    else t5_shell_toast(t5_usbc_ejected() ? "The computer ejected the SD card. It's back."
-                                          : "The SD card is back.");
+    t5_usbc_mode_t now = t5_usbc_mode();
+    if (e->mounted && now == T5_USBC_DEVICE) {
+        t5_shell_toast("USB-C is a USB device for an app. The console and sound are off until it stops.");
+    } else if (e->mounted) {
+        t5_shell_toast("The SD card is with the computer. Eject it there to get it back.");
+    } else if (s_was == T5_USBC_DEVICE) {
+        t5_shell_toast("USB-C is back to normal.");
+    } else {
+        t5_shell_toast(t5_usbc_ejected() ? "The computer ejected the SD card. It's back." : "The SD card is back.");
+    }
+    s_was = e->mounted ? now : T5_USBC_CONSOLE;
 }
 
 t5_err_t t5_shell_register(void)

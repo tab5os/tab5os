@@ -190,6 +190,11 @@ bool shell_sys_standby_enabled(void)
 
 /* The activities a screenshot shows: one an app posted, with progress, and
  * an app working in the background. */
+void shell_sys_stop(uint8_t stop)
+{
+    (void)stop;
+}
+
 int shell_sys_activities(shell_activity_t *out, int max)
 {
     static const shell_activity_t demo[] = {

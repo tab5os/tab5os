@@ -17,8 +17,8 @@
 #include "t5_ports/profiles.h"
 
 /* Two fake apps; contexts start with the header like the real app runtime's. */
-static t5_app_ctx_hdr_t s_app_a = { T5_APP_CTX_MAGIC, "com.x.app" };
-static t5_app_ctx_hdr_t s_app_b = { T5_APP_CTX_MAGIC, "com.y.other" };
+static t5_app_ctx_hdr_t s_app_a = { T5_APP_CTX_MAGIC, "com.x.app", "App" };
+static t5_app_ctx_hdr_t s_app_b = { T5_APP_CTX_MAGIC, "com.y.other", "Other" };
 
 /* Resource hooks: record adds/removes. */
 static struct {

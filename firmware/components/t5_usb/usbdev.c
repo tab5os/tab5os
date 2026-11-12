@@ -16,6 +16,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "t5_core/event.h"
+#include "t5_core/io_hold.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
@@ -57,6 +58,7 @@ typedef struct {
 struct t5_usbdev {
     uint32_t magic;
     char app_id[32];
+    char who[32];              /* the app's name, for the shell */
     bool app_owned;
     QueueHandle_t q;
     TaskHandle_t rel_task;
@@ -403,6 +405,7 @@ t5_err_t t5_usbdev_open(const t5_usbdev_cfg_t *cfg, t5_usbdev_t **out)
     if (app && app->magic == T5_APP_CTX_MAGIC) {
         d->app_owned = true;
         snprintf(d->app_id, sizeof d->app_id, "%s", app->id);
+        snprintf(d->who, sizeof d->who, "%s", app->name && app->name[0] ? app->name : app->id);
     }
     copy_str(d->str[1], cfg->manufacturer, "Tab5 OS");
     copy_str(d->str[2], cfg->product, d->app_owned && app->name && app->name[0] ? app->name : "Tab5");
@@ -468,6 +471,7 @@ t5_err_t t5_usbdev_open(const t5_usbdev_cfg_t *cfg, t5_usbdev_t **out)
     }
     T5_LOGI(TAG, "open: %d HID%s, %04x:%04x \"%s\"", d->hid_count, d->midi ? " + MIDI" : "", d->dev.idVendor,
             d->dev.idProduct, d->str[2]);
+    t5_io_hold_set(T5_IO_USBC_DEVICE, d->who, usbdev_revoke);
     t5_res_add(T5_RES_OTHER, d, release_handle);
     *out = d;
     return T5_OK;
@@ -527,6 +531,7 @@ void usbdev_revoke(void)
         T5_LOGI(TAG, "device mode stopped for %s", d->app_owned ? d->app_id : "the system");
         d->revoked = true;
         stop_port(d);
+        t5_io_hold_set(T5_IO_USBC_DEVICE, NULL, NULL);
         d->mounted = false;
         t5_usbdev_ev_t ev = { .type = T5_USBDEV_UNMOUNTED };
         push(d, &ev, NULL, 0);
@@ -543,6 +548,7 @@ t5_err_t t5_usbdev_close(t5_usbdev_t *d)
     if (!d->revoked) {
         d->revoked = true;
         stop_port(d);
+        t5_io_hold_set(T5_IO_USBC_DEVICE, NULL, NULL);
     }
     if (s_dev == d) s_dev = NULL;
     t5_mutex_unlock(mx());

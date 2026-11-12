@@ -46,8 +46,11 @@ typedef struct {
     char text[SHELL_ACTIVITY_TEXT_LEN];
     int8_t percent;                     /* 0..100, -1: no progress */
     bool app;                           /* posted by an app */
+    uint8_t stop;                       /* t5_io_kind_t + 1 for a Stop button (shell_sys_stop), 0: none */
 } shell_activity_t;
 int shell_sys_activities(shell_activity_t *out, int max);
+/* The Stop button of an activity whose stop is set. */
+void shell_sys_stop(uint8_t stop);
 
 /* ---- the standby screen (standby.c) ---- */
 /* An app's card (t5_ambient_set), with the app's name. */

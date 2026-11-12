@@ -100,6 +100,11 @@ static uint32_t act_sig(const shell_activity_t *a, int n)
     return h ^ (uint32_t)n;
 }
 
+static void stop_clicked(lv_event_t *e)
+{
+    shell_sys_stop((uint8_t)(uintptr_t)lv_event_get_user_data(e));
+}
+
 static void act_row(lv_obj_t *parent, const shell_activity_t *a)
 {
     const md_scheme_t *sc = md_scheme();
@@ -137,6 +142,11 @@ static void act_row(lv_obj_t *parent, const shell_activity_t *a)
         lv_obj_set_style_bg_color(bar, md_color(sc->c.on_surface), 0);
         lv_obj_set_style_bg_opa(bar, LV_OPA_20, 0);
         lv_obj_set_style_bg_color(bar, md_color(sc->c.primary), LV_PART_INDICATOR);
+    }
+    /* A port or radio an app holds: the person's way to take it back. */
+    if (a->stop) {
+        lv_obj_t *b = md_button_create(row, "Stop", MD_BUTTON_TEXT);
+        lv_obj_add_event_cb(b, stop_clicked, LV_EVENT_CLICKED, (void *)(uintptr_t)a->stop);
     }
 }
 
