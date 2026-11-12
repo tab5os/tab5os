@@ -9,7 +9,13 @@
 #pragma once
 #include <stdint.h>
 
-#define T5WM_PROTO_VERSION 1
+#define T5WM_PROTO_VERSION 2
+
+/* Since version 2, the reply to HELLO is followed by this firmware's
+ * version (char[T5WM_BUILD_LEN], esp_app_desc_t's, such as "t5-c6-0.2.0"),
+ * so the P4 can tell which build the C6 runs: esp_hosted only reports its
+ * own version. */
+#define T5WM_BUILD_LEN 32
 
 /* Message ids. */
 #define T5WM_MSG_CMD 0x54350001u      /* P4 -> C6: a command (t5wm_cmd_t, then a frame for TX) */

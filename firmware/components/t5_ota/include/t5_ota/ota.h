@@ -109,6 +109,28 @@ void t5_ota_status(t5_ota_status_t *out);
  * modification time). Returns the count. */
 int t5_ota_find_on_sd(char (*paths)[128], int max);
 
+/* ---- the C6 radio's firmware -------------------------------------------------- */
+/* A .t5c6 is the same 160-byte header with magic "T5C6" (os_version holds
+ * the C6 image's version, such as "t5-c6-0.2.0"), then an ESP32-C6 app
+ * image. A release publishes one beside its .t5os, signed with the same
+ * key; it isn't inside the .t5os, because the installers in 0.2.0 and
+ * earlier stop reading at the end of the OS image. Each OS expects the C6
+ * image built from the same tree: T5_OTA_C6_PREFIX and its own version.
+ * t5_ota_net's c6 sync fetches it and has t5_net move the C6 onto it. */
+#define T5_OTA_C6_MAGIC "T5C6"
+#define T5_OTA_C6_PREFIX "t5-c6-"
+#define T5_OTA_C6_PART "c6fw"
+
+/* Read a whole .t5c6 into PSRAM, check it (header, an ESP32-C6 image of
+ * version want_version, or any when NULL; its hash; the signature, by the
+ * source's rule as for the OS), and only then write the image to the c6fw
+ * partition. The C6 itself isn't touched: t5_net_c6_update() does that.
+ * Writes nothing when c6fw already holds this image. */
+T5_MUST_CHECK t5_err_t t5_ota_c6_install_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t from, bool consent,
+                                                const char *want_version, char *err, size_t errlen);
+T5_MUST_CHECK t5_err_t t5_ota_c6_install_file(const char *path, t5_ota_source_t from, bool consent,
+                                              const char *want_version, char *err, size_t errlen);
+
 /* ---- boot health -------------------------------------------------------------- */
 /* Early in app_main (the OS's or recovery's): read the boot counter and the
  * request word, decide on safe mode, note whether this image is on trial. */

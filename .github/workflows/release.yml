@@ -11,7 +11,8 @@ name: release
 # T5_OTA_SIGNING_KEY (its public half is firmware/ota_keys/release.pem, so
 # devices install the update from Settings, over Wi-Fi or from a card), zips
 # the result, tags the commit v<VERSION> and publishes the release: the zip,
-# the .t5os, the SDK, SHA256SUMS and the example apps. Without the secret it
+# the .t5os, the C6 radio firmware (.t5c6, which devices fetch for their own
+# version), the SDK, SHA256SUMS and the example apps. Without the secret it
 # stops: 0.1.0 to 0.1.3 were unsigned, every release since is signed.
 
 on:
@@ -115,8 +116,10 @@ jobs:
           tools/release.sh --sign "$key"
           # Signed by the key the image trusts (firmware/ota_keys/release.pem), or devices refuse it.
           want="$(openssl pkey -pubin -in firmware/ota_keys/release.pem -outform DER | sha256sum | cut -d' ' -f1)"
-          python3 tools/ota/t5ota.py inspect dist/tab5os-*/tab5os-*.t5os | tee /dev/stderr | grep -q "hash ok, signed by $want" \
-            || { echo "::error::the .t5os isn't signed by firmware/ota_keys/release.pem"; exit 1; }
+          for f in dist/tab5os-*/tab5os-*.t5os dist/tab5os-*/tab5os-c6-*.t5c6; do
+            python3 tools/ota/t5ota.py inspect "$f" | tee /dev/stderr | grep -q "hash ok, signed by $want" \
+              || { echo "::error::$f isn't signed by firmware/ota_keys/release.pem"; exit 1; }
+          done
       # A tarball keeps flash_all.sh executable; artifacts drop file modes.
       - name: Pack
         shell: bash
@@ -166,7 +169,7 @@ jobs:
           flags=()
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           gh release create "v$VER" --verify-tag "${flags[@]}" --title "$TITLE" --notes-file notes/notes.md \
-            "dist/tab5os-$VER.zip" "$d/tab5os-$VER.t5os" "$d/tab5os-sdk-$VER.tar.gz" "$d/SHA256SUMS" "$d"/apps/*.t5app
+            "dist/tab5os-$VER.zip" "$d/tab5os-$VER.t5os" "$d/tab5os-c6-$VER.t5c6" "$d/tab5os-sdk-$VER.tar.gz" "$d/SHA256SUMS" "$d"/apps/*.t5app
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/v$VER" >> "$GITHUB_STEP_SUMMARY"
 
   # Moves tab5os/app-template to the new SDK: its sync-sdk workflow builds the

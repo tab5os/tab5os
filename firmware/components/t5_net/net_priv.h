@@ -21,6 +21,10 @@ t5_err_t net_station_hold(bool on);
 /* The Wi-Fi driver is running (the C6 is up with Wi-Fi on). */
 bool net_wifi_up(void);
 
+/* wifimon.c: the build our radio firmware says it is ("t5-c6-0.2.0"); "" when
+ * the C6 answers without one (our firmware before 0.2.0). T5_ERR_TIMEOUT: no
+ * answer (esp_hosted's own firmware, or the C6 isn't up). */
+t5_err_t wifimon_c6_build(char *out, size_t n);
 /* wifimon.c: an open monitor ends (exclusive Wi-Fi is being claimed or given back). */
 void wifimon_end_for_excl(void);
 /* wifi_excl.c: registers the exclusive Wi-Fi provider (t5_net_init). */

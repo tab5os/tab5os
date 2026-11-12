@@ -674,8 +674,21 @@ static void read_image_version(void)
     t5_mutex_unlock(s_mtx);
 }
 
+/* Which firmware the C6 runs. Our radio firmware names its build
+ * ("t5-c6-0.2.0", the version in its image); esp_hosted only reports its
+ * own protocol version ("3.1.0"), the same for every build, which is all
+ * there is for firmware that doesn't answer. A build name also goes into
+ * the status. */
 static bool running_version(char *out, size_t cap)
 {
+    char build[32];
+    if (wifimon_c6_build(build, sizeof build) == T5_OK && build[0]) {
+        scpy(out, cap, build, sizeof build);
+        t5_mutex_lock(s_mtx);
+        scpy(s_st.c6_version, sizeof s_st.c6_version, build, sizeof build);
+        t5_mutex_unlock(s_mtx);
+        return true;
+    }
     esp_hosted_app_desc_t d = {0};
     if (esp_hosted_get_coprocessor_app_desc(&d) != ESP_OK) return false;
     scpy(out, cap, d.version, sizeof d.version);
@@ -1123,6 +1136,14 @@ t5_err_t t5_net_c6_reset(void)
 {
     msg_t m = { .type = CMD_RESET };
     return send(&m);
+}
+
+t5_err_t t5_net_c6_running(char *out, size_t n)
+{
+    if (n) out[0] = 0;
+    read_image_version();                   /* c6fw may have been rewritten since */
+    if (!s_hosted_up) return T5_ERR_STATE;
+    return running_version(out, n) ? T5_OK : T5_ERR_IO;
 }
 
 t5_err_t t5_net_c6_update(bool force)

@@ -12,6 +12,7 @@
 #include "esp_app_format.h"
 #include "esp_image_format.h"
 #include "esp_ota_ops.h"
+#include "esp_heap_caps.h"
 #include "esp_partition.h"
 #include "hal/efuse_hal.h"
 #include "psa/crypto.h"
@@ -242,9 +243,9 @@ static t5_err_t ota_write(ota_t *o, const void *data, size_t len, char *err, siz
     return T5_OK;
 }
 
-static bool verify_sig(const ota_t *o, const uint8_t hash[32])
+static bool verify_sig_with(int key, const uint8_t sig[T5_OTA_SIG_LEN], const uint8_t hash[32])
 {
-    const t5_ota_key_t *k = &t5_ota_keys[o->key];
+    const t5_ota_key_t *k = &t5_ota_keys[key];
     psa_key_attributes_t a = PSA_KEY_ATTRIBUTES_INIT;
     psa_set_key_usage_flags(&a, PSA_KEY_USAGE_VERIFY_HASH);
     psa_set_key_algorithm(&a, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
@@ -253,11 +254,16 @@ static bool verify_sig(const ota_t *o, const uint8_t hash[32])
     psa_key_id_t id = 0;
     bool ok = false;
     if (psa_import_key(&a, k->point, sizeof k->point, &id) == PSA_SUCCESS) {
-        ok = psa_verify_hash(id, PSA_ALG_ECDSA(PSA_ALG_SHA_256), hash, 32, o->hdr.sig, T5_OTA_SIG_LEN) == PSA_SUCCESS;
+        ok = psa_verify_hash(id, PSA_ALG_ECDSA(PSA_ALG_SHA_256), hash, 32, sig, T5_OTA_SIG_LEN) == PSA_SUCCESS;
         psa_destroy_key(id);
     }
     psa_reset_key_attributes(&a);
     return ok;
+}
+
+static bool verify_sig(const ota_t *o, const uint8_t hash[32])
+{
+    return verify_sig_with(o->key, o->hdr.sig, hash);
 }
 
 /* Verify and switch the boot slot. Frees o either way. */
@@ -393,6 +399,96 @@ t5_err_t t5_ota_peek(const char *path, t5_ota_source_t from, bool consent, t5_ot
     t5_err_t e = check_hdr(hdr, from, consent, &key, &why);
     *trusted = key >= 0;
     if (e != T5_OK) snprintf(err, errlen, "%s", why);
+    return e;
+}
+
+/* ---- the C6 radio's firmware (.t5c6) ---------------------------------------- */
+
+/* Not fail(): t5_ota_status() is the OS update's, which this isn't. */
+static t5_err_t c6_refuse(t5_err_t e, char *err, size_t n, const char *why)
+{
+    if (err && n) snprintf(err, n, "%s", why);
+    T5_LOGW(TAG, "C6 firmware refused: %s", why);
+    return e;
+}
+
+/* Does the partition already hold these bytes? */
+static bool part_holds(const esp_partition_t *p, const uint8_t *img, uint32_t len)
+{
+    uint8_t buf[256];
+    for (uint32_t off = 0; off < len; off += sizeof buf) {
+        uint32_t n = len - off < sizeof buf ? len - off : sizeof buf;
+        if (esp_partition_read(p, off, buf, n) != ESP_OK || memcmp(buf, img + off, n)) return false;
+    }
+    return true;
+}
+
+t5_err_t t5_ota_c6_install_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t from, bool consent,
+                                  const char *want_version, char *err, size_t errlen)
+{
+    if (err && errlen) err[0] = 0;
+    t5_ota_hdr_t hdr;
+    int r = read_full(rd, ctx, &hdr, sizeof hdr);
+    if (r < 0) return c6_refuse((t5_err_t)r, err, errlen, "the transfer was interrupted");
+    if (r != (int)sizeof hdr || memcmp(hdr.magic, T5_OTA_C6_MAGIC, 4) || hdr.version != T5_OTA_HDR_VERSION) {
+        return c6_refuse(T5_ERR_INVALID_ARG, err, errlen, "not a radio firmware package (.t5c6)");
+    }
+    int key = hdr.sig_len == T5_OTA_SIG_LEN ? find_key(hdr.key_id) : -1;
+    const char *why = t5_ota_refusal(&hdr, key >= 0, from, consent);
+    if (why) return c6_refuse(T5_ERR_DENIED, err, errlen, why);
+    const esp_partition_t *p =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, T5_OTA_C6_PART);
+    if (!p) return c6_refuse(T5_ERR_NOT_FOUND, err, errlen, "no c6fw partition");
+    if (hdr.image_len < T5_OTA_C6_HEAD_LEN || hdr.image_len > p->size) {
+        return c6_refuse(T5_ERR_INVALID_ARG, err, errlen, "the image doesn't fit the c6fw partition");
+    }
+    /* Whole, in PSRAM: c6fw is only erased once the image is known good. */
+    uint8_t *img = heap_caps_malloc(hdr.image_len, MALLOC_CAP_SPIRAM);
+    if (!img) return c6_refuse(T5_ERR_NO_MEM, err, errlen, "out of memory");
+    t5_err_t e = T5_OK;
+    r = read_full(rd, ctx, img, hdr.image_len);
+    if (r < 0) e = c6_refuse((t5_err_t)r, err, errlen, "the transfer was interrupted");
+    else if (r != (int)hdr.image_len) e = c6_refuse(T5_ERR_INVALID_ARG, err, errlen, "the image is incomplete");
+    else if ((why = t5_ota_c6_head_refusal(img, hdr.image_len, want_version))) {
+        e = c6_refuse(T5_ERR_INVALID_ARG, err, errlen, why);
+    }
+    if (e == T5_OK) {
+        uint8_t hash[32];
+        size_t hl = 0;
+        psa_crypto_init();
+        if (psa_hash_compute(PSA_ALG_SHA_256, img, hdr.image_len, hash, sizeof hash, &hl) != PSA_SUCCESS) {
+            e = c6_refuse(T5_ERR_FAIL, err, errlen, "can't hash the image");
+        } else if (memcmp(hash, hdr.image_sha256, 32)) {
+            e = c6_refuse(T5_ERR_INVALID_ARG, err, errlen, "the image doesn't match its hash (damaged in transfer?)");
+        } else if (key >= 0 && !verify_sig_with(key, hdr.sig, hash)) {
+            e = c6_refuse(T5_ERR_DENIED, err, errlen, "the signature doesn't verify");
+        }
+    }
+    if (e == T5_OK && part_holds(p, img, hdr.image_len)) {
+        T5_LOGI(TAG, "c6fw already holds %.15s", hdr.os_version);
+    } else if (e == T5_OK) {
+        uint32_t span = (hdr.image_len + p->erase_size - 1) / p->erase_size * p->erase_size;
+        if (esp_partition_erase_range(p, 0, span) != ESP_OK || esp_partition_write(p, 0, img, hdr.image_len) != ESP_OK) {
+            e = c6_refuse(T5_ERR_IO, err, errlen, "writing the c6fw partition failed");
+        } else {
+            T5_LOGI(TAG, "radio firmware %.15s (%u bytes, %s) written to c6fw", hdr.os_version,
+                    (unsigned)hdr.image_len, key >= 0 ? t5_ota_keys[key].name : "not signed by a built-in key");
+        }
+    }
+    heap_caps_free(img);
+    return e;
+}
+
+t5_err_t t5_ota_c6_install_file(const char *path, t5_ota_source_t from, bool consent, const char *want_version,
+                                char *err, size_t errlen)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        snprintf(err, errlen, "can't open %s", path);
+        return T5_ERR_NOT_FOUND;
+    }
+    t5_err_t e = t5_ota_c6_install_stream(file_read, f, from, consent, want_version, err, errlen);
+    fclose(f);
     return e;
 }
 

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0
  * ota [file PATH [unsigned] | url URL [unsigned] | selftest [SIG KEYID] | recovery | safemode |
- *      check | online [install]]
+ *      check | online [install] | c6 [file PATH [unsigned] | url URL [unsigned] | retry]]
  * (plan 9.1-9.3)
  */
 #include <stdio.h>
@@ -8,6 +8,8 @@
 #include "esp_console.h"
 #include "t5_ota/ota.h"
 #include "t5_core/os.h"
+#include "t5_net/download.h"
+#include "t5_ota_net/c6.h"
 #include "t5_ota_net/ota_url.h"
 #include "t5_ota_net/update.h"
 #include "diag_priv.h"
@@ -75,11 +77,44 @@ static int cmd_online(int argc, char **argv)
     return e != T5_OK;
 }
 
+/* ota c6: where the C6 sync is; ota c6 retry: run it again; ota c6 file|url:
+ * write a .t5c6 (any version) to c6fw, for `net update` to put on the C6. */
+static int c6_job(void *arg)
+{
+    int argc = ((ota_args_t *)arg)->argc;
+    char **argv = ((ota_args_t *)arg)->argv;
+    char err[128] = "";
+    t5_err_t e = T5_OK;
+    bool unsigned_ok = argc >= 5 && !strcmp(argv[4], "unsigned");
+    if (argc >= 4 && !strcmp(argv[2], "file")) {
+        e = t5_ota_c6_install_file(argv[3], T5_OTA_FROM_CONSOLE, unsigned_ok, NULL, err, sizeof err);
+    } else if (argc >= 4 && !strcmp(argv[2], "url")) {
+        t5_download_t *dl;
+        e = t5_download_open(argv[3], &dl, NULL, err, sizeof err);
+        if (e == T5_OK) {
+            e = t5_ota_c6_install_stream(t5_download_read, dl, T5_OTA_FROM_CONSOLE, unsigned_ok, NULL, err, sizeof err);
+            t5_download_close(dl);
+        }
+    } else if (argc >= 3 && !strcmp(argv[2], "retry")) {
+        e = t5_c6_sync_retry();
+    } else if (argc >= 3) {
+        printf("usage: ota c6 [file PATH [unsigned] | url URL [unsigned] | retry]\n");
+        return 1;
+    }
+    if (argc >= 3) printf("%s%s%s\n", t5_err_str(e), err[0] ? ": " : "", err);
+    if (e == T5_OK && argc >= 4) printf("in c6fw: 'net update' puts it on the C6\n");
+    char st[128];
+    t5_c6_sync_status(st, sizeof st);
+    printf("c6 sync: %s\n", st);
+    return e != T5_OK;
+}
+
 static int cmd_ota(int argc, char **argv)
 {
     if (argc >= 2 && (!strcmp(argv[1], "check") || !strcmp(argv[1], "online"))) return cmd_online(argc, argv);
     /* Writing a slot needs an internal stack; a URL install also does TLS. */
     ota_args_t a = { argc, argv };
+    if (argc >= 2 && !strcmp(argv[1], "c6")) return diag_run_internal("t5_otacmd", 12288, c6_job, &a);
     return diag_run_internal("t5_otacmd", 12288, ota_job, &a);
 }
 
@@ -87,7 +122,7 @@ void diag_register_ota(void)
 {
     const esp_console_cmd_t c = {
         .command = "ota",
-        .help = "Updates: file PATH | url URL [unsigned] | selftest | recovery | safemode | check | online [install]",
+        .help = "Updates: file PATH | url URL [unsigned] | selftest | recovery | safemode | check | online [install] | c6 [file|url|retry]",
         .func = cmd_ota,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&c));

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include "esp_err.h"
 #include "t5_ota/ota.h"
+#include "t5_ota_net/c6.h"
 #include "t5_ota_net/update.h"
 #include "t5_abi/t5_abi.h"
 #include "t5_battery/battery.h"
@@ -157,6 +158,7 @@ void app_main(void)
     /* Developer mode (plan 8.5): listens on the network only if it is on. */
     start("developer mode", t5_dev_init());
     start("update check", t5_update_start(update_found));   /* daily, over Wi-Fi */
+    start("radio firmware", t5_c6_sync_start());           /* the C6 matches this OS */
     ESP_ERROR_CHECK(t5_diag_start());
     boot_summary();
     /* Healthy once the shell is on the panel, or after 10 s (a boot without

@@ -13,6 +13,7 @@
  */
 #include <string.h>
 #include "eh_cp_feat_peer_data.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -207,6 +208,14 @@ static void on_cmd(uint32_t id, const uint8_t *data, size_t len, void *ctx)
     uint8_t primary = 0;
     wifi_second_chan_t sc;
     if (esp_wifi_get_channel(&primary, &sc) == ESP_OK) r.channel = primary;
+    if (len >= sizeof(t5wm_cmd_t) && data[0] == T5WM_OP_HELLO) {
+        uint8_t out[sizeof r + T5WM_BUILD_LEN] = { 0 };
+        memcpy(out, &r, sizeof r);
+        const char *v = esp_app_get_description()->version;
+        memcpy(out + sizeof r, v, strnlen(v, T5WM_BUILD_LEN - 1));
+        eh_cp_feat_peer_data_send(T5WM_MSG_REPLY, out, sizeof out);
+        return;
+    }
     eh_cp_feat_peer_data_send(T5WM_MSG_REPLY, (const uint8_t *)&r, sizeof r);
 }
 

@@ -59,11 +59,17 @@ static t5_mutex_t mx(void)
 /* ---- from the C6 (esp_hosted's event task) ---------------------------------- */
 static volatile uint32_t s_replies, s_batches;
 
+static char s_build[T5WM_BUILD_LEN];     /* from the last HELLO reply that had it */
+
 static void on_reply(uint32_t id, const uint8_t *data, size_t len, void *ctx)
 {
     (void)id; (void)ctx;
     s_replies++;
     if (len < sizeof s_reply) return;
+    if (len >= sizeof s_reply + sizeof s_build) {
+        memcpy(s_build, data + sizeof s_reply, sizeof s_build);
+        s_build[sizeof s_build - 1] = 0;
+    }
     memcpy(&s_reply, data, sizeof s_reply);
     xSemaphoreGive(s_reply_sem);
 }
@@ -154,6 +160,21 @@ static bool ensure_registered(void)
     bool ok = s_registered;
     t5_mutex_unlock(mx());
     return ok;
+}
+
+t5_err_t wifimon_c6_build(char *out, size_t n)
+{
+    if (n) out[0] = 0;
+    if (!ensure_registered()) return T5_ERR_IO;
+    t5_err_t e = T5_ERR_TIMEOUT;
+    /* Right after the C6 starts, its handler may not be in yet: a few tries. */
+    for (int i = 0; i < 3 && e != T5_OK; i++) {
+        s_build[0] = 0;
+        t5wm_cmd_t hello = { .op = T5WM_OP_HELLO };
+        e = cmd(&hello, NULL, 0, NULL);
+    }
+    if (e == T5_OK) snprintf(out, n, "%s", s_build);
+    return e;
 }
 
 /* ---- channels and the station ----------------------------------------------- */
