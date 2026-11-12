@@ -7,6 +7,7 @@
 #include "t5_net/ble.h"
 #include "t5_bootfmt/espimg.h"
 #include "t5_net/netcfg.h"
+#include "t5_net/wifimon.h"
 #include "c6img.h"
 #include "netproto.h"
 
@@ -387,6 +388,33 @@ static void test_sha1_base64_accept(void)
     TEST_ASSERT_EQUAL_STRING("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", acc);
 }
 
+static void test_wifimon_pcap(void)
+{
+    uint8_t h[24];
+    TEST_ASSERT_EQUAL(24, t5_wifimon_pcap_header(h));
+    TEST_ASSERT_EQUAL_HEX8(0xd4, h[0]);              /* a1b2c3d4, little-endian */
+    TEST_ASSERT_EQUAL_HEX8(127, h[20]);              /* radiotap */
+    const uint8_t beacon[30] = { 0x80, 0x00 };
+    t5_wifimon_frame_t m = { .time_us = 3500123, .rssi = -61, .noise_floor = -95, .channel = 6, .len = 200 };
+    uint8_t rec[128];
+    size_t n = t5_wifimon_pcap_record(&m, beacon, sizeof beacon, rec, sizeof rec);
+    TEST_ASSERT_EQUAL(16 + 16 + sizeof beacon, n);
+    TEST_ASSERT_EQUAL_HEX8(3, rec[0]);               /* seconds */
+    TEST_ASSERT_EQUAL(500123, rec[4] | rec[5] << 8 | rec[6] << 16);
+    TEST_ASSERT_EQUAL(16 + 30, rec[8]);              /* captured */
+    TEST_ASSERT_EQUAL(16 + 200, rec[12]);            /* on the air */
+    const uint8_t *rt = rec + 16;
+    TEST_ASSERT_EQUAL(16, rt[2]);                    /* radiotap length */
+    TEST_ASSERT_EQUAL_HEX8(0x6a, rt[4]);             /* flags, channel, signal, noise */
+    TEST_ASSERT_EQUAL(2437, rt[10] | rt[11] << 8);   /* channel 6 */
+    TEST_ASSERT_EQUAL((uint8_t)-61, rt[14]);
+    TEST_ASSERT_EQUAL_HEX8(0x80, rec[32]);           /* the frame follows */
+    TEST_ASSERT_EQUAL(0, t5_wifimon_pcap_record(&m, beacon, sizeof beacon, rec, n - 1));
+    m.channel = 14;
+    t5_wifimon_pcap_record(&m, beacon, sizeof beacon, rec, sizeof rec);
+    TEST_ASSERT_EQUAL(2484, rec[26] | rec[27] << 8);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -406,5 +434,6 @@ int main(void)
     RUN_TEST(test_chunked);
     RUN_TEST(test_ws_frames);
     RUN_TEST(test_sha1_base64_accept);
+    RUN_TEST(test_wifimon_pcap);
     return UNITY_END();
 }

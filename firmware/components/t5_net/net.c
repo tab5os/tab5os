@@ -58,7 +58,7 @@ static const char *TAG = "t5.net";
 
 typedef enum {
     CMD_START, CMD_STOP, CMD_SCAN, CMD_CONNECT, CMD_DISCONNECT, CMD_FORGET, CMD_RESET, CMD_SUSPEND, CMD_RESUME,
-    CMD_UPDATE, CMD_ANTENNA, CMD_BLE,
+    CMD_UPDATE, CMD_ANTENNA, CMD_BLE, CMD_HOLD,
     EV_STA_START, EV_CONNECTED, EV_DISCONNECTED, EV_GOT_IP, EV_SCAN_DONE, EV_LINK_DOWN, EV_LINK_FAIL, EV_WAKE,
     EV_SNTP,
 } msg_type_t;
@@ -84,6 +84,7 @@ static t5_rail_hold_t *s_rail;
 static esp_netif_t *s_netif;
 static bool s_hosted_up, s_wifi_up, s_sntp_started;
 static bool s_auto = true;           /* auto-connect to saved networks */
+static bool s_held;                  /* an app's monitor has the radio (net_station_hold) */
 static bool s_scan_for_auto;
 static bool s_scanning;
 static bool s_got_ip;
@@ -810,6 +811,7 @@ static void handle(const msg_t *m)
         start_scan(false);
         break;
     case CMD_CONNECT:
+        if (s_held) break;                  /* an app's monitor has the radio */
         s_auto = true;
         s_pending_save = m->flag;
         scpy(s_pending_pass, sizeof s_pending_pass, m->pass, sizeof m->pass);
@@ -865,6 +867,23 @@ static void handle(const msg_t *m)
         if (t5_ble_enabled() && !s_hosted_up && !s_suspended_off) start();
         else if (!radio_wanted() && s_hosted_up) power_down();
         else t5_ble_on_link(s_hosted_up);
+        break;
+    case CMD_HOLD:
+        if (m->flag && !s_held) {
+            s_held = true;
+            s_auto = false;
+            if (s_wifi_up && (s_st.state == T5_NET_CONNECTED || s_st.state == T5_NET_CONNECTING)) {
+                s_expect_leave = true;
+                esp_wifi_disconnect();
+            }
+            set_state(T5_NET_IDLE);
+            T5_LOGW(TAG, "station paused: an app has the radio");
+        } else if (!m->flag && s_held) {
+            s_held = false;
+            s_auto = true;
+            T5_LOGI(TAG, "station back");
+            if (s_wifi_up && !rejoin_last()) s_next_scan = t5_time_ms();
+        }
         break;
     case EV_STA_START:
         break;
@@ -1045,6 +1064,17 @@ t5_err_t t5_net_connect(const char *ssid, const char *pass, bool save)
     t5_err_t e = send(&m);
     memset(&m, 0, sizeof m);
     return e;
+}
+
+t5_err_t net_station_hold(bool on)
+{
+    msg_t m = { .type = CMD_HOLD, .flag = on };
+    return send(&m);
+}
+
+bool net_wifi_up(void)
+{
+    return s_wifi_up;
 }
 
 t5_err_t t5_net_disconnect(void)

@@ -8,12 +8,19 @@
 #pragma once
 #include <stdbool.h>
 #include "nvs.h"
+#include "t5_core/err.h"
 
 #define NET_NVS_NS "t5net"
 
 /* NVS up (once; a full or newer-format partition is erased first), then
  * nvs_open of NET_NVS_NS. */
 esp_err_t net_nvs_open(nvs_open_mode_t mode, nvs_handle_t *h);
+/* Pause the station (disconnect, no auto-reconnect) while an app's Wi-Fi
+ * monitor changes channels, and bring it back after (wifimon.c). */
+t5_err_t net_station_hold(bool on);
+/* The Wi-Fi driver is running (the C6 is up with Wi-Fi on). */
+bool net_wifi_up(void);
+
 /* Ask the net task to start or stop BLE to match its setting. */
 void net_ble_changed(void);
 /* ble.c, on the net task: the C6 link came up or is going down, or the

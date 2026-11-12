@@ -152,3 +152,6 @@ CONFIG_TINYUSB_CDC_ENABLED=n
 # USB-C device mode for apps (t5_usb/usbdev.h): up to 3 HID interfaces and MIDI.
 CONFIG_TINYUSB_HID_COUNT=3
 CONFIG_TINYUSB_MIDI_COUNT=1
+# Opaque messages to and from the C6: Wi-Fi monitor mode (t5_net/wifimon.c).
+CONFIG_ESP_HOSTED_HOST_FEAT_PEER_DATA=y
+CONFIG_ESP_HOSTED_HOST_FEAT_PEER_DATA_MAX_CUSTOM_MSG_HANDLERS=4

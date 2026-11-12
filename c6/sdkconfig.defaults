@@ -8,6 +8,8 @@ CONFIG_ESP_HOSTED_CP_FOR_MCU=y
 CONFIG_ESP_HOSTED_CP_RPC_V2=y
 CONFIG_ESP32P4_TAB5_C6_BOARD=y
 CONFIG_ESP_HOSTED_CP_FEAT_WIFI=y
+# Opaque messages to and from the P4: Wi-Fi monitor mode (main/monitor.c).
+CONFIG_ESP_HOSTED_CP_FEAT_PEER_DATA=y
 
 # BLE controller here, host stack (NimBLE) on the P4 over hosted HCI.
 CONFIG_BT_ENABLED=y
