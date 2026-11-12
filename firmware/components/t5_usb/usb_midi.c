@@ -6,6 +6,7 @@
  */
 #include <string.h>
 #include "t5_core/log.h"
+#include "t5_core/os.h"
 #include "usb_priv.h"
 
 static const char *TAG = "t5.usb";
@@ -111,6 +112,29 @@ void usb_midi_gone(usb_device_handle_t h)
     usb_host_device_close(usb_client(), h);
     memset(&s_m, 0, sizeof s_m);
     T5_LOGI(TAG, "MIDI device gone");
+}
+
+bool usb_midi_owns(uint8_t addr, uint8_t iface)
+{
+    return s_m.claimed && s_m.addr == addr && s_m.iface == iface;
+}
+
+/* Like usb_midi_gone, with the device still there: an app takes it. */
+void usb_midi_detach(void)
+{
+    if (!s_m.claimed) return;
+    usb_device_handle_t h = s_m.dev;
+    s_m.claimed = false;                        /* in_done stops resubmitting */
+    usb_host_endpoint_halt(h, s_m.ep_in);
+    usb_host_endpoint_flush(h, s_m.ep_in);
+    usb_host_endpoint_clear(h, s_m.ep_in);
+    t5_delay_ms(20);                            /* the cancelled transfer comes back */
+    usb_host_transfer_free(s_m.in);
+    if (s_m.out) usb_host_transfer_free(s_m.out);
+    usb_host_interface_release(usb_client(), h, s_m.iface);
+    usb_host_device_close(usb_client(), h);
+    memset(&s_m, 0, sizeof s_m);
+    T5_LOGI(TAG, "MIDI device handed to an app");
 }
 
 void usb_midi_init(void)

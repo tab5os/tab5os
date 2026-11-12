@@ -88,6 +88,62 @@ t5_err_t t5_usb_uvc_open(uint16_t w, uint16_t h, uint8_t fps, t5_usb_uvc_frame_c
                          t5_usb_uvc_t **out);
 t5_err_t t5_usb_uvc_close(t5_usb_uvc_t *u);
 
+/* ---- raw access (API level 2) ---------------------------------------------
+ * An app opens a device on USB-A (or behind a hub there), reads its
+ * descriptors, claims interfaces and does its own control, bulk and
+ * interrupt transfers. Interfaces the OS's drivers aren't using (gamepads,
+ * vendor-specific devices) are free to claim; one the OS uses (a boot
+ * keyboard or mouse, MIDI) needs T5_USB_CLAIM_TAKE_OVER, which asks the
+ * person the first time and gives the interface back when released. A
+ * mounted drive, an open serial port or a streaming camera is T5_ERR_BUSY:
+ * eject or close it first. Hubs can't be claimed. Isochronous endpoints
+ * aren't supported yet.
+ *
+ * Handles close themselves when the app exits or crashes, releasing every
+ * claim. After the device is unplugged calls return T5_ERR_STATE; the
+ * handle stays valid until closed. Any task. */
+#define T5_USB_MAX_HANDLES 8         /* every app's together */
+#define T5_USB_XFER_MAX 4096         /* bytes per transfer */
+#define T5_USB_FOREVER UINT32_MAX
+#define T5_USB_CLAIM_TAKE_OVER 0x01
+
+typedef struct t5_usb_handle t5_usb_handle_t;
+
+t5_err_t t5_usb_open(uint8_t addr, t5_usb_handle_t **out);
+/* The device descriptor (18 bytes) and the active configuration descriptor
+ * with every interface and endpoint, cut to cap. Both return the full
+ * length, or a negative t5_err_t. */
+int t5_usb_device_desc(t5_usb_handle_t *h, void *buf, size_t cap);
+int t5_usb_config_desc(t5_usb_handle_t *h, void *buf, size_t cap);
+/* String descriptor index as UTF-8 (cut to cap, NUL-terminated). Returns
+ * the length, or a negative t5_err_t. */
+int t5_usb_string(t5_usb_handle_t *h, uint8_t index, char *out, size_t cap);
+
+t5_err_t t5_usb_claim(t5_usb_handle_t *h, uint8_t iface, uint8_t alt, uint32_t flags);
+/* An interface taken over goes back to the OS's driver. */
+t5_err_t t5_usb_release(t5_usb_handle_t *h, uint8_t iface);
+
+/* A control transfer on endpoint 0 (the setup packet's fields). The data
+ * stage's direction is bm_request_type's top bit. Returns the bytes moved,
+ * or a negative t5_err_t: T5_ERR_IO for a STALL. */
+int t5_usb_control(t5_usb_handle_t *h, uint8_t bm_request_type, uint8_t b_request, uint16_t w_value,
+                   uint16_t w_index, void *data, uint16_t len, uint32_t timeout_ms);
+/* Bulk or interrupt, on an endpoint of a claimed interface; ep's top bit is
+ * the direction (0x81 IN, 0x01 OUT). len up to T5_USB_XFER_MAX. Returns the
+ * bytes moved, or a negative t5_err_t (T5_ERR_TIMEOUT cancels the transfer). */
+int t5_usb_transfer(t5_usb_handle_t *h, uint8_t ep, void *data, size_t len, uint32_t timeout_ms);
+/* Keep depth (1..8) transfers queued on an IN endpoint so nothing is missed
+ * between calls (HID input). One stream per endpoint. */
+t5_err_t t5_usb_stream_start(t5_usb_handle_t *h, uint8_t ep, uint8_t depth);
+/* The next completed transfer's bytes from that stream (cut to cap), or
+ * T5_ERR_TIMEOUT, or T5_ERR_STATE once unplugged. 16 are queued. */
+int t5_usb_stream_next(t5_usb_handle_t *h, uint8_t ep, void *buf, size_t cap, uint32_t timeout_ms);
+t5_err_t t5_usb_stream_stop(t5_usb_handle_t *h, uint8_t ep);
+/* False once the device is unplugged. */
+bool t5_usb_handle_up(t5_usb_handle_t *h);
+/* Stops streams and releases every claim. */
+t5_err_t t5_usb_close(t5_usb_handle_t *h);
+
 /* USB-C role. Storage mode hands the SD card to the computer; the Tab5
  * takes it back when the computer ejects it, when asked
  * (t5_usbc_set_mode(T5_USBC_CONSOLE)), or after timeout_s (0 = no timeout).
