@@ -33,7 +33,16 @@ bool usb_midi_pack(const uint8_t *msg, size_t len, uint8_t pkt[4])
         cin = 0xF;                               /* single byte */
         if (len != 1) return false;
     } else {
-        return false;                            /* SysEx is not supported here */
+        /* SysEx, up to 3 bytes at a time in order: CIN 4 starts or
+         * continues (3 bytes, no F7), 5/6/7 end with 1/2/3 bytes. */
+        size_t end = 0;
+        for (size_t i = 0; i < len; i++) {
+            if (msg[i] == 0xF7) end = i + 1;
+            else if (msg[i] >= 0x80 && !(i == 0 && msg[i] == 0xF0)) return false;
+        }
+        if (end && end != len) return false;
+        if (!end && len != 3) return false;
+        cin = end ? (uint8_t)(0x4 + len) : 0x4;
     }
     memset(pkt, 0, 4);
     pkt[0] = cin;

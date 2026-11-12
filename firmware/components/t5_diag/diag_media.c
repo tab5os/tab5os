@@ -612,7 +612,8 @@ static const uint8_t ECHO_DESC[] = {
 static struct {
     volatile bool running;
     int32_t open_err;
-    uint32_t secs, mounted, hid_echo, midi_echo, send_err, events;
+    uint32_t secs, mounted, hid_echo, midi_echo, send_err, events, hid_err, midi_err;
+    int32_t last_err;
 } s_udt;
 
 static void usbdev_test_task(void *arg)
@@ -640,12 +641,22 @@ static void usbdev_test_task(void *arg)
         s_udt.events++;
         if (ev.type == T5_USBDEV_MOUNTED) s_udt.mounted++;
         if (ev.type == T5_USBDEV_HID_OUTPUT && ev.hid == 0) {
-            if (t5_usbdev_hid_send(d, 0, 0, buf, 8, 200) == T5_OK) s_udt.hid_echo++;
-            else s_udt.send_err++;
+            t5_err_t se = t5_usbdev_hid_send(d, 0, 0, buf, 8, 200);
+            if (se == T5_OK) s_udt.hid_echo++;
+            else {
+                s_udt.send_err++;
+                s_udt.hid_err++;
+                s_udt.last_err = se;
+            }
         }
         if (ev.type == T5_USBDEV_MIDI_IN) {
-            if (t5_usbdev_midi_send(d, buf, (size_t)n) == T5_OK) s_udt.midi_echo++;
-            else s_udt.send_err++;
+            t5_err_t se = t5_usbdev_midi_send(d, buf, (size_t)n);
+            if (se == T5_OK) s_udt.midi_echo++;
+            else {
+                s_udt.send_err++;
+                s_udt.midi_err++;
+                s_udt.last_err = se;
+            }
         }
     }
     if (d) T5_IGNORE(t5_usbdev_close(d));
@@ -659,9 +670,11 @@ static void usbdev_test_task(void *arg)
 static int cmd_usbc(int argc, char **argv)
 {
     if (argc >= 3 && !strcmp(argv[1], "device") && !strcmp(argv[2], "status")) {
-        printf("usbc device test: %s, open %s, mounted %u, events %u, hid echo %u, midi echo %u, send errors %u\n",
+        printf("usbc device test: %s, open %s, mounted %u, events %u, hid echo %u, midi echo %u, send errors %u"
+               " (hid %u, midi %u, last %s)\n",
                s_udt.running ? "running" : "done", t5_err_str(s_udt.open_err), (unsigned)s_udt.mounted,
-               (unsigned)s_udt.events, (unsigned)s_udt.hid_echo, (unsigned)s_udt.midi_echo, (unsigned)s_udt.send_err);
+               (unsigned)s_udt.events, (unsigned)s_udt.hid_echo, (unsigned)s_udt.midi_echo, (unsigned)s_udt.send_err,
+               (unsigned)s_udt.hid_err, (unsigned)s_udt.midi_err, t5_err_str(s_udt.last_err));
         return 0;
     }
     if (argc >= 2 && !strcmp(argv[1], "device")) {

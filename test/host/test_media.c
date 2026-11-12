@@ -358,6 +358,26 @@ static void test_midi_packets(void)
     TEST_ASSERT_FALSE(usb_midi_pack(note_on, 2, pkt));   /* note on needs 3 bytes */
     uint8_t pad[4] = { 0, 0, 0, 0 };
     TEST_ASSERT_EQUAL(0, usb_midi_parse(pad, msg));
+    /* SysEx, 3 bytes at a time: start/continue (CIN 4), then the end. */
+    const uint8_t sysex[] = { 0xF0, 0x7E, 0x00 }, cont[] = { 0x06, 0x01, 0x02 };
+    TEST_ASSERT_TRUE(usb_midi_pack(sysex, 3, pkt));
+    TEST_ASSERT_EQUAL_HEX8(0x04, pkt[0]);
+    TEST_ASSERT_TRUE(usb_midi_pack(cont, 3, pkt));
+    TEST_ASSERT_EQUAL_HEX8(0x04, pkt[0]);
+    const uint8_t end1[] = { 0xF7 }, end2[] = { 0x05, 0xF7 }, end3[] = { 0x05, 0x06, 0xF7 }, whole[] = { 0xF0, 0x01, 0xF7 };
+    TEST_ASSERT_TRUE(usb_midi_pack(end1, 1, pkt));
+    TEST_ASSERT_EQUAL_HEX8(0x05, pkt[0]);
+    TEST_ASSERT_TRUE(usb_midi_pack(end2, 2, pkt));
+    TEST_ASSERT_EQUAL_HEX8(0x06, pkt[0]);
+    TEST_ASSERT_TRUE(usb_midi_pack(end3, 3, pkt));
+    TEST_ASSERT_EQUAL_HEX8(0x07, pkt[0]);
+    TEST_ASSERT_TRUE(usb_midi_pack(whole, 3, pkt));
+    TEST_ASSERT_EQUAL(3, usb_midi_parse(pkt, msg));            /* round trip */
+    /* Wrong: a short piece that doesn't end, bytes after F7, a status inside. */
+    const uint8_t after[] = { 0x01, 0xF7, 0x02 }, inside[] = { 0x01, 0x90, 0x02 };
+    TEST_ASSERT_FALSE(usb_midi_pack(sysex, 2, pkt));
+    TEST_ASSERT_FALSE(usb_midi_pack(after, 3, pkt));
+    TEST_ASSERT_FALSE(usb_midi_pack(inside, 3, pkt));
 }
 
 /* HID usage IDs from the USB HID Usage Tables, keyboard page (0x07). */

@@ -20,11 +20,13 @@
 static const char *TAG = "t5_c6";
 
 void t5_monitor_init(void);
+void t5_monitor_register(void);
 
 static void on_cp_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)base; (void)data;
     if (id != EH_CP_EVT_PRIVATE_RPC_READY) return;
+    t5_monitor_register();                  /* the P4 (re)connected: see monitor.c */
     esp_ota_img_states_t st;
     const esp_partition_t *run = esp_ota_get_running_partition();
     if (run && esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {

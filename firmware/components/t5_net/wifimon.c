@@ -11,6 +11,7 @@
 #include <string.h>
 #include "eh_host_feat_peer_data.h"
 #include "esp_heap_caps.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
@@ -56,9 +57,12 @@ static t5_mutex_t mx(void)
 }
 
 /* ---- from the C6 (esp_hosted's event task) ---------------------------------- */
+static volatile uint32_t s_replies, s_batches;
+
 static void on_reply(uint32_t id, const uint8_t *data, size_t len, void *ctx)
 {
     (void)id; (void)ctx;
+    s_replies++;
     if (len < sizeof s_reply) return;
     memcpy(&s_reply, data, sizeof s_reply);
     xSemaphoreGive(s_reply_sem);
@@ -67,6 +71,7 @@ static void on_reply(uint32_t id, const uint8_t *data, size_t len, void *ctx)
 static void on_frames(uint32_t id, const uint8_t *data, size_t len, void *ctx)
 {
     (void)id; (void)ctx;
+    s_batches++;
     t5wm_batch_t b;
     if (len < sizeof b) return;
     memcpy(&b, data, sizeof b);
@@ -116,7 +121,9 @@ static t5_err_t cmd(t5wm_cmd_t *c, const void *extra, size_t extra_len, t5wm_rep
         memcpy(buf, c, sizeof *c);
         if (extra_len) memcpy(buf + sizeof *c, extra, extra_len);
         xSemaphoreTake(s_reply_sem, 0);
-        e = eh_host_peer_data_send(T5WM_MSG_CMD, buf, sizeof *c + extra_len) == ESP_OK ? T5_OK : T5_ERR_IO;
+        esp_err_t se = eh_host_peer_data_send(T5WM_MSG_CMD, buf, sizeof *c + extra_len);
+        if (se != ESP_OK) T5_LOGW(TAG, "command %u: peer data send failed: 0x%x", c->op, (unsigned)se);
+        e = se == ESP_OK ? T5_OK : T5_ERR_IO;
         free(buf);
         int64_t until = t5_time_us() + REPLY_MS * 1000;
         while (e == T5_OK) {
@@ -193,6 +200,7 @@ static void stop_locked_out(t5_wifimon_t *m)
     T5_IGNORE(cmd(&c, NULL, 0, NULL));
     if (m->held) T5_IGNORE(net_station_hold(false));
     m->held = false;
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);             /* the net task's normal setting */
     if (m->lock) t5_wakelock_release(m->lock);
     m->lock = NULL;
     t5_io_hold_set(T5_IO_WIFI_MONITOR, NULL, NULL);
@@ -247,12 +255,14 @@ t5_err_t t5_wifimon_open(const t5_wifimon_cfg_t *cfg, t5_wifimon_t **out)
     t5wm_cmd_t hello = { .op = T5WM_OP_HELLO };
     t5wm_reply_t r;
     if (e == T5_OK && cmd(&hello, NULL, 0, &r) != T5_OK) {
-        T5_LOGW(TAG, "the C6 firmware doesn't answer: update it (net update)");
+        T5_LOGW(TAG, "the C6 firmware doesn't answer (replies %u, batches %u): update it (net update)",
+                (unsigned)s_replies, (unsigned)s_batches);
         e = T5_ERR_NOT_SUPPORTED;
     }
     if (e == T5_OK) e = make_room(m, cfg->channel);
     if (e == T5_OK) {
         m->lock = t5_wakelock_acquire_system(T5_LOCK_NET, "wifimon");
+        esp_wifi_set_ps(WIFI_PS_NONE);              /* power save sleeps through most frames */
         t5wm_cmd_t lim = { .op = T5WM_OP_TX_LIMIT, .tx_limit = cfg->tx_per_s ? cfg->tx_per_s : 50 };
         T5_IGNORE(cmd(&lim, NULL, 0, NULL));
         t5wm_cmd_t c = { .op = T5WM_OP_START, .channel = cfg->channel, .types = cfg->types ? cfg->types : T5WM_TYPE_MGMT,

@@ -80,6 +80,17 @@ static void rx_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     xRingbufferSendComplete(s_ring, slot);
 }
 
+static void on_cmd(uint32_t id, const uint8_t *data, size_t len, void *ctx);
+
+/* esp_hosted's peer data init clears its callback table, and it may run
+ * again when the P4 connects, after ours went in: register again on every
+ * connection (main.c) and once a second, which is cheap. */
+void t5_monitor_register(void)
+{
+    eh_cp_feat_peer_data_init();
+    eh_cp_feat_peer_data_register_callback(T5WM_MSG_CMD, on_cmd, NULL);
+}
+
 /* Drain the ring into batches. A batch goes out when the next record
  * wouldn't fit, or 20 ms after its first record. */
 static void batch_task(void *arg)
@@ -87,7 +98,12 @@ static void batch_task(void *arg)
     (void)arg;
     size_t used = sizeof(t5wm_batch_t);
     uint16_t count = 0;
+    int64_t next_reg = 0;
     for (;;) {
+        if (!count && esp_timer_get_time() >= next_reg) {
+            t5_monitor_register();
+            next_reg = esp_timer_get_time() + 1000000;
+        }
         size_t n = 0;
         void *item = xRingbufferReceive(s_ring, &n, pdMS_TO_TICKS(count ? 20 : 200));
         bool flush = !item && count;
@@ -196,13 +212,11 @@ static void on_cmd(uint32_t id, const uint8_t *data, size_t len, void *ctx)
 
 void t5_monitor_init(void)
 {
-    eh_cp_feat_peer_data_init();               /* idempotent: auto-init may not have run yet */
+    esp_log_level_set("cp_ext_peer_data", ESP_LOG_WARN);   /* "Updated callback" every second otherwise */
     s_ring = xRingbufferCreate(RING_BYTES, RINGBUF_TYPE_NOSPLIT);
     if (!s_ring || xTaskCreate(batch_task, "t5_mon", 3072, NULL, 5, &s_task) != pdPASS) {
         ESP_LOGE(TAG, "no memory for the monitor");
         return;
     }
-    if (eh_cp_feat_peer_data_register_callback(T5WM_MSG_CMD, on_cmd, NULL) != ESP_OK) {
-        ESP_LOGE(TAG, "peer data callback didn't register");
-    }
+    t5_monitor_register();
 }
