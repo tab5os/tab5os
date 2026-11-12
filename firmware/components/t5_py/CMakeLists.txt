@@ -85,7 +85,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "." "${MICROPY_DIR}" "${BIND_DIR}" "${CMAKE_BINARY_DIR}"
     REQUIRES t5_core lvgl__lvgl
-    PRIV_REQUIRES t5_app t5_pkg t5_ui md t5_ports t5_power t5_battery t5_time t5_audio t5_imu t5_usb t5_hid t5_net t5_shell
+    PRIV_REQUIRES t5_app t5_gui t5_pkg t5_ui md t5_ports t5_power t5_battery t5_time t5_audio t5_imu t5_usb t5_hid t5_net t5_shell
                   t5_storage esp_timer esp_hw_support heap esp_app_format esp_rom freertos log
 )
 

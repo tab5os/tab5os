@@ -22,7 +22,7 @@ const char *shell_app_name(const shell_app_t *a);
 int shell_app_name_cmp(const void *a, const void *b);
 /* Installed apps can be removed, while they aren't running. */
 bool shell_app_removable(const shell_app_t *a);
-/* The status bar's battery glyph (MD_ICON_BATTERY_*). */
+/* The status bar's battery glyph (T5UI_ICON_BATTERY_*). */
 const char *shell_battery_icon(const shell_status_t *st);
 
 /* "14:30", and "Sunday, 5 November". */

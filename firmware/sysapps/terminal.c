@@ -22,6 +22,9 @@
 #include "t5/sys.h"
 #include "t5/system.h"
 #include "t5_core/logring.h"
+#include "t5_gui/t5ui.h"
+#include "t5_gui/t5ui_icons.h"
+#include "t5_gui/t5ui_sys.h"   /* t5ui_sys_obj / _native: the Python consoles */
 #include "t5_py/py.h"
 #include "sysapps_priv.h"
 
@@ -30,9 +33,9 @@
 
 typedef struct {
     t5_app_t *app;
-    lv_obj_t *con, *input, *log, *sys;
+    t5ui_obj_t *con, *input, *log, *sys;
     t5_py_t *vm;
-    lv_timer_t *timer;
+    t5ui_timer_t *timer;
     uint64_t log_pos;
     char *hist[HIST];
     int nhist, hpos;
@@ -69,7 +72,7 @@ static void repl_start(term_t *t)
     if (e != T5_OK) {
         char msg[96];
         snprintf(msg, sizeof msg, "Couldn't start Python: %s. Tap Restart to try again.\n", t5_err_str(e));
-        t5_py_console_write(t->con, msg, strlen(msg));
+        t5_py_console_write(t5ui_sys_native(t->con), msg, strlen(msg));
     }
 }
 
@@ -100,7 +103,7 @@ static int next_indent(const char *line)
 
 static void send_line(term_t *t)
 {
-    const char *line = lv_textarea_get_text(t->input);
+    const char *line = t5ui_get_str(t->input, T5UI_P_TEXT, "");
     char buf[INPUT_MAX + 2];
     /* A line of only indentation is an empty line: it ends the block. */
     const char *p = line;
@@ -113,46 +116,46 @@ static void send_line(term_t *t)
     char pre[INPUT_MAX];
     memset(pre, ' ', (size_t)ind);
     pre[ind] = 0;
-    lv_textarea_set_text(t->input, pre);
+    t5ui_set_str(t->input, T5UI_P_TEXT, pre);
 }
 
-static void input_ready(lv_event_t *e)
+static void input_ready(t5ui_event_t *e)
 {
-    send_line(lv_event_get_user_data(e));
+    send_line(t5ui_event_user(e));
 }
 
-static void input_key(lv_event_t *e)
+static void input_key(t5ui_event_t *e)
 {
-    term_t *t = lv_event_get_user_data(e);
-    uint32_t key = lv_event_get_key(e);
-    if (key == LV_KEY_UP || key == LV_KEY_DOWN) {
+    term_t *t = t5ui_event_user(e);
+    uint32_t key = t5ui_event_key(e);
+    if (key == T5UI_KEY_UP || key == T5UI_KEY_DOWN) {
         if (!t->nhist) return;
-        if (key == LV_KEY_UP && t->hpos > 0) t->hpos--;
-        else if (key == LV_KEY_DOWN && t->hpos < t->nhist) t->hpos++;
-        lv_textarea_set_text(t->input, t->hpos < t->nhist ? t->hist[t->hpos] : "");
-        lv_event_stop_processing(e);
-    } else if (key == LV_KEY_ENTER) {
+        if (key == T5UI_KEY_UP && t->hpos > 0) t->hpos--;
+        else if (key == T5UI_KEY_DOWN && t->hpos < t->nhist) t->hpos++;
+        t5ui_set_str(t->input, T5UI_P_TEXT, t->hpos < t->nhist ? t->hist[t->hpos] : "");
+        t5ui_event_stop(e);
+    } else if (key == T5UI_KEY_ENTER) {
         send_line(t);
-        lv_event_stop_processing(e);
+        t5ui_event_stop(e);
     }
 }
 
-static void interrupt_clicked(lv_event_t *e)
+static void interrupt_clicked(t5ui_event_t *e)
 {
-    term_t *t = lv_event_get_user_data(e);
+    term_t *t = t5ui_event_user(e);
     if (t->vm) t5_py_interrupt(t->vm);
 }
 
-static void restart_clicked(lv_event_t *e)
+static void restart_clicked(t5ui_event_t *e)
 {
-    term_t *t = lv_event_get_user_data(e);
-    t5_py_console_clear(t->con);
+    term_t *t = t5ui_event_user(e);
+    t5_py_console_clear(t5ui_sys_native(t->con));
     repl_start(t);
 }
 
-static void back_clicked(lv_event_t *e)
+static void back_clicked(t5ui_event_t *e)
 {
-    term_t *t = lv_event_get_user_data(e);
+    term_t *t = t5ui_event_user(e);
     t5_app_exit(t->app);
 }
 
@@ -160,7 +163,7 @@ static void back_clicked(lv_event_t *e)
 static void repl_out(const char *s, size_t n, void *arg)
 {
     term_t *t = arg;
-    t5_py_console_write(t->con, s, n);
+    t5_py_console_write(t5ui_sys_native(t->con), s, n);
 }
 
 /* ---- the log and system tabs -------------------------------------------------------------- */
@@ -192,9 +195,10 @@ static void sys_refresh(term_t *t)
     sa_set_text(t->sys, buf);
 }
 
-static void tick(lv_timer_t *tm)
+static void tick(t5ui_timer_t *tm, void *user)
 {
-    term_t *t = lv_timer_get_user_data(tm);
+    (void)tm;
+    term_t *t = user;
     if (t->restart) {
         t->restart = false;
         repl_start(t);
@@ -202,12 +206,25 @@ static void tick(lv_timer_t *tm)
     char buf[1024];
     size_t n;
     int rounds = 0;
-    while (rounds++ < 8 && (n = t5_log_read(&t->log_pos, buf, sizeof buf)) > 0) t5_py_console_write(t->log, buf, n);
+    while (rounds++ < 8 && (n = t5_log_read(&t->log_pos, buf, sizeof buf)) > 0) t5_py_console_write(t5ui_sys_native(t->log), buf, n);
     static uint32_t last;
-    if (lv_tick_elaps(last) >= 1000) {
-        last = lv_tick_get();
+    if (t5ui_ticks_ms() - last >= 1000) {
+        last = t5ui_ticks_ms();
         sys_refresh(t);
     }
+}
+
+static t5ui_obj_t *tab(t5ui_obj_t *tabs, const char *name)
+{
+    t5ui_obj_t *tb = t5ui_create(tabs, T5UI_MD_TAB);
+    t5ui_set_str(tb, T5UI_P_TEXT, name);
+    return tb;
+}
+
+/* A Python console (t5_py's, a platform widget) in parent. */
+static t5ui_obj_t *console(t5ui_obj_t *parent)
+{
+    return t5ui_sys_obj(t5_py_console_create(t5ui_sys_native(parent)));
 }
 
 static void on_create(t5_app_t *app)
@@ -216,58 +233,59 @@ static void on_create(t5_app_t *app)
     if (!t) return;
     s_t = t;
     t->app = app;
-    lv_obj_t *scr = t5_app_screen(app);
-    lv_obj_t *bar;
-    lv_obj_t *page = md_page_create(scr, "Terminal", back_clicked, t, &bar);
-    md_appbar_add_action(bar, MD_ICON_REFRESH, restart_clicked, t);
-    md_appbar_add_action(bar, MD_ICON_STOP, interrupt_clicked, t);
-    lv_obj_t *body = md_page_body(page);
-    lv_obj_set_style_pad_all(body, 0, 0);
-    lv_obj_set_scrollable(body, false);
-    lv_obj_t *tabs = md_tabs_create(body);
-    lv_obj_set_size(tabs, LV_PCT(100), LV_PCT(100));
+    t5ui_obj_t *page = t5ui_create(t5ui_root(app), T5UI_MD_PAGE);
+    t5ui_set_str(page, T5UI_P_TITLE, "Terminal");
+    t5ui_on(page, T5UI_EV_BACK, back_clicked, t);
+    t5ui_obj_t *act = t5ui_create(page, T5UI_MD_APPBAR_ACTION);
+    t5ui_set_str(act, T5UI_P_ICON, T5UI_ICON_REFRESH);
+    t5ui_on(act, T5UI_EV_CLICK, restart_clicked, t);
+    act = t5ui_create(page, T5UI_MD_APPBAR_ACTION);
+    t5ui_set_str(act, T5UI_P_ICON, T5UI_ICON_STOP);
+    t5ui_on(act, T5UI_EV_CLICK, interrupt_clicked, t);
+    t5ui_obj_t *body = t5ui_get_obj(page, T5UI_P_CONTENT);
+    t5ui_set_int(body, T5UI_P_PAD_ALL, 0);
+    t5ui_set_int(body, T5UI_P_SCROLLABLE, false);
+    t5ui_obj_t *tabs = t5ui_create(body, T5UI_MD_TABS);
+    t5ui_set_int(tabs, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(tabs, T5UI_P_HEIGHT, T5UI_PCT(100));
 
-    lv_obj_t *py = md_tabs_add(tabs, "Python");
-    lv_obj_set_style_pad_all(py, 0, 0);
-    lv_obj_set_flex_flow(py, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_scrollable(py, false);
-    t->con = t5_py_console_create(py);
-    lv_obj_set_height(t->con, 1);   /* px: flex-grow sets it */
-    lv_obj_set_flex_grow(t->con, 1);
-    t->input = lv_textarea_create(py);
-    lv_textarea_set_one_line(t->input, true);
-    lv_textarea_set_placeholder_text(t->input, "Type Python, then press Enter");
-    lv_obj_set_width(t->input, LV_PCT(100));
-    lv_obj_set_style_text_font(t->input, md_font_mono(), 0);
+    t5ui_obj_t *py = tab(tabs, "Python");
+    t5ui_set_int(py, T5UI_P_PAD_ALL, 0);
+    t5ui_set_int(py, T5UI_P_FLOW, T5UI_COLUMN);
+    t5ui_set_int(py, T5UI_P_SCROLLABLE, false);
+    t->con = console(py);
+    t5ui_set_int(t->con, T5UI_P_HEIGHT, 1);   /* px: flex-grow sets it */
+    t5ui_set_int(t->con, T5UI_P_GROW, 1);
+    t->input = t5ui_create(py, T5UI_TEXTAREA);
+    t5ui_set_int(t->input, T5UI_P_ONE_LINE, true);
+    t5ui_set_str(t->input, T5UI_P_PLACEHOLDER, "Type Python, then press Enter");
+    t5ui_set_int(t->input, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(t->input, T5UI_P_TEXT_STYLE, T5UI_TEXT_MONO);
     /* A one-line field scrolls sideways under long lines; its scrollbar
      * showed as a stray bar at the right edge. The cursor is enough. */
-    lv_obj_set_scrollbar_mode(t->input, LV_SCROLLBAR_MODE_OFF);
+    t5ui_set_int(t->input, T5UI_P_SCROLLBAR, T5UI_SCROLLBAR_OFF);
     /* Square top corners: the field sits flush under the console. */
-    lv_obj_set_style_radius(t->input, 0, 0);
-    lv_obj_add_event_cb(t->input, input_ready, LV_EVENT_READY, t);
-    lv_obj_add_event_cb(t->input, input_key, LV_EVENT_KEY | LV_EVENT_PREPROCESS, t);
-    lv_group_t *g = lv_group_get_default();
-    if (g) {
-        lv_group_add_obj(g, t->input);
-        lv_group_focus_obj(t->input);
-    }
+    t5ui_set_int(t->input, T5UI_P_RADIUS, 0);
+    t5ui_on(t->input, T5UI_EV_READY, input_ready, t);
+    t5ui_on(t->input, T5UI_EV_KEY, input_key, t);
+    t5ui_cmd(t->input, T5UI_CMD_FOCUS, 0, 0, 0, NULL);   /* a USB keyboard types here */
 
-    lv_obj_t *lg = md_tabs_add(tabs, "Log");
-    lv_obj_set_style_pad_all(lg, 0, 0);
-    lv_obj_set_scrollable(lg, false);
-    t->log = t5_py_console_create(lg);
+    t5ui_obj_t *lg = tab(tabs, "Log");
+    t5ui_set_int(lg, T5UI_P_PAD_ALL, 0);
+    t5ui_set_int(lg, T5UI_P_SCROLLABLE, false);
+    t->log = console(lg);
     t->log_pos = t5_log_head() > 8192 ? t5_log_head() - 8192 : 0;
 
-    lv_obj_t *sy = md_tabs_add(tabs, "System");
-    lv_obj_set_style_pad_all(sy, T5_DP(16), 0);
-    t->sys = lv_label_create(sy);
-    lv_obj_set_width(t->sys, LV_PCT(100));
-    lv_obj_set_style_text_font(t->sys, md_font_mono(), 0);
-    lv_obj_set_style_text_color(t->sys, md_color(md_scheme()->c.on_surface), 0);
-    lv_label_set_text(t->sys, "");
+    t5ui_obj_t *sy = tab(tabs, "System");
+    t5ui_set_int(sy, T5UI_P_PAD_ALL, t5ui_dp(16));
+    t->sys = t5ui_create(sy, T5UI_LABEL);
+    t5ui_set_int(t->sys, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(t->sys, T5UI_P_TEXT_STYLE, T5UI_TEXT_MONO);
+    t5ui_set_color(t->sys, T5UI_P_TEXT_COLOR, t5ui_theme_color(T5UI_COLOR_ON_SURFACE));
+    t5ui_set_str(t->sys, T5UI_P_TEXT, "");
     sys_refresh(t);
 
-    t->timer = lv_timer_create(tick, 200, t);
+    t->timer = t5ui_timer(200, tick, t);
     repl_start(t);
 }
 
@@ -277,7 +295,7 @@ static void on_destroy(t5_app_t *app)
     term_t *t = s_t;
     if (!t) return;
     if (t->vm) t5_py_stop(t->vm, 1000);
-    if (t->timer) lv_timer_delete(t->timer);
+    if (t->timer) t5ui_timer_delete(t->timer);
     for (int i = 0; i < t->nhist; i++) free(t->hist[i]);
     free(t);
     s_t = NULL;
@@ -292,5 +310,5 @@ const t5_builtin_app_t sysapp_terminal = {
     .perms = T5_PERM_PORTS | T5_PERM_NET | T5_PERM_USB | T5_PERM_STORAGE,
     .orientation = T5_ORIENT_ANY,
     .ports = sa_all_ports,
-    .icon = MD_ICON_TERMINAL,
+    .icon = T5UI_ICON_TERMINAL,
 };

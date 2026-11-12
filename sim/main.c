@@ -23,6 +23,7 @@
 #include "md/md_diag.h"
 #include "md/md_icons.h"
 #include "sim.h"
+#include "t5_gui/t5ui_sys.h"
 #include "t5_shell/standby.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_shell/shell.h"
@@ -167,7 +168,7 @@ static int shots(const char *dir, const char *check, const char *update)
             }
         } else {
             static lv_obj_t *home;
-            home = shell_home_screen();
+            home = t5ui_sys_native(shell_home_screen());
             lv_screen_load(home);
             run_virtual(500);
             if (s->scene == SCENE_QS) t5_shell_quick_settings(true);
@@ -301,7 +302,7 @@ int main(int argc, char **argv)
     sim_ui_attach(d, rot);
     md_init(d);
     if (shell) {
-        lv_screen_load(shell_home_screen());
+        lv_screen_load(t5ui_sys_native(shell_home_screen()));
         lv_obj_t *b = md_button_create(lv_layer_sys(), "Services", MD_BUTTON_OUTLINED);
         lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, -T5_DP(8), -T5_DP(8));
         lv_obj_add_event_cb(b, services, LV_EVENT_CLICKED, NULL);

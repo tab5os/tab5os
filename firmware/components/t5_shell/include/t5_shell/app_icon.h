@@ -5,7 +5,7 @@
  */
 #pragma once
 #include <stdint.h>
-#include "lvgl.h"
+#include "t5_gui/t5ui.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,7 +15,7 @@ extern "C" {
  * circle. NULL if the app has no icon or it can't be read (the reason is
  * logged once), and then the caller draws the glyph instead. Decoded once
  * per size and kept until the next install or removal. */
-lv_obj_t *t5_shell_app_icon_create(lv_obj_t *parent, const char *id, int32_t size_px);
+t5ui_obj_t *t5_shell_app_icon_create(t5ui_obj_t *parent, const char *id, int32_t size_px);
 
 #ifdef __cplusplus
 }

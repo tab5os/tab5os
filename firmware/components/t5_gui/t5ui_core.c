@@ -187,7 +187,7 @@ t5_err_t t5ui_style_add(t5ui_obj_t *obj, t5ui_style_t *s, uint32_t at)
 t5_err_t t5ui_animate(t5ui_obj_t *obj, t5ui_prop_t p, int32_t from, int32_t to, uint32_t ms, uint32_t delay_ms,
                       t5ui_ease_t ease)
 {
-    if (!obj || (unsigned)ease > T5UI_EASE_ACCELERATE) return T5_ERR_INVALID_ARG;
+    if (!obj || (unsigned)ease > T5UI_EASE_SHARP) return T5_ERR_INVALID_ARG;
     if ((t5ui_prop_info(p) & T5UI_T_MASK) != T5UI_T_INT) return T5_ERR_NOT_SUPPORTED;
     return t5ui_be_animate(obj, p, from, to, ms, delay_ms, ease);
 }

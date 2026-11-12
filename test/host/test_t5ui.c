@@ -271,7 +271,7 @@ static void test_styles_anims_events(void)
 
     TEST_ASSERT_EQUAL(T5_OK, t5ui_animate(OBJ, T5UI_P_X, 0, 100, 200, 0, T5UI_EASE_OUT));
     TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5ui_animate(OBJ, T5UI_P_BG_COLOR, 0, 1, 200, 0, T5UI_EASE_OUT));
-    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5ui_animate(OBJ, T5UI_P_X, 0, 1, 200, 0, (t5ui_ease_t)9));
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5ui_animate(OBJ, T5UI_P_X, 0, 1, 200, 0, (t5ui_ease_t)10));
     TEST_ASSERT_EQUAL(1, be.anims);
 
     TEST_ASSERT_EQUAL(T5_OK, t5ui_on(OBJ, T5UI_EV_CLICK, cb, NULL));

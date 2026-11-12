@@ -92,6 +92,37 @@ A host test (`test/host/test_t5ui.c`):
 - **Commands:** chart series and points, table cells, text insert and delete, list refresh, scroll to and by, dropdown open and close, focus.
 - **Drawing:** pixels (RGB565, RGB888, ARGB8888, A8) in images, persistent canvases, and lines, rectangles, arcs, text and pixels on a canvas or over any object (`T5UI_EV_DRAW`).
 
+## The OS's own UI
+
+The OS draws its own UI with t5ui as well:
+- the shell: home screen, app drawer, Quick Settings, standby, status and gesture bars, on-screen keyboard
+- every system app
+- the file picker, the app-not-responding dialog and the permission prompt
+- Python's `t5.ui` and its console
+
+None of these files call LVGL or md any more. Moving the OS to another UI library therefore means a new backend, not a rewrite of the OS.
+
+**`t5_gui/t5ui_sys.h`** adds what only the system may do. It isn't in the SDK or the app ABI.
+- Layers above every app: `t5ui_sys_layer`.
+- A screen of its own: `t5ui_sys_screen_create`, for the home screen.
+- Setting the theme's accent.
+- Snapshots, for the app-not-responding picture.
+- Text shown from the caller's buffer without a copy, for the Python console's scrollback.
+- The name of what draws the UI, for the Licences page.
+- The marked boundary with the platform code under the UI: `t5ui_sys_obj` and `t5ui_sys_native`, and `t5ui_sys_native_input` for the on-screen keyboard.
+
+**Still on LVGL, because they're what the UI runs on rather than UI:**
+- the display and touch drivers, the hardware plane and PPA (`t5_ui`)
+- the LVGL exports and app screens for level-1 apps (`t5_app/wrappers.c`, `lifecycle.c`)
+- the shell's edge-swipe input hook (`gesture.c`, marked PLATFORM)
+- the diagnostics console's LVGL test harness (`t5_diag/diag_ui.c`)
+- the simulator's stand-in apps
+
+**Checks:**
+- The simulator renders the shell's 17 golden scenes pixel for pixel as before the port.
+- The firmware builds with no warnings.
+- Every ported file is free of `lv_*` and `md_*` calls.
+
 ## What stays
 
 - **Level-1 apps** keep calling LVGL 9: those exports are released and frozen. When the OS moves to a newer LVGL, they need a compatibility layer that implements the frozen LVGL 9 calls on top of it. Apps that keep LVGL's own data are the hard part of that layer. t5ui apps don't need it.

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "t5/storage.h"
+#include "t5_gui/t5ui_icons.h"
 #include "sysapps_priv.h"
 
 #define MAX_VIDEOS 300
@@ -23,7 +24,7 @@ typedef struct {
 typedef struct {
     entry_t e[MAX_VIDEOS];
     int n;
-    lv_obj_t *list;
+    t5ui_obj_t *list;
 } videos_t;
 
 static t5_app_t *s_app;
@@ -59,38 +60,44 @@ static void scan(videos_t *g)
     qsort(g->e, (size_t)g->n, sizeof g->e[0], newest_first);
 }
 
-static void bind(md_list_row_t *r, uint32_t i, void *ud)
+static void bind(t5ui_event_t *ev)
 {
-    videos_t *g = ud;
-    if ((int)i >= g->n) return;
+    videos_t *g = t5ui_event_user(ev);
+    t5ui_obj_t *r = t5ui_event_target(ev);
+    int i = (int)t5ui_event_index(ev);
+    if (i < 0 || i >= g->n) return;
     const char *name = strrchr(g->e[i].path, '/') + 1;
-    lv_label_set_text(r->primary, name);
-    lv_label_set_text(r->icon, MD_ICON_VIDEOCAM);
-    if (r->secondary) {
-        char b[24];
-        sa_fmt_bytes(b, sizeof b, g->e[i].size);
-        bool camera = strncmp(g->e[i].path, T5_DCIM_DIR "/", sizeof T5_DCIM_DIR) == 0;
-        lv_label_set_text_fmt(r->secondary, "%s, %s", camera ? "Camera" : "Videos", b);
-    }
+    t5ui_set_str(r, T5UI_P_TEXT, name);
+    t5ui_set_str(r, T5UI_P_ICON, T5UI_ICON_VIDEOCAM);
+    /* Two-line rows: a one-line row has no second line, and this does nothing. */
+    char b[24];
+    sa_fmt_bytes(b, sizeof b, g->e[i].size);
+    bool camera = strncmp(g->e[i].path, T5_DCIM_DIR "/", sizeof T5_DCIM_DIR) == 0;
+    t5ui_set_strf(r, T5UI_P_SECONDARY, "%s, %s", camera ? "Camera" : "Videos", b);
 }
 
-static void click(uint32_t i, void *ud)
+static void click(t5ui_event_t *ev)
 {
-    videos_t *g = ud;
-    if ((int)i < g->n) sa_video_open(t5_app_screen(s_app), g->e[i].path, NULL);
+    videos_t *g = t5ui_event_user(ev);
+    int i = (int)t5ui_event_index(ev);
+    if (i >= 0 && i < g->n) sa_video_open(t5ui_root(s_app), g->e[i].path, NULL);
 }
 
 static void build_list(void)
 {
-    lv_obj_t *body = sa_body(&s_nav);
-    lv_obj_clean(body);
-    lv_obj_set_scrollable(body, false);
+    t5ui_obj_t *body = sa_body(&s_nav);
+    t5ui_clean(body);
+    t5ui_set_int(body, T5UI_P_SCROLLABLE, false);
     scan(s_list);
-    s_list->list = md_list_create(body, (uint32_t)s_list->n, MD_LIST_ROW_2_DP, bind, click, s_list);
-    lv_obj_set_width(s_list->list, LV_PCT(100));
-    lv_obj_set_flex_grow(s_list->list, 1);
+    s_list->list = t5ui_create(body, T5UI_MD_LIST);
+    t5ui_on(s_list->list, T5UI_EV_BIND, bind, s_list);
+    t5ui_on(s_list->list, T5UI_EV_ITEM, click, s_list);
+    t5ui_set_int(s_list->list, T5UI_P_ROW_DP, 64);           /* two-line rows */
+    t5ui_set_int(s_list->list, T5UI_P_COUNT, s_list->n);
+    t5ui_set_int(s_list->list, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(s_list->list, T5UI_P_GROW, 1);
     if (!s_list->n) {
-        lv_obj_set_hidden(s_list->list, true);
+        t5ui_set_int(s_list->list, T5UI_P_HIDDEN, true);
         sa_note(body, t5_storage_sd_state() == T5_SD_MOUNTED
                           ? "No videos yet. Videos you record with the Camera show up here, and so do AVI files "
                             "(Motion JPEG) in the Videos folder on the SD card."
@@ -106,7 +113,7 @@ static void on_create(t5_app_t *app)
     sa_push(&s_nav, "Videos");
     if (s_list) build_list();
     const char *arg = t5_app_launch_arg(app);
-    if (arg[0] == '/' && sa_video_can_open(arg)) sa_video_open(t5_app_screen(app), arg, NULL);
+    if (arg[0] == '/' && sa_video_can_open(arg)) sa_video_open(t5ui_root(app), arg, NULL);
 }
 
 /* Back from another app (or the card changed): look again. */
@@ -135,5 +142,5 @@ const t5_builtin_app_t sysapp_videos = {
     .desc = &s_desc,
     .perms = T5_PERM_STORAGE,
     .orientation = T5_ORIENT_ANY,
-    .icon = MD_ICON_VIDEO_LIBRARY,
+    .icon = T5UI_ICON_VIDEO_LIBRARY,
 };

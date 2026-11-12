@@ -15,6 +15,9 @@
 #include <sys/stat.h>
 #include "t5/shell.h"
 #include "t5/storage.h"
+#include "t5_gui/t5ui.h"
+#include "t5_gui/t5ui_icons.h"
+#include "t5_gui/t5ui_sys.h"   /* t5ui_sys_obj / _native: the Python console */
 #include "t5_py/py.h"
 #include "codeview.h"
 #include "sysapps_priv.h"
@@ -26,17 +29,17 @@
 typedef struct {
     t5_app_t *app;
     char path[160];
-    lv_obj_t *view, *out, *status, *run_icon;
+    t5ui_obj_t *view, *out, *status, *run;
     cv_t *cv;
     t5_py_t *vm;
     volatile bool run_done;
-    lv_timer_t *timer;
+    t5ui_timer_t *timer;
 } ed_t;
 
 static sa_nav_t s_nav;
 static ed_t *s_ed;          /* the open file's state (one at a time) */
-static lv_obj_t *s_newname;
-static lv_obj_t *s_list;    /* the script list's body, rebuilt when it comes back to the front */
+static t5ui_obj_t *s_newname;
+static t5ui_obj_t *s_list;  /* the script list's body, rebuilt when it comes back to the front */
 static bool s_list_stale;
 
 static const char s_hello[] =
@@ -100,11 +103,36 @@ static const char *base_name(const char *p)
     return s ? s + 1 : p;
 }
 
+#define FAB_DP 56                /* MD2's FAB */
+
+/* A list row, as md made them: grows when its second line wraps. */
+static t5ui_obj_t *row(t5ui_obj_t *parent, const char *icon, const char *primary, const char *secondary)
+{
+    t5ui_obj_t *r = t5ui_create(parent, T5UI_MD_ROW);
+    if (icon) t5ui_set_str(r, T5UI_P_ICON, icon);
+    t5ui_set_str(r, T5UI_P_TEXT, primary ? primary : "");
+    if (secondary) {
+        t5ui_set_str(r, T5UI_P_SECONDARY, secondary);
+        t5ui_set_int(r, T5UI_P_HEIGHT, T5UI_CONTENT);
+        t5ui_set_int(r, T5UI_P_MIN_HEIGHT, t5ui_dp(64));
+    }
+    return r;
+}
+
+/* An app bar action: an icon button. */
+static t5ui_obj_t *action(t5ui_obj_t *bar, const char *icon, t5ui_event_cb_t cb, void *user)
+{
+    t5ui_obj_t *b = t5ui_create(bar, T5UI_MD_APPBAR_ACTION);
+    t5ui_set_str(b, T5UI_P_ICON, icon);
+    t5ui_on(b, T5UI_EV_CLICK, cb, user);
+    return b;
+}
+
 static void update_title(ed_t *ed)
 {
     char t[96];
     snprintf(t, sizeof t, "%s%s", base_name(ed->path), cv_dirty(ed->cv) ? " \xe2\x80\xa2" : "");
-    md_appbar_set_title(sa_bar(&s_nav), t);
+    t5ui_set_str(sa_bar(&s_nav), T5UI_P_TITLE, t);
 }
 
 static void changed(cv_t *cv, void *arg)
@@ -129,7 +157,7 @@ static bool save(ed_t *ed)
     if (e != T5_OK) {
         char msg[96];
         snprintf(msg, sizeof msg, "Couldn't save: %s", t5_err_str(e));
-        md_snackbar_show(msg, NULL, NULL, NULL);
+        t5ui_snackbar(msg, NULL, NULL, NULL);
         return false;
     }
     cv_set_clean(ed->cv);
@@ -143,18 +171,18 @@ static void run_finished(t5_py_t *vm, t5_py_state_t how, void *arg)
     const char *msg = how == T5_PY_EXCEPTION ? "\n[Stopped by an error]\n"
                     : how == T5_PY_STOPPED   ? "\n[Stopped]\n"
                                              : "\n[Finished]\n";
-    t5_py_console_write(ed->out, msg, strlen(msg));
+    t5_py_console_write(t5ui_sys_native(ed->out), msg, strlen(msg));
     ed->run_done = true;     /* the timer frees the VM on the UI task */
 }
 
 static void run_out(const char *s, size_t n, void *arg)
 {
-    t5_py_console_write(((ed_t *)arg)->out, s, n);
+    t5_py_console_write(t5ui_sys_native(((ed_t *)arg)->out), s, n);
 }
 
 static void set_running(ed_t *ed, bool on)
 {
-    lv_label_set_text(ed->run_icon, on ? MD_ICON_STOP : MD_ICON_PLAY_ARROW);
+    t5ui_set_str(ed->run, T5UI_P_ICON, on ? T5UI_ICON_STOP : T5UI_ICON_PLAY_ARROW);
 }
 
 static void stop_run(ed_t *ed)
@@ -165,17 +193,17 @@ static void stop_run(ed_t *ed)
     set_running(ed, false);
 }
 
-static void run_clicked(lv_event_t *e)
+static void run_clicked(t5ui_event_t *e)
 {
-    ed_t *ed = lv_event_get_user_data(e);
+    ed_t *ed = t5ui_event_user(e);
     if (ed->vm) {
         stop_run(ed);
         return;
     }
     if (!save(ed)) return;
     t5_shell_keyboard_hide();
-    lv_obj_set_hidden(ed->out, false);
-    t5_py_console_clear(ed->out);
+    t5ui_set_int(ed->out, T5UI_P_HIDDEN, false);
+    t5_py_console_clear(t5ui_sys_native(ed->out));
     char dir[160];
     snprintf(dir, sizeof dir, "%s", ed->path);
     char *slash = strrchr(dir, '/');
@@ -192,27 +220,28 @@ static void run_clicked(lv_event_t *e)
     if (err != T5_OK) {
         char m[96];
         snprintf(m, sizeof m, "Couldn't run the script (%s)", t5_err_str(err));
-        md_snackbar_show(m, NULL, NULL, NULL);
+        t5ui_snackbar(m, NULL, NULL, NULL);
         return;
     }
     set_running(ed, true);
 }
 
-static void save_clicked(lv_event_t *e)
+static void save_clicked(t5ui_event_t *e)
 {
-    ed_t *ed = lv_event_get_user_data(e);
-    if (save(ed)) md_snackbar_show("Saved", NULL, NULL, NULL);
+    ed_t *ed = t5ui_event_user(e);
+    if (save(ed)) t5ui_snackbar("Saved", NULL, NULL, NULL);
 }
 
-static void keyboard_clicked(lv_event_t *e)
+static void keyboard_clicked(t5ui_event_t *e)
 {
-    ed_t *ed = lv_event_get_user_data(e);
+    ed_t *ed = t5ui_event_user(e);
     cv_focus(ed->cv);
 }
 
-static void tick(lv_timer_t *t)
+static void tick(t5ui_timer_t *t, void *user)
 {
-    ed_t *ed = lv_timer_get_user_data(t);
+    (void)t;
+    ed_t *ed = user;
     if (ed->run_done) stop_run(ed);
 }
 
@@ -221,7 +250,7 @@ static void ed_free(void *arg)
     ed_t *ed = arg;
     stop_run(ed);
     save(ed);
-    if (ed->timer) lv_timer_delete(ed->timer);
+    if (ed->timer) t5ui_timer_delete(ed->timer);
     t5_shell_keyboard_hide();
     if (s_ed == ed) s_ed = NULL;
     free(ed);
@@ -245,57 +274,60 @@ static void open_file(const char *path)
     ed->app = s_nav.app;
     s_list_stale = true;     /* sizes change once it's saved */
     snprintf(ed->path, sizeof ed->path, "%s", path);
-    lv_obj_t *body = sa_push(&s_nav, base_name(path));
-    lv_obj_set_style_pad_all(body, 0, 0);
-    lv_obj_set_style_pad_gap(body, 0, 0);
-    lv_obj_set_scrollable(body, false);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_t *bar = sa_bar(&s_nav);
-    lv_obj_t *run = md_appbar_add_action(bar, MD_ICON_PLAY_ARROW, run_clicked, ed);
-    ed->run_icon = lv_obj_get_child(run, 0) ? lv_obj_get_child(run, 0) : run;
-    md_appbar_add_action(bar, MD_ICON_SAVE, save_clicked, ed);
-    md_appbar_add_action(bar, MD_ICON_KEYBOARD, keyboard_clicked, ed);
+    t5ui_obj_t *body = sa_push(&s_nav, base_name(path));
+    t5ui_set_int(body, T5UI_P_PAD_ALL, 0);
+    t5ui_set_int(body, T5UI_P_PAD_ROW, 0);
+    t5ui_set_int(body, T5UI_P_PAD_COLUMN, 0);
+    t5ui_set_int(body, T5UI_P_SCROLLABLE, false);
+    t5ui_set_int(body, T5UI_P_FLOW, T5UI_COLUMN);
+    t5ui_obj_t *bar = sa_bar(&s_nav);
+    ed->run = action(bar, T5UI_ICON_PLAY_ARROW, run_clicked, ed);
+    action(bar, T5UI_ICON_SAVE, save_clicked, ed);
+    action(bar, T5UI_ICON_KEYBOARD, keyboard_clicked, ed);
     ed->view = cv_create(body);
-    lv_obj_set_height(ed->view, 1);   /* px: flex-grow sets it */
-    lv_obj_set_flex_grow(ed->view, 2);
+    t5ui_set_int(ed->view, T5UI_P_HEIGHT, 1);   /* px: flex-grow sets it */
+    t5ui_set_int(ed->view, T5UI_P_GROW, 2);
     ed->cv = cv_get(ed->view);
-    ed->status = md_label_create(body, "", MD_TYPE_CAPTION);
-    lv_obj_set_style_pad_hor(ed->status, T5_DP(16), 0);
-    lv_obj_set_style_pad_ver(ed->status, T5_DP(4), 0);
-    lv_obj_set_style_text_opa(ed->status, md_scheme()->on_surface.medium, 0);
-    ed->out = t5_py_console_create(body);
-    lv_obj_set_style_border_side(ed->out, LV_BORDER_SIDE_TOP, 0);
-    lv_obj_set_style_border_width(ed->out, T5_DP(1), 0);
-    lv_obj_set_style_border_color(ed->out, md_color(md_scheme()->c.on_surface), 0);
-    lv_obj_set_style_border_opa(ed->out, md_scheme()->on_surface.divider, 0);
-    lv_obj_set_height(ed->out, 1);   /* px: flex-grow sets it */
-    lv_obj_set_flex_grow(ed->out, 1);
-    lv_obj_set_hidden(ed->out, true);
+    ed->status = t5ui_create(body, T5UI_MD_TEXT);
+    t5ui_set_int(ed->status, T5UI_P_TEXT_STYLE, T5UI_TEXT_CAPTION);
+    t5ui_set_int(ed->status, T5UI_P_PAD_LEFT, t5ui_dp(16));
+    t5ui_set_int(ed->status, T5UI_P_PAD_RIGHT, t5ui_dp(16));
+    t5ui_set_int(ed->status, T5UI_P_PAD_TOP, t5ui_dp(4));
+    t5ui_set_int(ed->status, T5UI_P_PAD_BOTTOM, t5ui_dp(4));
+    t5ui_set_int(ed->status, T5UI_P_TEXT_OPA, t5ui_theme_emphasis(T5UI_EMPHASIS_MEDIUM));
+    ed->out = t5ui_sys_obj(t5_py_console_create(t5ui_sys_native(body)));
+    t5ui_set_int(ed->out, T5UI_P_BORDER_SIDES, T5UI_SIDE_TOP);
+    t5ui_set_int(ed->out, T5UI_P_BORDER_WIDTH, t5ui_dp(1));
+    t5ui_set_color(ed->out, T5UI_P_BORDER_COLOR, t5ui_theme_color(T5UI_COLOR_ON_SURFACE));
+    t5ui_set_int(ed->out, T5UI_P_BORDER_OPA, t5ui_theme_emphasis(T5UI_EMPHASIS_DIVIDER));
+    t5ui_set_int(ed->out, T5UI_P_HEIGHT, 1);   /* px: flex-grow sets it */
+    t5ui_set_int(ed->out, T5UI_P_GROW, 1);
+    t5ui_set_int(ed->out, T5UI_P_HIDDEN, true);
     cv_set_text(ed->cv, text ? text : "", len);
     free(text);
     cv_set_changed_cb(ed->cv, changed, ed);
     changed(ed->cv, ed);
-    ed->timer = lv_timer_create(tick, 100, ed);
+    ed->timer = t5ui_timer(100, tick, ed);
     s_ed = ed;
     sa_set_refresh(&s_nav, NULL, ed, ed_free);
 }
 
-static void row_clicked(lv_event_t *e)
+static void row_clicked(t5ui_event_t *e)
 {
-    const char *path = lv_event_get_user_data(e);
+    const char *path = t5ui_event_user(e);
     open_file(path);
 }
 
-static void free_path(lv_event_t *e)
+static void free_path(t5ui_event_t *e)
 {
-    lv_free(lv_event_get_user_data(e));
+    free(t5ui_event_user(e));
 }
 
-static void list_dir(lv_obj_t *body, const char *dir, const char *title)
+static void list_dir(t5ui_obj_t *body, const char *dir, const char *title)
 {
     DIR *d = opendir(dir);
     if (!d) return;
-    md_section_create(body, title);
+    t5ui_set_str(t5ui_create(body, T5UI_MD_SECTION), T5UI_P_TEXT, title);
     struct dirent *e;
     int n = 0;
     while ((e = readdir(d))) {
@@ -306,13 +338,13 @@ static void list_dir(lv_obj_t *body, const char *dir, const char *title)
         struct stat st;
         char sub[48] = "";
         if (stat(path, &st) == 0) sa_fmt_bytes(sub, sizeof sub, (uint64_t)st.st_size);
-        lv_obj_t *r = md_row_create(body, MD_ICON_CODE, e->d_name, sub);
+        t5ui_obj_t *r = row(body, T5UI_ICON_CODE, e->d_name, sub);
         /* The row owns a copy of its path, freed with it. */
-        char *p = lv_malloc(strlen(path) + 1);
+        char *p = malloc(strlen(path) + 1);
         if (!p) continue;
         strcpy(p, path);
-        md_row_set_clickable(r, row_clicked, p);
-        lv_obj_add_event_cb(r, free_path, LV_EVENT_DELETE, p);
+        t5ui_on(r, T5UI_EV_CLICK, row_clicked, p);
+        t5ui_on(r, T5UI_EV_DELETE, free_path, p);
         n++;
     }
     closedir(d);
@@ -332,16 +364,22 @@ static bool name_ok(const char *name)
     return true;
 }
 
-static void create_clicked(lv_event_t *e)
+static void set_helper(const char *text, bool error)
+{
+    t5ui_set_int(s_newname, T5UI_P_HELPER_ERROR, error);
+    t5ui_set_str(s_newname, T5UI_P_HELPER, text);
+}
+
+static void create_clicked(t5ui_event_t *e)
 {
     (void)e;
-    const char *name = md_textfield_text(s_newname);
+    const char *name = t5ui_get_str(s_newname, T5UI_P_TEXT, "");
     if (!name || !name[0]) {
-        md_textfield_set_helper(s_newname, "Type a name first", true);
+        set_helper("Type a name first", true);
         return;
     }
     if (!name_ok(name)) {
-        md_textfield_set_helper(s_newname, "Use letters, digits, - and _ only", true);
+        set_helper("Use letters, digits, - and _ only", true);
         return;
     }
     char path[160];
@@ -357,7 +395,7 @@ static void create_clicked(lv_event_t *e)
     open_file(path);
 }
 
-static void name_ready(lv_event_t *e)
+static void name_ready(t5ui_event_t *e)
 {
     create_clicked(e);
 }
@@ -369,37 +407,46 @@ static void new_free(void *arg)
     s_newname = NULL;
 }
 
-static void new_clicked(lv_event_t *e)
+static void new_clicked(t5ui_event_t *e)
 {
     (void)e;
-    lv_obj_t *body = sa_push(&s_nav, "New script");
-    lv_obj_set_style_pad_all(body, T5_DP(16), 0);
-    lv_obj_set_style_pad_gap(body, T5_DP(8), 0);
-    s_newname = md_textfield_create(body, "Name", false);
-    lv_obj_set_width(s_newname, LV_PCT(100));
-    md_textfield_set_helper(s_newname, "Saved on the device as name.py", false);
-    lv_obj_t *ta = md_textfield_ta(s_newname);
-    lv_obj_add_event_cb(ta, name_ready, LV_EVENT_READY, NULL);
-    lv_obj_t *row = sa_button_row(body);
-    lv_obj_set_style_pad_hor(row, 0, 0);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_t *b = md_button_create(row, "Create script", MD_BUTTON_CONTAINED);
-    lv_obj_add_event_cb(b, create_clicked, LV_EVENT_CLICKED, NULL);
+    t5ui_obj_t *body = sa_push(&s_nav, "New script");
+    t5ui_set_int(body, T5UI_P_PAD_ALL, t5ui_dp(16));
+    t5ui_set_int(body, T5UI_P_PAD_ROW, t5ui_dp(8));
+    t5ui_set_int(body, T5UI_P_PAD_COLUMN, t5ui_dp(8));
+    s_newname = t5ui_create(body, T5UI_MD_TEXTFIELD);
+    t5ui_set_str(s_newname, T5UI_P_PLACEHOLDER, "Name");
+    t5ui_set_int(s_newname, T5UI_P_WIDTH, T5UI_PCT(100));
+    set_helper("Saved on the device as name.py", false);
+    t5ui_on(s_newname, T5UI_EV_READY, name_ready, NULL);   /* its text area's */
+    t5ui_obj_t *row = sa_button_row(body);
+    t5ui_set_int(row, T5UI_P_PAD_LEFT, 0);
+    t5ui_set_int(row, T5UI_P_PAD_RIGHT, 0);
+    t5ui_set_int(row, T5UI_P_PLACE_MAIN, T5UI_PLACE_END);
+    t5ui_set_int(row, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
+    t5ui_set_int(row, T5UI_P_PLACE_TRACK, T5UI_PLACE_CENTER);
+    t5ui_obj_t *b = t5ui_create(row, T5UI_MD_BUTTON_CONTAINED);
+    t5ui_set_str(b, T5UI_P_TEXT, "Create script");
+    t5ui_on(b, T5UI_EV_CLICK, create_clicked, NULL);
     sa_set_refresh(&s_nav, NULL, s_newname, new_free);
-    lv_obj_add_state(ta, LV_STATE_FOCUSED);
-    lv_obj_send_event(ta, LV_EVENT_FOCUSED, NULL);
-    t5_shell_keyboard_show(ta);
+    /* Focused, so the label floats and takes the accent: the keyboard's
+     * focus gives its text area the focused state and the focus event
+     * (the field reads both). Without a keyboard group, just the event. */
+    if (t5ui_cmd(s_newname, T5UI_CMD_FOCUS, 0, 0, 0, NULL) < 0) {
+        t5ui_cmd(s_newname, T5UI_CMD_SEND, T5UI_EV_FOCUS, 0, 0, NULL);
+    }
+    t5_shell_keyboard_show(t5ui_sys_native_input(s_newname));
 }
 
-static void fill_list(lv_obj_t *body)
+static void fill_list(t5ui_obj_t *body)
 {
     list_dir(body, SCRIPTS, "On the device");
     list_dir(body, SD_SCRIPTS, "On the SD card");
     sa_note(body, "Scripts can use the ports, the network, USB devices and storage.");
     /* Room under the last row so the floating + never covers it. */
-    lv_obj_t *pad = lv_obj_create(body);
-    lv_obj_remove_style_all(pad);
-    lv_obj_set_size(pad, LV_PCT(100), T5_DP(MD_FAB_DP + 24));
+    t5ui_obj_t *pad = t5ui_create(body, T5UI_BOX);
+    t5ui_set_int(pad, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(pad, T5UI_P_HEIGHT, t5ui_dp(FAB_DP + 24));
 }
 
 static void list_refresh(sa_nav_t *nav, void *arg)
@@ -408,21 +455,27 @@ static void list_refresh(sa_nav_t *nav, void *arg)
     (void)arg;
     if (!s_list_stale || !s_list) return;
     s_list_stale = false;
-    lv_obj_clean(s_list);
+    t5ui_clean(s_list);
     fill_list(s_list);
 }
 
 static void build_list(void)
 {
-    lv_obj_t *body = sa_push(&s_nav, "Editor");
+    t5ui_obj_t *body = sa_push(&s_nav, "Editor");
     s_list = body;
     fill_list(body);
-    /* New script: a FAB on the list page (not the body), so it stays put
-     * while the list scrolls and goes away with the page. */
-    lv_obj_t *fab = md_fab_create(lv_obj_get_parent(body), MD_ICON_ADD, false);
-    lv_obj_set_floating(fab, true);
-    lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -T5_DP(16), -T5_DP(16));
-    lv_obj_add_event_cb(fab, new_clicked, LV_EVENT_CLICKED, NULL);
+    /* New script: a FAB over the list (not in its body), so it stays put
+     * while the list scrolls. A page takes what's made in it into its
+     * body, so the FAB goes on the screen, just above the list page: the
+     * pages pushed later cover it (they fill the screen), and it goes with
+     * the app's screen. The list page is the root and is never popped. */
+    t5ui_obj_t *fab = t5ui_create(s_nav.root, T5UI_MD_FAB);
+    t5ui_set_str(fab, T5UI_P_ICON, T5UI_ICON_ADD);
+    t5ui_set_int(fab, T5UI_P_FLOATING, true);
+    t5ui_set_int(fab, T5UI_P_ALIGN, T5UI_ALIGN_BOTTOM_RIGHT);
+    t5ui_set_int(fab, T5UI_P_X, -t5ui_dp(16));
+    t5ui_set_int(fab, T5UI_P_Y, -t5ui_dp(16));
+    t5ui_on(fab, T5UI_EV_CLICK, new_clicked, NULL);
     sa_set_refresh(&s_nav, list_refresh, NULL, NULL);
 }
 
@@ -453,5 +506,5 @@ const t5_builtin_app_t sysapp_editor = {
     .perms = T5_PERM_PORTS | T5_PERM_NET | T5_PERM_USB | T5_PERM_STORAGE,
     .orientation = T5_ORIENT_ANY,
     .ports = sa_all_ports,
-    .icon = MD_ICON_CODE,
+    .icon = T5UI_ICON_CODE,
 };

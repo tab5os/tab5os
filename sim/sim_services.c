@@ -8,6 +8,10 @@
 #include "md/md.h"
 #include "md/md_icons.h"
 #include "sim.h"
+#include "t5_app/app.h"
+#include "t5_core/os.h"
+#include "t5_core/res.h"
+#include "t5_ui/t5_ui.h"
 
 sim_state_t g_sim = { .battery = 76, .charging = false, .wifi = true, .rssi = -58, .mic = false };
 
@@ -67,4 +71,34 @@ void sim_services_toggle(void)
     row(s_panel, MD_ICON_BATTERY_CHARGING_FULL, "Charging", &g_sim.charging);
     row(s_panel, MD_ICON_WIFI, "Wi-Fi \"Workshop\"", &g_sim.wifi);
     row(s_panel, MD_ICON_MIC, "Microphone in use", &g_sim.mic);
+}
+
+/* ---- what t5ui's backend asks of the runtime --------------------------------------------- */
+/* The simulator runs no apps: nothing is an app's resource, and the shell
+ * is the only UI. */
+void *t5_app_ctx_get(void)
+{
+    return NULL;
+}
+
+struct _lv_obj_t *t5_app_screen(t5_app_t *app)
+{
+    (void)app;
+    return lv_screen_active();
+}
+
+void t5_res_add(t5_res_kind_t kind, void *handle, t5_res_release_fn_t release)
+{
+    (void)kind; (void)handle; (void)release;
+}
+
+void t5_res_remove(void *handle)
+{
+    (void)handle;
+}
+
+int t5_ui_touch_get(t5_ui_touch_t *out, int max)
+{
+    (void)out; (void)max;
+    return 0;
 }

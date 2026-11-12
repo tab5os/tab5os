@@ -9,8 +9,8 @@
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
-#include "lvgl.h"
 #include "t5_core/err.h"
+#include "t5_gui/t5ui.h"
 #include "t5_app/fspolicy.h"
 #include "t5_py/py.h"
 
@@ -34,7 +34,7 @@ struct t5_py {
     volatile bool in_main;         /* running the script itself (not the event loop or REPL) */
     volatile t5_py_state_t state;
     bool ui_used;                  /* t5.ui.screen() was called: keep running for callbacks */
-    lv_obj_t *ui_root;             /* the container t5.ui.screen() returned */
+    t5ui_obj_t *ui_root;           /* the container t5.ui.screen() returned */
 };
 
 /* The VM being run (valid on the VM task). */
@@ -68,7 +68,7 @@ void py_ui_unlock(void);
 void py_sleep_ms(uint32_t ms);
 /* Wake the VM task (a callback was scheduled, input arrived, stop). */
 void py_wake(void);
-/* Schedule fn(arg) on the VM task, from any task (the UI task's LVGL
+/* Schedule fn(arg) on the VM task, from any task (the UI task's event
  * callbacks). Drops it if the VM is stopping or the queue is full. */
 void py_schedule(mp_obj_t fn, mp_obj_t arg);
 /* Path checks: resolve against cwd, refuse what the owner may not touch.
@@ -85,7 +85,7 @@ void py_app_lifecycle(int what);       /* 0 suspend, 1 resume, from the app runt
 void py_app_rotate(int degrees);
 bool py_ui_wants_events(void);         /* the script left UI callbacks behind */
 
-/* What LVGL and the OS hold for a callback into the heap: a slot number
+/* What the UI and the OS hold for a callback into the heap: a slot number
  * tagged with the VM generation, which changes before a heap goes, so a
  * late callback finds nothing. */
 extern volatile uint32_t py_gen;

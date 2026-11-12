@@ -7,14 +7,13 @@
  * round shape whatever the artwork. Each size is cached per app until
  * t5_pkg_generation() moves (an install, upgrade or removal), which is
  * checked on every lookup, so a reinstalled icon shows on the next return
- * home. An entry still shown by an image outlives its generation until
- * that image is deleted.
+ * home. Each image shows its own copy of the pixels (t5ui_image_pixels), so
+ * an older generation's entry can go as soon as it's replaced.
  */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "misc/cache/instance/lv_image_cache.h"   /* lv_image_cache_drop: not in lvgl.h */
 #include "t5_core/log.h"
 #include "t5_pkg/pkg.h"
 #include "t5_pkg/png.h"
@@ -32,10 +31,9 @@ static const char *TAG = "t5.shell";
 typedef struct icon_s {
     struct icon_s *next;
     char id[T5_APP_ID_LEN];
-    int32_t px;
+    int32_t size;           /* px across */
     uint32_t gen;
-    int refs;               /* images showing it */
-    lv_image_dsc_t dsc;     /* dsc.data NULL: the app has no usable icon */
+    uint8_t *px;            /* px by px ARGB8888; NULL: the app has no usable icon */
 } icon_t;
 
 static icon_t *s_icons;
@@ -66,7 +64,7 @@ static int clampi(int v, int lo, int hi)
     return v < lo ? lo : v > hi ? hi : v;
 }
 
-/* src (straight RGBA) to px by px LVGL ARGB8888 (B, G, R, A in memory),
+/* src (straight RGBA) to px by px T5UI_PX_ARGB8888 (B, G, R, A in memory),
  * cropped to a circle. Filtering runs on premultiplied values, so
  * transparent pixels don't bleed their colour into the edges. */
 static uint8_t *render(const t5_png_t *src, int px)
@@ -141,7 +139,7 @@ static uint8_t *read_file(const char *path, size_t *len)
     return buf;
 }
 
-/* Fill e from the app's package; leaves dsc.data NULL if there's no icon. */
+/* Fill e from the app's package; leaves px NULL if there's no icon. */
 static void load(icon_t *e)
 {
     t5_pkg_info_t *info = malloc(sizeof *info);
@@ -167,32 +165,21 @@ static void load(icon_t *e)
                 path, t5_err_str(err), T5_PNG_MAX_DIM, T5_PNG_MAX_DIM);
         return;
     }
-    uint8_t *px = render(&png, (int)e->px);
+    e->px = render(&png, (int)e->size);
     free(png.rgba);
-    if (!px) return;
-    e->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-    e->dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
-    e->dsc.header.w = (uint32_t)e->px;
-    e->dsc.header.h = (uint32_t)e->px;
-    e->dsc.header.stride = (uint32_t)e->px * 4;
-    e->dsc.data_size = (uint32_t)(e->px * e->px * 4);
-    e->dsc.data = px;
 }
 
-/* Free the entries of older generations that nothing shows any more. */
+/* Free the entries of older generations. */
 static void sweep(uint32_t gen)
 {
     for (icon_t **pp = &s_icons; *pp;) {
         icon_t *e = *pp;
-        if (e->gen == gen || e->refs > 0) {
+        if (e->gen == gen) {
             pp = &e->next;
             continue;
         }
         *pp = e->next;
-        if (e->dsc.data) {
-            lv_image_cache_drop(&e->dsc);
-            free((void *)e->dsc.data);
-        }
+        free(e->px);
         free(e);
     }
 }
@@ -202,12 +189,12 @@ static icon_t *lookup(const char *id, int32_t px)
     uint32_t gen = t5_pkg_generation();
     sweep(gen);
     for (icon_t *e = s_icons; e; e = e->next) {
-        if (e->gen == gen && e->px == px && !strcmp(e->id, id)) return e;
+        if (e->gen == gen && e->size == px && !strcmp(e->id, id)) return e;
     }
     icon_t *e = calloc(1, sizeof *e);
     if (!e) return NULL;
     snprintf(e->id, sizeof e->id, "%s", id);
-    e->px = px;
+    e->size = px;
     e->gen = gen;
     load(e);
     e->next = s_icons;
@@ -215,22 +202,21 @@ static icon_t *lookup(const char *id, int32_t px)
     return e;
 }
 
-static void image_deleted(lv_event_t *ev)
-{
-    icon_t *e = lv_event_get_user_data(ev);
-    e->refs--;
-}
-
-lv_obj_t *t5_shell_app_icon_create(lv_obj_t *parent, const char *id, int32_t size_px)
+t5ui_obj_t *t5_shell_app_icon_create(t5ui_obj_t *parent, const char *id, int32_t size_px)
 {
     if (!parent || !id || !id[0] || size_px < ICON_MIN_PX || size_px > ICON_MAX_PX) return NULL;
     icon_t *e = lookup(id, size_px);
-    if (!e || !e->dsc.data) return NULL;
-    lv_obj_t *img = lv_image_create(parent);
-    lv_image_set_src(img, &e->dsc);
-    lv_obj_set_size(img, size_px, size_px);
-    lv_obj_set_clickable(img, false);
-    e->refs++;
-    lv_obj_add_event_cb(img, image_deleted, LV_EVENT_DELETE, e);
+    if (!e || !e->px) return NULL;
+    t5ui_obj_t *img = t5ui_create(parent, T5UI_IMAGE);
+    if (!img) return NULL;
+    t5ui_pixels_t px = { .size = sizeof px, .w = (uint16_t)size_px, .h = (uint16_t)size_px,
+                         .stride = (uint32_t)size_px * 4, .format = T5UI_PX_ARGB8888, .data = e->px };
+    if (t5ui_image_pixels(img, &px) != T5_OK) {
+        t5ui_delete(img);
+        return NULL;
+    }
+    t5ui_set_int(img, T5UI_P_WIDTH, size_px);
+    t5ui_set_int(img, T5UI_P_HEIGHT, size_px);
+    t5ui_set_int(img, T5UI_P_CLICKABLE, false);
     return img;
 }

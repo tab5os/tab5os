@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "md/md.h"
 #include "t5_app/apps.h"
 #include "t5_core/event.h"
 #include "t5_audio/audio.h"
@@ -96,9 +95,9 @@ int shell_sys_activities(shell_activity_t *out, int max)
     for (int k = 0; k < T5_IO_COUNT && n < max; k++) {
         char who[T5_APP_NAME_LEN];
         if (!t5_io_hold_get((t5_io_kind_t)k, who, sizeof who)) continue;
-        act(&out[n], k == T5_IO_WIFI_MONITOR || k == T5_IO_EXCL_WIFI ? MD_ICON_WIFI
-                     : k == T5_IO_BLE_HID || k == T5_IO_EXCL_BT   ? MD_ICON_BLUETOOTH
-                                                                  : MD_ICON_USB,
+        act(&out[n], k == T5_IO_WIFI_MONITOR || k == T5_IO_EXCL_WIFI ? T5UI_ICON_WIFI
+                     : k == T5_IO_BLE_HID || k == T5_IO_EXCL_BT   ? T5UI_ICON_BLUETOOTH
+                                                                  : T5UI_ICON_USB,
             who, t5_io_kind_text((t5_io_kind_t)k), -1);
         out[n++].stop = (uint8_t)(k + 1);
     }
@@ -106,13 +105,13 @@ int shell_sys_activities(shell_activity_t *out, int max)
     t5_ota_status(&ota);
     if (n < max && (ota.state == T5_OTA_RECEIVING || ota.state == T5_OTA_VERIFYING)) {
         int pct = ota.total ? (int)((uint64_t)ota.done * 100 / ota.total) : -1;
-        act(&out[n++], MD_ICON_SYSTEM_UPDATE, "", ota.state == T5_OTA_VERIFYING ? "Checking the update" : "Installing an update", pct);
+        act(&out[n++], T5UI_ICON_SYSTEM_UPDATE, "", ota.state == T5_OTA_VERIFYING ? "Checking the update" : "Installing an update", pct);
     }
-    if (n < max && t5_download_active() > 0) act(&out[n++], MD_ICON_DOWNLOAD, "", "Downloading", -1);
+    if (n < max && t5_download_active() > 0) act(&out[n++], T5UI_ICON_DOWNLOAD, "", "Downloading", -1);
     char id[T5_APP_ID_LEN], name[T5_APP_NAME_LEN];
     if (n < max && t5_apps_headless(id, sizeof id)) {
         app_name_of(id, name, sizeof name);
-        act(&out[n++], MD_ICON_ALARM, name, "Running in the background", -1);
+        act(&out[n++], T5UI_ICON_ALARM, name, "Running in the background", -1);
     }
     int locks = bg_lock_holder(NULL, NULL, 0);
     for (int i = 0; i < locks && n < max; i++) {
@@ -121,9 +120,9 @@ int shell_sys_activities(shell_activity_t *out, int max)
         bg_lock_holder(&app, &type, i);
         ctx_name(app, name, sizeof name);
         bool dup = false;
-        for (int j = 0; j < n; j++) dup |= !strcmp(out[j].who, name) && !strcmp(out[j].icon, MD_ICON_BOLT);
+        for (int j = 0; j < n; j++) dup |= !strcmp(out[j].who, name) && !strcmp(out[j].icon, T5UI_ICON_BOLT);
         if (dup) continue;
-        act(&out[n++], MD_ICON_BOLT, name, type == T5_LOCK_NET ? "Using the network in the background"
+        act(&out[n++], T5UI_ICON_BOLT, name, type == T5_LOCK_NET ? "Using the network in the background"
                                            : type == T5_LOCK_AUDIO ? "Playing in the background"
                                                                    : "Working in the background", -1);
     }
@@ -134,7 +133,7 @@ int shell_sys_activities(shell_activity_t *out, int max)
         if (localtime_r(&when, &tm)) snprintf(text, sizeof text, "Wakes the device at %02d:%02d", tm.tm_hour, tm.tm_min);
         else snprintf(text, sizeof text, "Wakes the device later");
         app_name_of(id, name, sizeof name);
-        act(&out[n++], MD_ICON_ALARM, name, text, -1);
+        act(&out[n++], T5UI_ICON_ALARM, name, text, -1);
     }
     return n + shell_activity_list(out + n, max - n, ctx_name);
 }
@@ -271,7 +270,7 @@ int shell_sys_apps(shell_app_t *out, int max)
     return n;
 }
 
-lv_obj_t *shell_sys_app_icon(lv_obj_t *parent, const char *id, int32_t size_px)
+t5ui_obj_t *shell_sys_app_icon(t5ui_obj_t *parent, const char *id, int32_t size_px)
 {
     return t5_shell_app_icon_create(parent, id, size_px);
 }
@@ -393,10 +392,21 @@ static void app_notice(t5_apps_notice_t what, const char *name)
     t5_shell_toast(msg);
 }
 
+/* The runtime hands screens over as its native objects: converted here. */
+static struct _lv_obj_t *home_screen(void)
+{
+    return t5ui_sys_native(shell_home_screen());
+}
+
+static void home_prepare(struct _lv_obj_t *app_screen, const char *id)
+{
+    shell_prepare(t5ui_sys_obj(app_screen), id);
+}
+
 static const t5_apps_home_t s_home = {
-    .screen = shell_home_screen,
+    .screen = home_screen,
     .refresh = launcher_reload,
-    .prepare = shell_prepare,
+    .prepare = home_prepare,
     .changed = shell_changed,
     .notice = app_notice,
 };
@@ -415,7 +425,7 @@ static void input_added(t5_event_id_t id, const void *data, size_t len, void *ar
 
 /* ---- Bluetooth pairing: the system's dialog, never an app's ---------------- */
 static struct {
-    lv_obj_t *dlg;
+    t5ui_obj_t *dlg;
     uint16_t conn;
     bool asked;               /* a confirm dialog (action 1) is waiting */
 } s_pair;
@@ -432,7 +442,7 @@ static void pair_show(void *arg)
 {
     t5_ev_ble_pair_t *ev = arg;
     if (s_pair.dlg) {
-        md_dialog_close(s_pair.dlg);       /* an older request: refuse it */
+        t5ui_dialog_close(s_pair.dlg);     /* an older request: refuse it */
         if (s_pair.asked) T5_IGNORE(t5_ble_sys_pair_reply(s_pair.conn, false));
     }
     char title[64], text[128];
@@ -444,12 +454,12 @@ static void pair_show(void *arg)
     if (ev->action == 1) {
         snprintf(text, sizeof text, "Check that the other device shows %03u %03u too.", a, b);
         void *saved = shell_sys_enter();
-        s_pair.dlg = md_dialog_show(title, text, "Pair", "Cancel", pair_answered, NULL);
+        s_pair.dlg = t5ui_dialog(title, text, "Pair", "Cancel", pair_answered, NULL);
         shell_sys_leave(saved);
     } else {
         snprintf(text, sizeof text, "Type %03u %03u on the other device.", a, b);
         void *saved = shell_sys_enter();
-        s_pair.dlg = md_dialog_show(title, text, "OK", NULL, pair_answered, NULL);
+        s_pair.dlg = t5ui_dialog(title, text, "OK", NULL, pair_answered, NULL);
         shell_sys_leave(saved);
     }
     free(ev);
@@ -459,7 +469,7 @@ static void pair_done(void *arg)
 {
     t5_ev_ble_pair_t *ev = arg;
     if (s_pair.dlg && s_pair.conn == ev->conn) {
-        md_dialog_close(s_pair.dlg);
+        t5ui_dialog_close(s_pair.dlg);
         s_pair.dlg = NULL;
         s_pair.asked = false;
         t5_shell_toast(ev->err == T5_OK ? "Paired." : "Pairing didn't work.");

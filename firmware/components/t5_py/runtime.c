@@ -71,7 +71,7 @@ static void reveal_console(void *arg)
     t5_py_t *vm = p->vm;
     /* The script's UI covers the console with the traceback. */
     if (vm && vm->ui_root) {
-        lv_obj_delete(vm->ui_root);
+        t5ui_delete(vm->ui_root);
         vm->ui_root = NULL;
     }
 }

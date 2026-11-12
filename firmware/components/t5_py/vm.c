@@ -403,7 +403,7 @@ static void teardown(t5_py_t *vm, uint32_t timeout_ms)
     if (!on_ui) t5_ui_lock();
     py_ui_detach_all(vm);
     /* The script's UI goes with it (the Editor and Terminal keep running). */
-    if (vm->ui_root) lv_obj_delete(vm->ui_root);
+    if (vm->ui_root) t5ui_delete(vm->ui_root);
     vm->ui_root = NULL;
     if (!on_ui) t5_ui_unlock();
     if (py_vm == vm) py_vm = NULL;

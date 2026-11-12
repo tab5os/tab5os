@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "t5_app/registry.h"
+#include "t5_gui/t5ui.h"
 
 typedef struct {
     int battery_pct;          /* -1 unknown */
@@ -41,7 +42,7 @@ typedef struct {
 #define SHELL_ACTIVITY_TEXT_LEN 48
 #define SHELL_ACTIVITY_MAX 12
 typedef struct {
-    char icon[T5_APP_ICON_LEN];         /* MD_ICON_* */
+    char icon[T5_APP_ICON_LEN];         /* T5UI_ICON_* */
     char who[T5_APP_NAME_LEN];          /* the app's name, or "" for the system */
     char text[SHELL_ACTIVITY_TEXT_LEN];
     int8_t percent;                     /* 0..100, -1: no progress */
@@ -83,7 +84,7 @@ bool shell_sys_standby_enabled(void);
 typedef struct {
     char id[T5_APP_ID_LEN];
     char name[T5_APP_NAME_LEN];
-    char icon[T5_APP_ICON_LEN];   /* MD_ICON_* glyph, "" = generic */
+    char icon[T5_APP_ICON_LEN];   /* T5UI_ICON_* glyph, "" = generic */
     bool builtin, blocked, running;
 } shell_app_t;
 
@@ -95,8 +96,7 @@ bool shell_sys_time(struct tm *out);
 int shell_sys_apps(shell_app_t *out, int max);
 /* An installed app's own icon (t5_shell/app_icon.h): an image on parent,
  * size_px across and round, or NULL to draw the glyph. */
-struct _lv_obj_t;
-struct _lv_obj_t *shell_sys_app_icon(struct _lv_obj_t *parent, const char *id, int32_t size_px);
+t5ui_obj_t *shell_sys_app_icon(t5ui_obj_t *parent, const char *id, int32_t size_px);
 /* The runtime's side of t5_apps_home_t (t5_app/apps.h), in its order:
  * launching creates the app's screen, calls shell_prepare(screen, id) and
  * shell_changed(id), then loads the screen; going home loads

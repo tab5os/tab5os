@@ -250,6 +250,7 @@ typedef enum {
     T5UI_TEXT_HEADLINE4 = 0, T5UI_TEXT_HEADLINE5 = 1, T5UI_TEXT_HEADLINE6 = 2, T5UI_TEXT_SUBTITLE1 = 3,
     T5UI_TEXT_BODY1 = 4, T5UI_TEXT_BODY2 = 5, T5UI_TEXT_BUTTON = 6, T5UI_TEXT_CAPTION = 7,
     T5UI_TEXT_OVERLINE = 8, T5UI_TEXT_MONO = 9,
+    T5UI_TEXT_CLOCK = 10,                      /* 100 dp digits for a clock face: 0-9 and ':' only */
 } t5ui_text_t;
 
 /* ---- objects ------------------------------------------------------------------------ */
@@ -309,6 +310,7 @@ typedef enum {
     T5UI_EASE_STANDARD = 6,                    /* Material: moving on screen */
     T5UI_EASE_DECELERATE = 7,                  /* Material: entering */
     T5UI_EASE_ACCELERATE = 8,                  /* Material: leaving */
+    T5UI_EASE_SHARP = 9,                       /* Material: leaving for a while */
 } t5ui_ease_t;
 t5_err_t t5ui_animate(t5ui_obj_t *obj, t5ui_prop_t p, int32_t from, int32_t to, uint32_t ms, uint32_t delay_ms,
                       t5ui_ease_t ease);
@@ -434,8 +436,11 @@ typedef enum {
 } t5ui_color_role_t;
 t5ui_color_t t5ui_theme_color(t5ui_color_role_t role);
 bool t5ui_theme_dark(void);
-typedef enum { T5UI_EMPHASIS_HIGH = 0, T5UI_EMPHASIS_MEDIUM = 1, T5UI_EMPHASIS_DISABLED = 2 } t5ui_emphasis_t;
-t5ui_opa_t t5ui_theme_emphasis(t5ui_emphasis_t e);       /* text opacity on a surface */
+typedef enum {
+    T5UI_EMPHASIS_HIGH = 0, T5UI_EMPHASIS_MEDIUM = 1, T5UI_EMPHASIS_DISABLED = 2,
+    T5UI_EMPHASIS_DIVIDER = 3,                 /* dividers and grid lines */
+} t5ui_emphasis_t;
+t5ui_opa_t t5ui_theme_emphasis(t5ui_emphasis_t e);       /* opacity of text or lines on a surface */
 t5ui_color_t t5ui_mix(t5ui_color_t fg, t5ui_color_t bg, t5ui_opa_t opa);
 /* A surface at a Material elevation: lighter with height in the dark theme. */
 t5ui_color_t t5ui_theme_surface(int32_t elevation_dp);

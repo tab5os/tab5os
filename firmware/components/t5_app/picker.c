@@ -24,11 +24,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
-#include "md/md.h"
-#include "md/md_icons.h"
 #include "t5_app/fspolicy.h"
 #include "t5_core/event.h"
 #include "t5_core/log.h"
+#include "t5_gui/t5ui.h"
+#include "t5_gui/t5ui_icons.h"
+#include "t5_gui/t5ui_sys.h"
 #include "t5_storage/paths.h"
 #include "t5_ui/t5_ui.h"
 #include "app_priv.h"
@@ -39,6 +40,8 @@ static const char *TAG = "t5.pick";
 #define MAX_ENTRIES 1000
 #define POOL_BYTES (64u * 1024u)
 #define ROW_DP 48
+#define ELEV_DIALOG_DP 24
+#define SCRIM_COLOR 0x000000      /* the theme's scrim, black in light and dark */
 
 typedef struct {
     const char *name;           /* in the listing's pool; a label for top-level rows */
@@ -65,7 +68,7 @@ typedef struct {
     char title[64];
     char exts[48];
     char path[T5_FS_PATH_MAX];
-    lv_obj_t *scrim, *bar, *list, *status, *crumb;
+    t5ui_obj_t *scrim, *bar, *list, *status, *crumb;
     listing_t *shown;
     uint32_t gen;
 } picker_t;
@@ -85,7 +88,7 @@ static void destroy(picker_t *p)
 {
     s_p = NULL;
     p->gen++;                   /* any listing on its way is dropped */
-    if (p->scrim) lv_obj_delete(p->scrim);
+    if (p->scrim) t5ui_delete(p->scrim);
     listing_free(p->shown);
     heap_caps_free(p);
 }
@@ -191,12 +194,12 @@ static void list_task(void *arg)
 static void set_status(picker_t *p, const char *text)
 {
     if (text) {
-        lv_label_set_text(p->status, text);
-        lv_obj_set_hidden(p->status, false);
-        lv_obj_set_hidden(p->list, true);
+        t5ui_set_str(p->status, T5UI_P_TEXT, text);
+        t5ui_set_int(p->status, T5UI_P_HIDDEN, false);
+        t5ui_set_int(p->list, T5UI_P_HIDDEN, true);
     } else {
-        lv_obj_set_hidden(p->status, true);
-        lv_obj_set_hidden(p->list, false);
+        t5ui_set_int(p->status, T5UI_P_HIDDEN, true);
+        t5ui_set_int(p->list, T5UI_P_HIDDEN, false);
     }
 }
 
@@ -213,9 +216,9 @@ static void go(picker_t *p, const char *path)
 {
     snprintf(p->path, sizeof p->path, "%s", path);
     uint32_t gen = ++p->gen;
-    md_appbar_set_title(p->bar, p->path[0] ? leaf_label(p) : p->title);
-    lv_label_set_text(p->crumb, p->path[0] ? p->path : "Choose a location");
-    md_list_set_count(p->list, 0);
+    t5ui_set_str(p->bar, T5UI_P_TITLE, p->path[0] ? leaf_label(p) : p->title);
+    t5ui_set_str(p->crumb, T5UI_P_TEXT, p->path[0] ? p->path : "Choose a location");
+    t5ui_set_int(p->list, T5UI_P_COUNT, 0);
     set_status(p, "Loading...");
     listing_t *l = heap_caps_calloc(1, sizeof *l, CAPS);
     if (l) {
@@ -246,7 +249,7 @@ static void show_listing(void *arg)
     }
     listing_t *old = p->shown;
     p->shown = l;
-    md_list_set_count(p->list, l->n);
+    t5ui_set_int(p->list, T5UI_P_COUNT, (int32_t)l->n);
     listing_free(old);
     if (l->failed) set_status(p, "Couldn't read this folder.");
     else if (!l->n) set_status(p, l->path[0] ? "Nothing to choose from here." : "No storage available.");
@@ -255,19 +258,23 @@ static void show_listing(void *arg)
 }
 
 /* ---- the modal ------------------------------------------------------------------- */
-static void bind_row(md_list_row_t *r, uint32_t i, void *ud)
+static void bind_row(t5ui_event_t *ev)
 {
-    picker_t *p = ud;
-    if (!p->shown || i >= p->shown->n) return;
+    picker_t *p = t5ui_event_user(ev);
+    int32_t i = t5ui_event_index(ev);
+    if (!p->shown || i < 0 || (uint32_t)i >= p->shown->n) return;
     const entry_t *e = &p->shown->ents[i];
-    lv_label_set_text(r->primary, e->name);
-    lv_label_set_text(r->icon, e->dir ? MD_ICON_FOLDER : MD_ICON_INSERT_DRIVE_FILE);
+    t5ui_obj_t *r = t5ui_event_target(ev);
+    t5ui_set_str(r, T5UI_P_TEXT, e->name);
+    t5ui_set_str(r, T5UI_P_ICON, e->dir ? T5UI_ICON_FOLDER : T5UI_ICON_INSERT_DRIVE_FILE);
 }
 
-static void row_clicked(uint32_t i, void *ud)
+/* A tap, or a long press (a long press used to end in a click too). */
+static void row_clicked(t5ui_event_t *ev)
 {
-    picker_t *p = ud;
-    if (!p->shown || i >= p->shown->n) return;
+    picker_t *p = t5ui_event_user(ev);
+    int32_t i = t5ui_event_index(ev);
+    if (!p->shown || i < 0 || (uint32_t)i >= p->shown->n) return;
     const entry_t *e = &p->shown->ents[i];
     if (e->path) {
         go(p, e->path);
@@ -280,9 +287,9 @@ static void row_clicked(uint32_t i, void *ud)
     else finish(p, full);
 }
 
-static void up_clicked(lv_event_t *e)
+static void up_clicked(t5ui_event_t *e)
 {
-    picker_t *p = lv_event_get_user_data(e);
+    picker_t *p = t5ui_event_user(e);
     if (!p->path[0]) {
         finish(p, NULL);
         return;
@@ -300,71 +307,84 @@ static void up_clicked(lv_event_t *e)
     go(p, parent);
 }
 
-static void cancel_clicked(lv_event_t *e)
+static void cancel_clicked(t5ui_event_t *e)
 {
-    finish(lv_event_get_user_data(e), NULL);
+    finish(t5ui_event_user(e), NULL);
 }
 
-static void scrim_clicked(lv_event_t *e)
+static void scrim_clicked(t5ui_event_t *e)
 {
-    if (lv_event_get_target_obj(e) != lv_event_get_current_target_obj(e)) return;   /* inside the box */
-    finish(lv_event_get_user_data(e), NULL);
+    if (t5ui_event_target(e) != t5ui_event_obj(e)) return;   /* inside the box */
+    finish(t5ui_event_user(e), NULL);
 }
 
 static void build(picker_t *p)
 {
-    const md_scheme_t *sc = md_scheme();
-    lv_obj_t *scrim = lv_obj_create(lv_layer_top());
+    t5ui_obj_t *scrim = t5ui_create(t5ui_sys_layer(T5UI_LAYER_TOP), T5UI_BOX);
     p->scrim = scrim;
-    lv_obj_remove_style_all(scrim);
-    lv_obj_set_size(scrim, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(scrim, md_color(sc->c.scrim), 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_50, 0);
-    lv_obj_set_clickable(scrim, true);
-    lv_obj_set_scrollable(scrim, false);
-    lv_obj_add_event_cb(scrim, scrim_clicked, LV_EVENT_CLICKED, p);
+    t5ui_set_int(scrim, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(scrim, T5UI_P_HEIGHT, T5UI_PCT(100));
+    t5ui_set_color(scrim, T5UI_P_BG_COLOR, SCRIM_COLOR);
+    t5ui_set_int(scrim, T5UI_P_BG_OPA, 127);   /* 50 % */
+    t5ui_set_int(scrim, T5UI_P_CLICKABLE, true);
+    t5ui_set_int(scrim, T5UI_P_SCROLLABLE, false);
+    t5ui_on(scrim, T5UI_EV_CLICK, scrim_clicked, p);
 
     /* Percentages, so a rotation needs nothing from us. */
-    lv_obj_t *box = lv_obj_create(scrim);
-    md_set_elevation(box, MD_ELEV_DIALOG, true);
-    lv_obj_set_size(box, LV_PCT(94), LV_PCT(90));
-    lv_obj_center(box);
-    lv_obj_set_style_radius(box, T5_DP(MD_SHAPE_MEDIUM_DP), 0);
-    lv_obj_set_style_clip_corner(box, true, 0);
-    lv_obj_set_style_pad_all(box, 0, 0);
-    lv_obj_set_style_pad_row(box, 0, 0);
-    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_scrollable(box, false);
+    t5ui_obj_t *box = t5ui_create(scrim, T5UI_PANEL);
+    t5ui_set_int(box, T5UI_P_ELEVATION, ELEV_DIALOG_DP);
+    t5ui_set_color(box, T5UI_P_BG_COLOR, t5ui_theme_surface(ELEV_DIALOG_DP));   /* the elevation's surface */
+    t5ui_set_int(box, T5UI_P_WIDTH, T5UI_PCT(94));
+    t5ui_set_int(box, T5UI_P_HEIGHT, T5UI_PCT(90));
+    t5ui_set_int(box, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
+    t5ui_set_int(box, T5UI_P_CLIP_CORNER, true);
+    t5ui_set_int(box, T5UI_P_PAD_ALL, 0);
+    t5ui_set_int(box, T5UI_P_PAD_ROW, 0);
+    t5ui_set_int(box, T5UI_P_FLOW, T5UI_COLUMN);
+    t5ui_set_int(box, T5UI_P_SCROLLABLE, false);
 
-    p->bar = md_appbar_create(box, p->title, MD_ICON_ARROW_BACK, up_clicked, p);
-    md_appbar_add_action(p->bar, MD_ICON_CLOSE, cancel_clicked, p);
+    p->bar = t5ui_create(box, T5UI_MD_APPBAR_BACK);
+    t5ui_set_str(p->bar, T5UI_P_TITLE, p->title);
+    t5ui_on(p->bar, T5UI_EV_BACK, up_clicked, p);
+    t5ui_obj_t *close = t5ui_create(p->bar, T5UI_MD_APPBAR_ACTION);
+    t5ui_set_str(close, T5UI_P_ICON, T5UI_ICON_CLOSE);
+    t5ui_on(close, T5UI_EV_CLICK, cancel_clicked, p);
 
-    lv_obj_t *body = lv_obj_create(box);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_width(body, LV_PCT(100));
-    lv_obj_set_flex_grow(body, 1);
-    lv_obj_set_scrollable(body, false);
-    p->list = md_list_create(body, 0, ROW_DP, bind_row, row_clicked, p);
-    lv_obj_set_size(p->list, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(p->list, LV_OPA_TRANSP, 0);      /* the box's colour, as the footer */
-    p->status = md_label_create(body, "", MD_TYPE_BODY1);
-    lv_obj_center(p->status);
-    lv_obj_set_hidden(p->status, true);
+    t5ui_obj_t *body = t5ui_create(box, T5UI_BOX);
+    t5ui_set_int(body, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(body, T5UI_P_GROW, 1);
+    t5ui_set_int(body, T5UI_P_SCROLLABLE, false);
+    p->list = t5ui_create(body, T5UI_MD_LIST);
+    t5ui_set_int(p->list, T5UI_P_ROW_DP, ROW_DP);
+    t5ui_on(p->list, T5UI_EV_BIND, bind_row, p);
+    t5ui_on(p->list, T5UI_EV_ITEM, row_clicked, p);
+    t5ui_set_int(p->list, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(p->list, T5UI_P_HEIGHT, T5UI_PCT(100));
+    t5ui_set_int(p->list, T5UI_P_BG_OPA, T5UI_OPA_TRANSP);   /* the box's colour, as the footer */
+    p->status = t5ui_create(body, T5UI_MD_TEXT);
+    t5ui_set_int(p->status, T5UI_P_TEXT_STYLE, T5UI_TEXT_BODY1);
+    t5ui_set_int(p->status, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
+    t5ui_set_int(p->status, T5UI_P_HIDDEN, true);
 
-    md_divider_create(box);
-    lv_obj_t *foot = lv_obj_create(box);
-    lv_obj_remove_style_all(foot);
-    lv_obj_set_size(foot, LV_PCT(100), T5_DP(56));
-    lv_obj_set_style_pad_hor(foot, T5_DP(16), 0);
-    lv_obj_set_flex_flow(foot, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(foot, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_scrollable(foot, false);
-    p->crumb = md_label_create(foot, "", MD_TYPE_CAPTION);
-    lv_obj_set_flex_grow(p->crumb, 1);
-    lv_label_set_long_mode(p->crumb, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_style_text_opa(p->crumb, sc->on_surface.medium, 0);
-    lv_obj_t *cancel = md_button_create(foot, "Cancel", MD_BUTTON_TEXT);
-    lv_obj_add_event_cb(cancel, cancel_clicked, LV_EVENT_CLICKED, p);
+    t5ui_create(box, T5UI_MD_DIVIDER);
+    t5ui_obj_t *foot = t5ui_create(box, T5UI_BOX);
+    t5ui_set_int(foot, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(foot, T5UI_P_HEIGHT, t5ui_dp(56));
+    t5ui_set_int(foot, T5UI_P_PAD_LEFT, t5ui_dp(16));
+    t5ui_set_int(foot, T5UI_P_PAD_RIGHT, t5ui_dp(16));
+    t5ui_set_int(foot, T5UI_P_FLOW, T5UI_ROW);
+    t5ui_set_int(foot, T5UI_P_PLACE_MAIN, T5UI_PLACE_START);
+    t5ui_set_int(foot, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
+    t5ui_set_int(foot, T5UI_P_PLACE_TRACK, T5UI_PLACE_CENTER);
+    t5ui_set_int(foot, T5UI_P_SCROLLABLE, false);
+    p->crumb = t5ui_create(foot, T5UI_MD_TEXT);
+    t5ui_set_int(p->crumb, T5UI_P_TEXT_STYLE, T5UI_TEXT_CAPTION);
+    t5ui_set_int(p->crumb, T5UI_P_GROW, 1);
+    t5ui_set_int(p->crumb, T5UI_P_LONG_MODE, T5UI_LONG_DOTS);
+    t5ui_set_int(p->crumb, T5UI_P_TEXT_OPA, t5ui_theme_emphasis(T5UI_EMPHASIS_MEDIUM));
+    t5ui_obj_t *cancel = t5ui_create(foot, T5UI_MD_BUTTON_TEXT);
+    t5ui_set_str(cancel, T5UI_P_TEXT, "Cancel");
+    t5ui_on(cancel, T5UI_EV_CLICK, cancel_clicked, p);
 }
 
 /* The card can go while a folder on it is open. */

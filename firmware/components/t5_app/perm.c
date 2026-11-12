@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "md/md.h"
 #include "t5_core/log.h"
+#include "t5_gui/t5ui.h"
 #include "t5_pkg/pkg.h"
 #include "t5_ui/t5_ui.h"
 #include "app_priv.h"
@@ -30,7 +30,7 @@ typedef struct {
     void *user;
     int answer;              /* -1 pending, 0 denied, 1 granted */
     int refs;                /* the dialog, plus a waiting task if any */
-    lv_obj_t *dlg;
+    t5ui_obj_t *dlg;
     SemaphoreHandle_t wake;   /* a waiting task's, given with the answer */
     char name[T5_APP_NAME_LEN];
 } prompt_t;
@@ -95,7 +95,7 @@ void perm_app_gone(t5_app_t *app)
 {
     for (;;) {
         prompt_t *p = NULL;
-        lv_obj_t *dlg = NULL;
+        t5ui_obj_t *dlg = NULL;
         apps_lock();
         for (int i = 0; i < MAX_PROMPTS && !p; i++) {
             if (s_open[i] && s_open[i]->app == app) p = s_open[i];
@@ -111,7 +111,7 @@ void perm_app_gone(t5_app_t *app)
         apps_unlock();
         if (!p) return;
         if (dlg) {
-            md_dialog_close(dlg);   /* closes without calling answered() */
+            t5ui_dialog_close(dlg);   /* closes without calling answered() */
             unref(p);               /* the dialog's reference */
         }
     }
@@ -204,14 +204,14 @@ static void show(void *arg)
     else snprintf(title, sizeof title, "Allow %s to use the %s?", p->name, t5_perm_name(p->perm));
     /* The dialog belongs to the system, not the app. */
     void *saved = t5_sys_enter();
-    lv_obj_t *dlg = md_dialog_show(title, body, "Allow", "Don't allow", answered, p);
+    t5ui_obj_t *dlg = t5ui_dialog(title, body, "Allow", "Don't allow", answered, p);
     t5_sys_leave(saved);
     apps_lock();
     gone = !p->app;
     if (!gone) p->dlg = dlg;
     apps_unlock();
     if (gone) {
-        if (dlg) md_dialog_close(dlg);
+        if (dlg) t5ui_dialog_close(dlg);
         unref(p);
     }
 }

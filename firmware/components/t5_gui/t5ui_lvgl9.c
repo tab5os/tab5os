@@ -11,12 +11,14 @@
  * are freed with the object they're on. Timers and styles are the app's
  * resources (t5_res), so they end with it.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "lvgl.h"
 #include "misc/cache/instance/lv_image_cache.h"   /* lv_image_cache_drop: not in lvgl.h */
 #include "md/md.h"
 #include "md/md_icons.h"
+#include "md/md_fonts.h"
 #include "t5_app/app.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
@@ -159,12 +161,14 @@ _Static_assert((int)T5UI_TEXT_HEADLINE4 == (int)MD_TYPE_HEADLINE4 && (int)T5UI_T
 static const lv_font_t *font(int32_t t)
 {
     if (t == T5UI_TEXT_MONO) return md_font_mono();
+    if (t == T5UI_TEXT_CLOCK) return &md_font_roboto_clock_200;
     return md_font((md_type_role_t)((unsigned)t < MD_TYPE_COUNT ? t : T5UI_TEXT_BODY1));
 }
 
 static int32_t unfont(const lv_font_t *f)
 {
     if (f == md_font_mono()) return T5UI_TEXT_MONO;
+    if (f == &md_font_roboto_clock_200) return T5UI_TEXT_CLOCK;
     for (int t = 0; t < MD_TYPE_COUNT; t++) {
         if (md_font((md_type_role_t)t) == f) return t;
     }
@@ -385,8 +389,8 @@ static t5_err_t look_set(const dest_t *d, t5ui_prop_t p, const t5ui_val_t *val)
                  ((v & T5UI_DECOR_STRIKE) ? LV_TEXT_DECOR_STRIKETHROUGH : 0);
         break;
     case CV_FONT:
-        if ((uint32_t)v > T5UI_TEXT_MONO) return T5_ERR_INVALID_ARG;
-        if (d->obj && !d->sel && v != T5UI_TEXT_MONO) {
+        if ((uint32_t)v > T5UI_TEXT_CLOCK) return T5_ERR_INVALID_ARG;
+        if (d->obj && !d->sel && v < T5UI_TEXT_MONO) {
             /* The whole type style (letter spacing too), keeping the opacity. */
             md_text_style(d->obj, (md_type_role_t)v, lv_obj_get_style_text_opa(d->obj, LV_PART_MAIN));
             return T5_OK;
@@ -533,11 +537,14 @@ static void tramp(lv_event_t *e)
     if (r->kind == T5UI_EV_DELETE) free(r);    /* its own record goes last */
 }
 
+static void list_long(uint32_t index, void *user);
+
 /* Events a text field's text area has. */
 static bool field_event(t5ui_ev_t ev)
 {
     return ev == T5UI_EV_VALUE || ev == T5UI_EV_FOCUS || ev == T5UI_EV_DEFOCUS || ev == T5UI_EV_READY ||
-           ev == T5UI_EV_CANCEL || ev == T5UI_EV_KEY || ev == T5UI_EV_INSERT;
+           ev == T5UI_EV_CANCEL || ev == T5UI_EV_KEY || ev == T5UI_EV_INSERT || ev == T5UI_EV_CLICK ||
+           ev == T5UI_EV_SHORT_CLICK || ev == T5UI_EV_PRESS || ev == T5UI_EV_RELEASE || ev == T5UI_EV_LONG_PRESS;
 }
 
 _Static_assert(T5UI_CHART_NONE == LV_CHART_POINT_NONE, "no-value points are LVGL's");
@@ -550,6 +557,8 @@ t5_err_t t5ui_be_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *use
     lv_obj_t *on = o;
     /* A text field's events happen on its text area. */
     if (is_field(k) && field_event(ev)) on = md_textfield_ta(o);
+    /* An md list takes long presses (and then no click) only when asked. */
+    if (k == T5UI_MD_LIST && ev == T5UI_EV_ITEM_LONG) md_list_set_long_press(o, list_long);
     if (k == T5UI_MD_ROW && ev == T5UI_EV_CLICK && !lv_obj_is_clickable(o)) {
         md_row_set_clickable(o, NULL, NULL);   /* clickable with a ripple */
     }
@@ -808,9 +817,7 @@ static lv_obj_t *make(lv_obj_t *parent, t5ui_kind_t kind, node_t *n)
     case T5UI_MD_TAB: return md_tabs_add(parent, "");
     case T5UI_MD_PAGE: return md_page_create(parent, "", back_clicked, NULL, &n->bar);
     case T5UI_MD_LIST: {
-        lv_obj_t *l = md_list_create(parent, 0, MD_LIST_ROW_1_DP, list_bind, list_click, n);
-        if (l) md_list_set_long_press(l, list_long);
-        return l;
+        return md_list_create(parent, 0, MD_LIST_ROW_1_DP, list_bind, list_click, n);
     }
     case T5UI_MD_ROW_TRAILING: return md_row_trailing_text(parent, "");
     default: return NULL;
@@ -1032,6 +1039,10 @@ static t5_err_t set_text(lv_obj_t *o, t5ui_kind_t k, t5ui_prop_t p, const char *
     }
     if (p == T5UI_P_SECONDARY && k == T5UI_MD_ROW && !(s_binding && o == s_binding->row)) {
         md_row_set_secondary(o, s);
+        /* md fixes the height here; grow with a wrapping second line instead,
+         * as rows made with one do. */
+        lv_obj_set_height(o, LV_SIZE_CONTENT);
+        lv_obj_set_style_min_height(o, T5_DP(s[0] ? MD_LIST_ROW_2_DP : MD_LIST_ROW_1_DP), 0);
         return T5_OK;
     }
     if (p == T5UI_P_ICON && k == T5UI_MD_ROW && !(s_binding && o == s_binding->row)) {
@@ -1158,7 +1169,7 @@ static t5_err_t set_widget(lv_obj_t *o, node_t *n, t5ui_kind_t k, t5ui_prop_t p,
         if (is_chip(k)) md_chip_set_selected(o, v);
         else lv_obj_set_state(o, LV_STATE_CHECKED, v);
         return T5_OK;
-    case T5UI_P_DISABLED: lv_obj_set_state(o, LV_STATE_DISABLED, v); return T5_OK;
+    case T5UI_P_DISABLED: lv_obj_set_state(is_field(k) ? ta : o, LV_STATE_DISABLED, v); return T5_OK;
     case T5UI_P_CHECKABLE: lv_obj_set_checkable(o, v); return T5_OK;
     case T5UI_P_BUBBLE: lv_obj_set_event_bubble(o, v); return T5_OK;
     case T5UI_P_SCROLL_SNAP_X:
@@ -1186,7 +1197,7 @@ static t5_err_t set_widget(lv_obj_t *o, node_t *n, t5ui_kind_t k, t5ui_prop_t p,
         for (size_t i = 0; i < sizeof S / sizeof S[0]; i++) {
             bool on = (uint32_t)v & S[i].t;
             if (S[i].t == T5UI_STATE_CHECKED && is_chip(k)) md_chip_set_selected(o, on);
-            else lv_obj_set_state(o, S[i].l, on);
+            else lv_obj_set_state(is_field(k) ? ta : o, S[i].l, on);   /* a field's state is its text area's */
         }
         return T5_OK;
     }
@@ -1353,7 +1364,7 @@ static bool get_widget(lv_obj_t *o, node_t *n, t5ui_kind_t k, t5ui_prop_t p, t5u
     case T5UI_P_SCROLL_X: v = lv_obj_get_scroll_x(o); break;
     case T5UI_P_SCROLL_Y: v = lv_obj_get_scroll_y(o); break;
     case T5UI_P_CHECKED: v = lv_obj_has_state(o, LV_STATE_CHECKED); break;
-    case T5UI_P_DISABLED: v = lv_obj_has_state(o, LV_STATE_DISABLED); break;
+    case T5UI_P_DISABLED: v = lv_obj_has_state(is_field(k) ? ta : o, LV_STATE_DISABLED); break;
     case T5UI_P_CHECKABLE: v = lv_obj_is_checkable(o); break;
     case T5UI_P_BUBBLE: v = lv_obj_is_event_bubble(o); break;
     case T5UI_P_SCROLL_SNAP_X: v = BACK(SNAPS, lv_obj_get_scroll_snap_x(o), 0); break;
@@ -1364,7 +1375,7 @@ static bool get_widget(lv_obj_t *o, node_t *n, t5ui_kind_t k, t5ui_prop_t p, t5u
     case T5UI_P_SNAPPABLE: v = lv_obj_is_snappable(o); break;
     case T5UI_P_EXT_CLICK: v = n ? n->ext_click : 0; break;
     case T5UI_P_STATE: {
-        lv_state_t st = lv_obj_get_state(o);
+        lv_state_t st = lv_obj_get_state(is_field(k) ? ta : o);
         v = ((st & LV_STATE_CHECKED) ? T5UI_STATE_CHECKED : 0) | ((st & LV_STATE_FOCUSED) ? T5UI_STATE_FOCUSED : 0) |
             ((st & LV_STATE_PRESSED) ? T5UI_STATE_PRESSED : 0) | ((st & LV_STATE_DISABLED) ? T5UI_STATE_DISABLED : 0) |
             ((st & LV_STATE_EDITED) ? T5UI_STATE_EDITED : 0);
@@ -1618,8 +1629,10 @@ t5_err_t t5ui_be_animate(t5ui_obj_t *obj, t5ui_prop_t p, int32_t from, int32_t t
     lv_anim_set_duration(&a, ms);
     lv_anim_set_delay(&a, delay_ms);
     if (ease <= T5UI_EASE_BOUNCE) lv_anim_set_path_cb(&a, PATHS[ease]);
-    else md_anim_set_curve(&a, ease == T5UI_EASE_STANDARD ? MD_CURVE_STANDARD
-                               : ease == T5UI_EASE_DECELERATE ? MD_CURVE_DECELERATION : MD_CURVE_ACCELERATION);
+    else md_anim_set_curve(&a, ease == T5UI_EASE_STANDARD     ? MD_CURVE_STANDARD
+                               : ease == T5UI_EASE_DECELERATE ? MD_CURVE_DECELERATION
+                               : ease == T5UI_EASE_ACCELERATE ? MD_CURVE_ACCELERATION
+                                                              : MD_CURVE_SHARP);
     lv_anim_set_completed_cb(&a, anim_done);
     return lv_anim_start(&a) ? T5_OK : T5_ERR_NO_MEM;
 }
@@ -1808,7 +1821,12 @@ bool t5ui_theme_dark(void)
 t5ui_opa_t t5ui_theme_emphasis(t5ui_emphasis_t e)
 {
     const md_emphasis_t *m = &md_scheme()->on_surface;
-    return e == T5UI_EMPHASIS_MEDIUM ? m->medium : e == T5UI_EMPHASIS_DISABLED ? m->disabled : m->high;
+    switch (e) {
+    case T5UI_EMPHASIS_MEDIUM: return m->medium;
+    case T5UI_EMPHASIS_DISABLED: return m->disabled;
+    case T5UI_EMPHASIS_DIVIDER: return m->divider;
+    default: return m->high;
+    }
 }
 
 t5ui_color_t t5ui_mix(t5ui_color_t fg, t5ui_color_t bg, t5ui_opa_t opa)
@@ -1849,6 +1867,16 @@ t5ui_accent_t t5ui_theme_accent(void)
 }
 
 /* ---- the OS's own (t5ui_sys.h) ------------------------------------------------------- */
+t5ui_obj_t *t5ui_sys_screen_create(void)
+{
+    lv_obj_t *scr = lv_obj_create(NULL);
+    if (scr && !node_add(scr, T5UI_BOX)) {
+        lv_obj_delete(scr);
+        return NULL;
+    }
+    return H(scr);
+}
+
 t5ui_obj_t *t5ui_sys_layer(t5ui_layer_t layer)
 {
     switch (layer) {
@@ -1891,6 +1919,13 @@ void t5ui_sys_snapshot_free(t5ui_pixels_t *px)
     px->data = NULL;
 }
 
+const char *t5ui_sys_backend_name(void)
+{
+    static char name[24];
+    if (!name[0]) snprintf(name, sizeof name, "LVGL %d.%d", LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR);
+    return name;
+}
+
 t5ui_obj_t *t5ui_sys_obj(void *native)
 {
     return H(native);
@@ -1901,12 +1936,39 @@ void *t5ui_sys_native(t5ui_obj_t *obj)
     return O(obj);
 }
 
+void *t5ui_sys_native_input(t5ui_obj_t *obj)
+{
+    return obj ? textarea_of(O(obj), kind_of(O(obj))) : NULL;
+}
+
+t5_err_t t5ui_sys_set_text_static(t5ui_obj_t *label, const char *text)
+{
+    if (!label || !text) return T5_ERR_INVALID_ARG;
+    if (!IS(O(label), lv_label_class)) return T5_ERR_NOT_SUPPORTED;
+    lv_label_set_text_static(O(label), text);
+    return T5_OK;
+}
+
 /* ---- timers -------------------------------------------------------------------------- */
 struct t5ui_timer {
+    struct t5ui_timer *next;
     lv_timer_t *t;
     t5ui_timer_cb_t cb;
     void *user;
 };
+
+/* The live timers. An app's timers are released when it exits, before its
+ * objects go; deleting one again from an object's T5UI_EV_DELETE is then
+ * harmless instead of a double free. */
+static t5ui_timer_t *s_timers;
+
+static bool timer_live(t5ui_timer_t *t)
+{
+    for (t5ui_timer_t *i = s_timers; i; i = i->next) {
+        if (i == t) return true;
+    }
+    return false;
+}
 
 static void timer_tramp(lv_timer_t *lt)
 {
@@ -1930,23 +1992,31 @@ t5ui_timer_t *t5ui_timer(uint32_t period_ms, t5ui_timer_cb_t cb, void *user)
         free(t);
         return NULL;
     }
+    t->next = s_timers;
+    s_timers = t;
     t5_res_add(T5_RES_TIMER, t, timer_release);       /* ends with the app */
     return t;
 }
 
 void t5ui_timer_period(t5ui_timer_t *t, uint32_t period_ms)
 {
-    if (t) lv_timer_set_period(t->t, period_ms);
+    if (timer_live(t)) lv_timer_set_period(t->t, period_ms);
 }
 
 void t5ui_timer_reset(t5ui_timer_t *t)
 {
-    if (t) lv_timer_reset(t->t);
+    if (timer_live(t)) lv_timer_reset(t->t);
 }
 
 void t5ui_timer_delete(t5ui_timer_t *t)
 {
-    if (!t) return;
+    if (!t || !timer_live(t)) return;
+    for (t5ui_timer_t **pp = &s_timers; *pp; pp = &(*pp)->next) {
+        if (*pp == t) {
+            *pp = t->next;
+            break;
+        }
+    }
     t5_res_remove(t);
     lv_timer_delete(t->t);
     free(t);
