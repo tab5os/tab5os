@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include "t5/system.h"
+#include "t5_core/res.h"     /* T5_CORE_CAPS */
 #include "t5_pkg/manifest.h"
 #include "t5_shell/app_icon.h"
 #include "t5_storage/paths.h"
@@ -150,6 +151,15 @@ static void open_app(const char *id)
         } else {
             md_row_create(body, MD_ICON_CHECK, name, in->entry.builtin ? NULL : "Allowed when installed");
         }
+    }
+    /* Capabilities (USB device mode, Wi-Fi monitor...): only those the app
+     * has asked for, each a switch like camera and mic. */
+    for (uint32_t bit = T5_CORE_CAPS & -T5_CORE_CAPS; bit & T5_CORE_CAPS; bit <<= 1) {
+        if (in->entry.builtin || !((in->granted | in->denied) & bit)) continue;
+        lv_obj_t *r = md_row_create(body, MD_ICON_SETTINGS, t5_perm_label(bit),
+                                    (in->granted & bit) ? "Allowed" : "Not allowed");
+        lv_obj_t *sw = md_row_switch(r, (in->granted & bit) != 0);
+        lv_obj_add_event_cb(sw, grant_changed, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)bit);
     }
     if (!in->entry.builtin) sa_note(body, T5_NATIVE_APP_WARNING);
 

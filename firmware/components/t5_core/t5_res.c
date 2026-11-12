@@ -69,6 +69,34 @@ int t5_core_perm_check(uint32_t perm)
     return s_perm ? s_perm(perm) : 0;
 }
 
+uint32_t t5_core_cap_group(uint32_t cap)
+{
+    switch (cap) {
+    case T5_CORE_CAP_USB_DEVICE:
+    case T5_CORE_CAP_USB_TAKEOVER:
+    case T5_CORE_CAP_EXCL_USBC:
+    case T5_CORE_CAP_EXCL_USBA: return T5_CORE_PERM_USB;
+    case T5_CORE_CAP_BLE_HID:
+    case T5_CORE_CAP_EXCL_BT: return T5_CORE_PERM_BLE;
+    case T5_CORE_CAP_WIFI_MONITOR:
+    case T5_CORE_CAP_WIFI_TX:
+    case T5_CORE_CAP_EXCL_WIFI: return T5_CORE_PERM_NET;
+    default: return 0;
+    }
+}
+
+static t5_fg_check_fn_t s_fg;
+
+void t5_core_set_fg_check(t5_fg_check_fn_t fn)
+{
+    s_fg = fn;
+}
+
+bool t5_core_app_foreground(void)
+{
+    return s_fg ? s_fg() : true;
+}
+
 static t5_path_check_fn_t s_path;
 
 void t5_core_set_path_check(t5_path_check_fn_t fn)

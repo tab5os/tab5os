@@ -93,7 +93,11 @@ t5_err_t t5_usb_uvc_close(t5_usb_uvc_t *u);
  * (t5_usbc_set_mode(T5_USBC_CONSOLE)), or after timeout_s (0 = no timeout).
  * Taking it back while the computer has it mounted is an unsafe removal on
  * the computer's side. */
-typedef enum { T5_USBC_CONSOLE, T5_USBC_STORAGE } t5_usbc_mode_t;
+typedef enum {
+    T5_USBC_CONSOLE,
+    T5_USBC_STORAGE,
+    T5_USBC_DEVICE,           /* an app's device mode (t5_usb/usbdev.h); set_mode(CONSOLE) ends it */
+} t5_usbc_mode_t;
 t5_err_t t5_usbc_set_mode(t5_usbc_mode_t mode, uint32_t timeout_s);
 t5_usbc_mode_t t5_usbc_mode(void);
 /* The last storage session ended with the computer's eject. */

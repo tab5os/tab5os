@@ -146,3 +146,6 @@ CONFIG_TINYUSB_MSC_ENABLED=y
 # app-side mounting off anyway.
 CONFIG_TINYUSB_MSC_MOUNT_PATH="/usbc"
 CONFIG_TINYUSB_CDC_ENABLED=n
+# USB-C device mode for apps (t5_usb/usbdev.h): up to 3 HID interfaces and MIDI.
+CONFIG_TINYUSB_HID_COUNT=3
+CONFIG_TINYUSB_MIDI_COUNT=1

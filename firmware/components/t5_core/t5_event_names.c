@@ -49,6 +49,8 @@ const char *t5_event_name(t5_event_id_t id)
     case T5_EV_APP_CRASHED: return "app.crashed";
     case T5_EV_APP_INSTALLED: return "app.installed";
     case T5_EV_APP_REMOVED: return "app.removed";
+    case T5_EV_APP_SUSPENDED: return "app.suspended";
+    case T5_EV_APP_RESUMED: return "app.resumed";
     case T5_EV_PORT_CLAIMED: return "port.claimed";
     case T5_EV_PORT_RELEASED: return "port.released";
     case T5_EV_MIC_STATE: return "media.mic";

@@ -38,4 +38,5 @@
 #include "t5/system.h"
 #include "t5/ui.h"
 #include "t5/usb.h"
+#include "t5/usbdev.h"
 #include "t5_app/wrappers.h"

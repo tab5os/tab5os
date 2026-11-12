@@ -81,6 +81,8 @@ typedef enum {
     T5_EV_APP_CRASHED,              /* found at boot: the app was running when the device crashed */
     T5_EV_APP_INSTALLED,
     T5_EV_APP_REMOVED,
+    T5_EV_APP_SUSPENDED,            /* the foreground app was suspended (Sleep, screen off) */
+    T5_EV_APP_RESUMED,              /* ...and resumed */
 
     /* Ports (payload: t5_ev_port_t) */
     T5_EV_PORT_CLAIMED = 1100,
