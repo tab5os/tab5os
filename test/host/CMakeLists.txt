@@ -48,7 +48,7 @@ target_include_directories(t5_host PUBLIC ${T5_HOST_INCS} PRIVATE ${T5_HOST_PRIV
 target_link_libraries(t5_host PUBLIC unity m)
 
 enable_testing()
-foreach(t test_pins test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch test_power test_battery test_net test_ota test_ports test_pkg test_ui test_app test_media test_hid)
+foreach(t test_pins test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch test_power test_battery test_net test_ota test_ports test_pkg test_ui test_app test_media test_hid test_t5ui)
     add_executable(${t} ${t}.c)
     target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
     target_link_libraries(${t} PRIVATE t5_host)

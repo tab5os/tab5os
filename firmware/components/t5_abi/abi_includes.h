@@ -35,6 +35,7 @@
 #include "t5/power.h"
 #include "t5/shell.h"
 #include "t5/storage.h"
+#include "t5/t5ui.h"
 #include "t5/sys.h"
 #include "t5/system.h"
 #include "t5/ui.h"

@@ -3,7 +3,7 @@
  * the reports built by t5/hid.h.
  *
  *   The big panel is a trackpad. The gestures are recognised here, in the
- *   app, from every finger on the screen (t5_ui_touch_get):
+ *   app, from every finger on the screen (t5ui_touches):
  *     one finger moves the pointer; a quick tap clicks
  *     two fingers scroll (up/down and sideways); a two-finger tap right-clicks
  *   Type: sends the text field's contents as key strokes (US layout).
@@ -11,7 +11,8 @@
  *   "Use Bluetooth" switches transport: USB-C turns the console and sound
  *   off while it runs; Bluetooth pairs from the computer's settings.
  *
- * A 10 ms LVGL timer reads the fingers and queues reports; a worker task
+ * Its UI is t5ui only (no LVGL), so it keeps working whatever the OS draws
+ * with. A 10 ms timer reads the fingers and queues reports; a worker task
  * owns the transport and sends them. The OS releases every key if the app
  * goes to the background and closes the transport when it exits.
  */
@@ -23,7 +24,7 @@
 #include <t5/app.h>
 #include <t5/ble.h>
 #include <t5/hid.h>
-#include <t5/ui.h>
+#include <t5/t5ui.h>
 #include <t5/usbdev.h>
 
 typedef struct {
@@ -34,7 +35,7 @@ typedef struct {
 
 static struct {
     t5_app_t *app;
-    lv_obj_t *pad, *status, *text, *bt;
+    t5ui_obj_t *pad, *status, *text, *bt;
     QueueHandle_t q;
     volatile bool want_bt, switch_now;
     /* trackpad state (UI task) */
@@ -74,19 +75,19 @@ static void click(uint8_t button)
 #define TAP_MOVE 12
 #define SCROLL_PX 24
 
-static void pad_timer(lv_timer_t *t)
+static void pad_timer(t5ui_timer_t *t, void *user)
 {
-    (void)t;
-    t5_ui_touch_t f[T5_UI_TOUCH_MAX];
-    int n = t5_ui_touch_get(f, T5_UI_TOUCH_MAX);
-    lv_area_t a;
-    lv_obj_get_coords(s.pad, &a);
+    (void)t; (void)user;
+    t5ui_touch_t f[T5UI_TOUCH_MAX];
+    int n = t5ui_touches(f, T5UI_TOUCH_MAX);
+    t5ui_rect_t a;
+    t5ui_coords(s.pad, &a);
     /* Only fingers on the pad count. */
     int k = 0;
     for (int i = 0; i < n; i++) {
         if (f[i].x >= a.x1 && f[i].x <= a.x2 && f[i].y >= a.y1 && f[i].y <= a.y2) f[k++] = f[i];
     }
-    uint32_t now = lv_tick_get();
+    uint32_t now = t5ui_ticks_ms();
     if (k && !s.fingers) {                     /* a gesture starts */
         s.down_ms = now;
         s.max_fingers = 0;
@@ -146,18 +147,18 @@ static int stroke(uint8_t key, uint8_t mods, void *arg)
     return 0;
 }
 
-static void type_clicked(lv_event_t *e)
+static void type_clicked(t5ui_event_t *e)
 {
     (void)e;
-    const char *t = lv_textarea_get_text(s.text);
+    const char *t = t5ui_text(s.text);
     int done = t5_hid_text(t, T5_HID_LAYOUT_US, stroke, NULL);
-    if (done >= 0 && (size_t)done < strlen(t)) md_snackbar_show("Stopped at a character the US layout can't type", NULL, NULL, NULL);
-    lv_textarea_set_text(s.text, "");
+    if (done >= 0 && (size_t)done < strlen(t)) t5ui_snackbar("Stopped at a character the US layout can't type", NULL, NULL, NULL);
+    t5ui_set_text(s.text, "");
 }
 
-static void media_clicked(lv_event_t *e)
+static void media_clicked(t5ui_event_t *e)
 {
-    uint16_t usage = (uint16_t)(uintptr_t)lv_event_get_user_data(e);
+    uint16_t usage = (uint16_t)(uintptr_t)t5ui_event_user(e);
     uint8_t r[T5_HID_CONSUMER_LEN];
     t5_hid_pack_consumer(usage, r);
     queue_report(T5_HID_PART_CONSUMER, r, sizeof r);
@@ -165,22 +166,22 @@ static void media_clicked(lv_event_t *e)
     queue_report(T5_HID_PART_CONSUMER, r, sizeof r);
 }
 
-static void bt_changed(lv_event_t *e)
+static void bt_changed(t5ui_event_t *e)
 {
-    s.want_bt = lv_obj_has_state(lv_event_get_target_obj(e), LV_STATE_CHECKED);
+    s.want_bt = t5ui_checked(t5ui_event_obj(e));
     s.switch_now = true;
 }
 
 static void set_status_ui(void *text)
 {
-    lv_label_set_text(s.status, text);
+    t5ui_label_set(s.status, text);
     free(text);
 }
 
 static void status(const char *text)
 {
     char *t = strdup(text);
-    if (t && t5_ui_async(set_status_ui, t) != T5_OK) free(t);
+    if (t && t5ui_async(set_status_ui, t) != T5_OK) free(t);
 }
 
 /* ---- the transport (worker task) ------------------------------------------------ */
@@ -240,76 +241,69 @@ static void worker(void *arg)
 }
 
 /* ---- the screen ----------------------------------------------------------------- */
-static void back(lv_event_t *e)
+static void back(t5ui_event_t *e)
 {
     (void)e;
     t5_app_exit(t5_app_self());
 }
 
-static lv_obj_t *media_button(lv_obj_t *row, const char *icon, uint16_t usage)
+static void media_button(t5ui_obj_t *row, const char *icon, uint16_t usage)
 {
-    lv_obj_t *b = md_fab_create(row, icon, true);
-    lv_obj_add_event_cb(b, media_clicked, LV_EVENT_CLICKED, (void *)(uintptr_t)usage);
-    return b;
+    t5ui_obj_t *b = t5ui_fab(row, icon, true);
+    t5ui_on(b, T5UI_EV_CLICK, media_clicked, (void *)(uintptr_t)usage);
 }
 
 static void on_create(t5_app_t *app)
 {
     s.app = app;
     s.q = xQueueCreate(64, sizeof(report_t));
-    lv_obj_t *scr = t5_app_screen(app);
-    lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_gap(scr, 0, 0);
-    md_appbar_create(scr, "Keyboard & Trackpad", MD_ICON_ARROW_BACK, back, NULL);
+    t5ui_obj_t *scr = t5ui_root(app);
+    t5ui_flex(scr, T5UI_COLUMN);
+    t5ui_gap(scr, 0, 0);
+    t5ui_appbar(scr, "Keyboard & Trackpad", T5UI_ICON_ARROW_BACK, back, NULL);
 
-    lv_obj_t *row = md_row_create(scr, MD_ICON_BLUETOOTH, "Use Bluetooth", "Off: USB-C (the console and sound are off meanwhile)");
-    s.bt = md_row_switch(row, false);
-    lv_obj_add_event_cb(s.bt, bt_changed, LV_EVENT_VALUE_CHANGED, NULL);
+    t5ui_obj_t *row = t5ui_row(scr, T5UI_ICON_BLUETOOTH, "Use Bluetooth", "Off: USB-C (the console and sound are off meanwhile)");
+    s.bt = t5ui_row_switch(row, false);
+    t5ui_on(s.bt, T5UI_EV_VALUE, bt_changed, NULL);
 
-    s.status = md_label_create(scr, "Starting...", MD_TYPE_BODY2);
-    lv_obj_set_width(s.status, LV_PCT(100));
-    lv_obj_set_style_pad_hor(s.status, T5_DP(16), 0);
-    lv_label_set_long_mode(s.status, LV_LABEL_LONG_MODE_WRAP);
+    s.status = t5ui_label(scr, "Starting...", T5UI_TEXT_BODY2);
+    t5ui_width(s.status, T5UI_PCT(100));
+    t5ui_pad(s.status, 0, t5ui_dp(16), 0, t5ui_dp(16));
+    t5ui_label_long(s.status, T5UI_LONG_WRAP);
 
     /* The trackpad: a plain surface the timer reads fingers on. */
-    s.pad = lv_obj_create(scr);
-    lv_obj_set_width(s.pad, LV_PCT(100));
-    lv_obj_set_flex_grow(s.pad, 1);
-    lv_obj_set_style_bg_color(s.pad, md_color(md_scheme()->c.surface), 0);
-    lv_obj_set_style_border_width(s.pad, 0, 0);
-    lv_obj_set_style_radius(s.pad, T5_DP(16), 0);
-    lv_obj_set_style_margin_all(s.pad, T5_DP(12), 0);
-    lv_obj_set_scrollable(s.pad, false);
-    lv_obj_t *hint = md_label_create(s.pad, "Trackpad: one finger moves, tap clicks, two fingers scroll", MD_TYPE_CAPTION);
-    lv_obj_center(hint);
+    s.pad = t5ui_panel(scr);
+    t5ui_width(s.pad, T5UI_PCT(100));
+    t5ui_grow(s.pad, 1);
+    t5ui_radius(s.pad, t5ui_dp(16));
+    t5ui_margin(s.pad, t5ui_dp(12), t5ui_dp(12), t5ui_dp(12), t5ui_dp(12));
+    t5ui_scrollable(s.pad, T5UI_SCROLL_NONE);
+    t5ui_obj_t *hint = t5ui_label(s.pad, "Trackpad: one finger moves, tap clicks, two fingers scroll", T5UI_TEXT_CAPTION);
+    t5ui_center(hint);
 
-    lv_obj_t *media = lv_obj_create(scr);
-    lv_obj_remove_style_all(media);
-    lv_obj_set_size(media, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(media, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(media, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    media_button(media, MD_ICON_SKIP_PREVIOUS, T5_HID_CC_PREV);
-    media_button(media, MD_ICON_PLAY_ARROW, T5_HID_CC_PLAY_PAUSE);
-    media_button(media, MD_ICON_SKIP_NEXT, T5_HID_CC_NEXT);
-    media_button(media, MD_ICON_VOLUME_DOWN, T5_HID_CC_VOL_DOWN);
-    media_button(media, MD_ICON_VOLUME_UP, T5_HID_CC_VOL_UP);
+    t5ui_obj_t *media = t5ui_box(scr);
+    t5ui_size(media, T5UI_PCT(100), T5UI_CONTENT);
+    t5ui_flex(media, T5UI_ROW);
+    t5ui_flex_place(media, T5UI_PLACE_SPACE_EVENLY, T5UI_PLACE_CENTER, T5UI_PLACE_CENTER);
+    media_button(media, T5UI_ICON_SKIP_PREVIOUS, T5_HID_CC_PREV);
+    media_button(media, T5UI_ICON_PLAY_ARROW, T5_HID_CC_PLAY_PAUSE);
+    media_button(media, T5UI_ICON_SKIP_NEXT, T5_HID_CC_NEXT);
+    media_button(media, T5UI_ICON_VOLUME_DOWN, T5_HID_CC_VOL_DOWN);
+    media_button(media, T5UI_ICON_VOLUME_UP, T5_HID_CC_VOL_UP);
 
-    lv_obj_t *trow = lv_obj_create(scr);
-    lv_obj_remove_style_all(trow);
-    lv_obj_set_size(trow, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(trow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(trow, T5_DP(12), 0);
-    lv_obj_set_style_pad_gap(trow, T5_DP(8), 0);
-    s.text = lv_textarea_create(trow);
-    lv_textarea_set_one_line(s.text, true);
-    lv_textarea_set_placeholder_text(s.text, "Text to type on the computer");
-    lv_obj_set_flex_grow(s.text, 1);
-    lv_obj_t *type = md_button_create(trow, "Type", MD_BUTTON_CONTAINED);
-    lv_obj_add_event_cb(type, type_clicked, LV_EVENT_CLICKED, NULL);
+    t5ui_obj_t *trow = t5ui_box(scr);
+    t5ui_size(trow, T5UI_PCT(100), T5UI_CONTENT);
+    t5ui_flex(trow, T5UI_ROW);
+    t5ui_pad_all(trow, t5ui_dp(12));
+    t5ui_gap(trow, t5ui_dp(8), t5ui_dp(8));
+    s.text = t5ui_textarea(trow, true, "Text to type on the computer");
+    t5ui_grow(s.text, 1);
+    t5ui_obj_t *type = t5ui_button(trow, "Type", T5UI_BUTTON_CONTAINED);
+    t5ui_on(type, T5UI_EV_CLICK, type_clicked, NULL);
 
-    lv_timer_create(pad_timer, 10, NULL);
+    t5ui_timer(10, pad_timer, NULL);
     if (!s.q || t5_task_create("hid.worker", worker, NULL, 4096, 3, T5_CORE_ANY, NULL) != T5_OK) {
-        lv_label_set_text(s.status, "Couldn't start: not enough memory.");
+        t5ui_label_set(s.status, "Couldn't start: not enough memory.");
     }
 }
 
