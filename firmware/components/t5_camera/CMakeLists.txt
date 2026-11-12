@@ -1,7 +1,8 @@
-# Camera (plan 7.4, 7.5): esp_video (SC202CS on MIPI CSI, ISP), PPA preview,
-# hardware JPEG and H.264.
+# Camera (plan 7.4, 7.5): esp_video (SC202CS on MIPI CSI, ISP), the preview
+# as a video plane, hardware JPEG (stills, Motion JPEG in AVI) and H.264.
+include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS "camera.c" "h264_ram.c"
+    SRCS ${T5_CAMERA_PORTABLE_SRCS} "camera.c" "h264_ram.c"
     INCLUDE_DIRS "include"
     REQUIRES t5_core
     PRIV_REQUIRES t5_bsp t5_i2c t5_pins t5_power lvgl__lvgl esp_driver_ppa esp_driver_jpeg esp_driver_i2c

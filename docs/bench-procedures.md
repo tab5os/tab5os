@@ -2,6 +2,8 @@
 
 These Phase 0 and 1 checks need hands on the hardware. Record the results in [bench-results.md](bench-results.md).
 
+The `gpio` and `sleep` commands (and `elf bench`) are only in bench builds: add `CONFIG_T5_DIAG_BENCH=y` to `firmware/sdkconfig` (or turn it on under "Tab5 OS console" in `idf.py menuconfig`) and rebuild. Normal builds leave them out to save about 125 KB.
+
 Open the console with `. tools/env.sh && t5 monitor` (Ctrl-] quits), or run single commands with `t5 console "cmd" "cmd"`.
 
 **Before you start, know how to recover the board.** If it goes dark and USB disappears, press the power button once. If it's stuck in a boot loop, run `esptool chip-id`. That resets it through the ROM bootloader, which reloads the eFuses.

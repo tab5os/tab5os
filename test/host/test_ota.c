@@ -137,6 +137,56 @@ static void test_source_rule(void)
     TEST_ASSERT_NOT_NULL(t5_ota_refusal(&other, false, T5_OTA_FROM_RECOVERY, true));
 }
 
+static void test_version_rule(void)
+{
+    TEST_ASSERT_TRUE(t5_ota_version_cmp("0.1.10", "0.1.9") > 0);
+    TEST_ASSERT_TRUE(t5_ota_version_cmp("0.2.0", "0.1.9") > 0);
+    TEST_ASSERT_TRUE(t5_ota_version_cmp("1.0", "0.9.9") > 0);
+    TEST_ASSERT_TRUE(t5_ota_version_cmp("0.1.2", "0.1.3") < 0);
+    TEST_ASSERT_EQUAL(0, t5_ota_version_cmp("0.1.3", "0.1.3-dirty"));
+    TEST_ASSERT_EQUAL(0, t5_ota_version_cmp("0.1", "0.1.0"));
+    /* Settings without developer mode: the same or newer only. */
+    TEST_ASSERT_NOT_NULL(t5_ota_downgrade_refusal("0.1.2", "0.1.3", T5_OTA_FROM_SETTINGS, false));
+    TEST_ASSERT_NULL(t5_ota_downgrade_refusal("0.1.3", "0.1.3", T5_OTA_FROM_SETTINGS, false));
+    TEST_ASSERT_NULL(t5_ota_downgrade_refusal("0.1.4", "0.1.3", T5_OTA_FROM_SETTINGS, false));
+    TEST_ASSERT_NULL(t5_ota_downgrade_refusal("0.1.2", "0.1.3", T5_OTA_FROM_SETTINGS, true));
+    TEST_ASSERT_NULL(t5_ota_downgrade_refusal("0.1.2", "0.1.3", T5_OTA_FROM_CONSOLE, false));
+    TEST_ASSERT_NULL(t5_ota_downgrade_refusal("0.1.2", "0.1.3", T5_OTA_FROM_DEV, false));
+    TEST_ASSERT_NULL(t5_ota_downgrade_refusal("0.1.2", "0.1.3", T5_OTA_FROM_RECOVERY, false));
+}
+
+#define REL(v) "{\"tag_name\":\"v" v "\",\"assets\":[" \
+    "{\"browser_download_url\":\"https://github.com/tab5os/tab5os/releases/download/v" v "/tab5os-sdk-" v ".tar.gz\"}," \
+    "{\"browser_download_url\":\"https://github.com/tab5os/tab5os/releases/download/v" v "/tab5os-" v ".t5os\"}]}"
+
+static void test_pick_release(void)
+{
+    char url[192], ver[32];
+    /* Newest first as GitHub lists them, but the order doesn't matter. */
+    const char *list = "[" REL("0.1.10") "," REL("0.1.3") "," REL("0.1.9") "]";
+    TEST_ASSERT_TRUE(t5_ota_pick_release(list, "0.1.3", url, sizeof url, ver, sizeof ver));
+    TEST_ASSERT_EQUAL_STRING("0.1.10", ver);
+    TEST_ASSERT_EQUAL_STRING("https://github.com/tab5os/tab5os/releases/download/v0.1.10/tab5os-0.1.10.t5os", url);
+    TEST_ASSERT_FALSE(t5_ota_pick_release(list, "0.1.10", url, sizeof url, ver, sizeof ver));
+    TEST_ASSERT_FALSE(t5_ota_pick_release("[]", "0.1.3", url, sizeof url, ver, sizeof ver));
+    /* GitHub's API pretty-prints: a space after the colon. */
+    TEST_ASSERT_TRUE(t5_ota_pick_release(
+        "[{\n  \"browser_download_url\": \"https://github.com/tab5os/tab5os/releases/download/v0.1.4/tab5os-0.1.4.t5os\"\n}]",
+        "0.1.3", url, sizeof url, ver, sizeof ver));
+    TEST_ASSERT_EQUAL_STRING("0.1.4", ver);
+    /* Another repo, a file that isn't the update, or a mismatched name: not an update. */
+    TEST_ASSERT_FALSE(t5_ota_pick_release(
+        "[{\"browser_download_url\":\"https://github.com/evil/tab5os/releases/download/v9.0.0/tab5os-9.0.0.t5os\"},"
+        "{\"browser_download_url\":\"https://github.com/tab5os/tab5os/releases/download/v9.0.0/other.t5os\"},"
+        "{\"browser_download_url\":\"https://github.com/tab5os/tab5os/releases/download/v9.0.0/tab5os-8.0.0.t5os\"}]",
+        "0.1.3", url, sizeof url, ver, sizeof ver));
+    /* A URL quoted in a release's notes is escaped, so it doesn't count. */
+    TEST_ASSERT_FALSE(t5_ota_pick_release(
+        "[{\"body\":\"see \\\"browser_download_url\\\":\\\"https://github.com/tab5os/tab5os/releases/download/"
+        "v9.0.0/tab5os-9.0.0.t5os\\\"\",\"assets\":[]}]",
+        "0.1.3", url, sizeof url, ver, sizeof ver));
+}
+
 /* ---- .t5os from t5ota.py ------------------------------------------------- */
 #define IMG_LEN 4096
 
@@ -222,6 +272,8 @@ int main(void)
     RUN_TEST(test_bootctl_full);
     RUN_TEST(test_target_slot);
     RUN_TEST(test_source_rule);
+    RUN_TEST(test_version_rule);
+    RUN_TEST(test_pick_release);
     RUN_TEST(test_ota_header_from_tool);
     return UNITY_END();
 }

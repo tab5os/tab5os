@@ -202,7 +202,7 @@ Native apps may call the 349 Tab5 OS functions below, 1908 LVGL 9.6 functions (t
 - `struct _lv_obj_t * t5_camera_preview_create(t5_camera_t * cam, struct _lv_obj_t * parent);` (perm camera)
   Live preview inside parent, scaled to fit and kept upright (UI task). Returns the image object; deleting it stops the preview.
 - `t5_err_t t5_camera_record_start(t5_camera_t * cam, const char * path, uint32_t kbps);` (perm camera)
-  H.264 (Annex B elementary stream) to path; kbps 0 = 4000, lowered while the card falls behind. Start and stop block, and need the UI task meanwhile: call them from any task but the UI task (T5_ERR_STATE).
+  Record to path, in the video mode (t5_camera_open). A path ending in .avi records Motion JPEG in AVI, 1280x720 at the sensor's rate, which the built-in player plays: JPEG quality is lowered while the card falls behind, a frame the card can't take is stored as a repeat of the one before so the timing stays right, and kbps is ignored. Any other path records H.264 (Annex B elementary stream); kbps 0 = 4000, lowered while the card falls behind. Start and stop block, and need the UI task meanwhile: call them from any task but the UI task (T5_ERR_STATE).
 - `t5_err_t t5_camera_record_stop(t5_camera_t * cam);` (perm camera)
 - `bool t5_camera_recording(const t5_camera_t * cam);` (perm camera)
 - `void t5_camera_set_mirror(t5_camera_t * cam, bool mirror);` (perm camera)

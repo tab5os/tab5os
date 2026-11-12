@@ -63,6 +63,9 @@ static void phy_to_otg(bool otg)
         usb_serial_jtag_ll_phy_enable_pad(false);
         usb_wrap_ll_phy_select(&USB_WRAP, 0);
     } else {
+        /* OTG's pad off before it moves back to PHY 1: left on, PHY 1 keeps
+         * the I2S pads (BCLK, DOUT stuck) and audio stays silent. */
+        usb_wrap_ll_phy_enable_pad(&USB_WRAP, false);
         usb_wrap_ll_phy_select(&USB_WRAP, 1);
         t5_delay_ms(20);
         usb_serial_jtag_ll_phy_enable_pad(true);

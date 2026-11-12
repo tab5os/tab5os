@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Camera (plan 7.6): full-screen preview, photos (JPEG) and video (H.264)
- * to /sd/DCIM, and a gallery. A launch argument naming a .jpg opens it in
- * the shared viewer (photo.c).
+ * Camera (plan 7.6): full-screen preview, photos (JPEG) and video (Motion
+ * JPEG in AVI) to /sd/DCIM, and a gallery. A launch argument naming a .jpg
+ * opens it in the shared viewer (photo.c), an .avi in the player (video.c).
  *
  * The camera is opened in on_resume and closed in on_suspend, as the
  * lifecycle asks, so the sensor is in reset whenever the app isn't in front.
@@ -35,8 +35,9 @@ typedef struct {
 static cam_app_t s;
 static sa_nav_t s_nav;            /* gallery pages */
 static char s_last_photo[96];     /* for the snackbar's View */
+static char s_last_video[96];     /* for the snackbar's Play */
 
-static void photo_closed(void);
+static void viewer_closed(void);
 
 static void make_dcim(void)
 {
@@ -60,14 +61,24 @@ typedef struct {
 static void cam_stop(void);
 
 /* The snackbar's View: the viewer replaces the preview until it's closed
- * (photo_closed starts the camera again). */
+ * (viewer_closed starts the camera again). */
 static void view_last(void *arg)
 {
     (void)arg;
-    if (!t5_app_running(s.app) || !s_last_photo[0] || sa_photo_is_open() || s.busy) return;
+    if (!t5_app_running(s.app) || !s_last_photo[0] || sa_photo_is_open() || sa_video_is_open() || s.busy) return;
     if (s.cam && t5_camera_recording(s.cam)) return;
     cam_stop();
-    if (!sa_photo_open(s.scr, s_last_photo, photo_closed)) photo_closed();
+    if (!sa_photo_open(s.scr, s_last_photo, viewer_closed)) viewer_closed();
+}
+
+/* The snackbar's Play, the same way. */
+static void play_last(void *arg)
+{
+    (void)arg;
+    if (!t5_app_running(s.app) || !s_last_video[0] || sa_photo_is_open() || sa_video_is_open() || s.busy) return;
+    if (s.cam && t5_camera_recording(s.cam)) return;
+    cam_stop();
+    if (!sa_video_open(s.scr, s_last_video, viewer_closed)) viewer_closed();
 }
 
 static void shot_done(void *p)
@@ -150,7 +161,12 @@ static void rec_done(void *p)
     s.busy = false;
     if (t5_app_running(s.app) && s.video_mode && (!j->start || j->err != T5_OK)) cam_reopen(false);
     if (t5_app_running(s.app)) {
-        if (!j->start) md_snackbar_show(j->err == T5_OK ? "Video saved" : "Couldn't stop recording", NULL, NULL, NULL);
+        if (!j->start && j->err == T5_OK) {
+            snprintf(s_last_video, sizeof s_last_video, "%s", s.rec_path);
+            md_snackbar_show("Video saved", "Play", play_last, NULL);
+        } else if (!j->start) {
+            md_snackbar_show("Couldn't stop recording", NULL, NULL, NULL);
+        }
         else if (j->err == T5_OK) t5_audio_play_sound(T5_SOUND_START);
         else md_snackbar_show("Couldn't start recording", NULL, NULL, NULL);
         rec_paint();
@@ -162,7 +178,7 @@ static void rec_task(void *arg)
 {
     rec_job_t *j = arg;
     if (!s.cam) j->err = T5_ERR_STATE;
-    else j->err = j->start ? t5_camera_record_start(s.cam, j->path, 6000) : t5_camera_record_stop(s.cam);
+    else j->err = j->start ? t5_camera_record_start(s.cam, j->path, 0) : t5_camera_record_stop(s.cam);
     t5_ui_async(rec_done, j);
 }
 
@@ -180,7 +196,9 @@ static void rec_clicked(lv_event_t *e)
             return;
         }
         make_dcim();
-        stamp(s.rec_path, sizeof s.rec_path, "VID", "h264");
+        /* Motion JPEG in AVI: the built-in player plays it (H.264 needs a
+         * decoder the P4 doesn't have). */
+        stamp(s.rec_path, sizeof s.rec_path, "VID", "avi");
         snprintf(j->path, sizeof j->path, "%s", s.rec_path);
         cam_reopen(true);
         if (!s.cam) {
@@ -261,22 +279,24 @@ static void gal_bind(md_list_row_t *r, uint32_t i, void *ud)
     if ((int)i >= g->n) return;
     char when[40];
     lv_label_set_text(r->primary, pretty_stamp(g->names[i], when, sizeof when) ? when : g->names[i]);
-    bool video = strstr(g->names[i], ".h264") != NULL;
+    bool h264 = sa_ends_with(g->names[i], ".h264"), video = h264 || sa_video_can_open(g->names[i]);
     lv_label_set_text(r->icon, video ? MD_ICON_VIDEOCAM : MD_ICON_IMAGE);
     if (r->secondary) {
         char b[24];
         sa_fmt_bytes(b, sizeof b, g->sizes[i]);
-        lv_label_set_text_fmt(r->secondary, video ? "Video, %s. Plays on a computer (H.264)" : "Photo, %s", b);
+        lv_label_set_text_fmt(r->secondary,
+                              h264 ? "Video, %s. Plays on a computer (H.264)" : video ? "Video, %s" : "Photo, %s", b);
     }
 }
 
 static void gal_click(uint32_t i, void *ud)
 {
     gallery_t *g = ud;
-    if ((int)i >= g->n || !sa_photo_can_open(g->names[i])) return;
+    if ((int)i >= g->n) return;
     char path[96];
     snprintf(path, sizeof path, T5_DCIM_DIR "/%s", g->names[i]);
-    sa_photo_open(s.scr, path, NULL);
+    if (sa_photo_can_open(path)) sa_photo_open(s.scr, path, NULL);
+    else if (sa_video_can_open(path)) sa_video_open(s.scr, path, NULL);
 }
 
 static void cam_start(void);
@@ -330,7 +350,7 @@ static void open_gallery(lv_event_t *e)
 static void cam_start(void)
 {
     if (s.cam || !s.granted) return;
-    t5_err_t e = s.video_mode ? t5_camera_open(&s.cam) : t5_camera_open_photo(&s.cam);
+    t5_err_t e = s.video_mode ? t5_camera_open_rgb(&s.cam) : t5_camera_open_photo(&s.cam);
     if (e != T5_OK) {
         char msg[64];
         snprintf(msg, sizeof msg, "Couldn't open the camera (%s)", t5_err_str(e));
@@ -429,9 +449,9 @@ static void on_rotate(t5_app_t *app, int degrees)
     }
 }
 
-/* A photo opened by another app (a launch argument), or from the
+/* A photo or video opened by another app (a launch argument), or from the
  * snackbar, was closed. */
-static void photo_closed(void)
+static void viewer_closed(void)
 {
     if (!s.destroying && s_nav.depth == 0) cam_start();
 }
@@ -450,10 +470,10 @@ static void on_create(t5_app_t *app)
     lv_obj_set_size(s.view, LV_PCT(100), LV_PCT(100));
     lv_obj_set_scrollable(s.view, false);
 
-    /* The preview never sits under the controls: every pixel of it is
-     * redrawn each frame, and the display pipeline's copy cost grows with
-     * its area (see bench-results, Phase 7). Only the small back and mirror
-     * buttons and the status line float over it. */
+    /* The preview never sits under the controls: it is a video plane,
+     * drawn straight into the framebuffer each frame, and whatever lies over
+     * it LVGL redraws each frame too (t5_ui/plane.h). Only the small back
+     * and mirror buttons and the status line float over it. */
     s.frame = lv_obj_create(s.view);
     lv_obj_remove_style_all(s.frame);
     lv_obj_set_scrollable(s.frame, false);
@@ -488,13 +508,14 @@ static void on_create(t5_app_t *app)
     s.granted = t5_app_has_permission(app, T5_PERM_CAMERA);
     if (!s.granted) sa_report(t5_app_request_permission(app, T5_PERM_CAMERA, perm_answer, NULL), "ask for the camera");
     const char *arg = t5_app_launch_arg(app);
-    if (arg[0] == '/') sa_photo_open(s.scr, arg, photo_closed);
+    if (arg[0] == '/' && sa_video_can_open(arg)) sa_video_open(s.scr, arg, viewer_closed);
+    else if (arg[0] == '/') sa_photo_open(s.scr, arg, viewer_closed);
 }
 
 static void on_resume(t5_app_t *app)
 {
     (void)app;
-    if (!sa_photo_is_open() && s_nav.depth == 0) cam_start();
+    if (!sa_photo_is_open() && !sa_video_is_open() && s_nav.depth == 0) cam_start();
 }
 
 static void on_suspend(t5_app_t *app)
@@ -509,6 +530,7 @@ static void on_destroy(t5_app_t *app)
     (void)app;
     s.destroying = true;
     sa_photo_close();
+    sa_video_close();
     cam_stop();
     if (s.timer) lv_timer_delete(s.timer);
     s.timer = NULL;

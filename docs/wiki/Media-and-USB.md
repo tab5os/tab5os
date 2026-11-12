@@ -77,19 +77,41 @@ lv_obj_t *img = t5_camera_preview_create(cam, parent);    /* UI task */
 
 | Operation | Rule |
 | --- | --- |
-| Preview | Scaled to fit and kept upright. Deleting the object stops it. 11 to 13 fps through LVGL |
+| Preview | Scaled to fit and kept upright. Deleting the object stops it. A [video plane](#video-planes): drawn straight into the framebuffer, not through LVGL |
 | `t5_camera_photo(cam, path, quality)` | Blocks until written. **Any task but the UI task** |
-| `t5_camera_record_start` / `_stop` | H.264 Annex B to a file, 720p at 30 fps. Both block and need the UI task to be free. **Any task but the UI task** |
+| `t5_camera_record_start` / `_stop` | A path ending in `.avi`: Motion JPEG in AVI, 720p at the sensor's rate, which the built-in player plays. Any other path: H.264 Annex B. Both block and need the UI task to be free. **Any task but the UI task** |
 | Suspend | **Close in `on_suspend`, and reopen in `on_resume`.** The OS closes it at Sleep and exit if you don't |
 | File paths | Photos and recordings follow the [file rules](Storage.md#which-files-an-app-can-use): `/sd/DCIM` needs `shared_write` |
 
-Output is an elementary H.264 stream, not an MP4. The bitrate defaults to 4000 kbps and lowers if the card can't keep up. Check `t5_camera_stats` for drops.
+An `.avi` recording lowers its JPEG quality (from 70, down to 30) when the card can't keep up, and stores a frame it still can't take as a repeat of the one before, so playback timing stays right. `rec_dropped` in `t5_camera_stats` counts those repeats. At quality 70 it writes about 1.7 MB/s.
+
+An H.264 recording is an elementary stream, not an MP4. The P4 has no H.264 decoder, so the built-in player can't play it: it plays on a computer. The bitrate defaults to 4000 kbps and lowers if the card can't keep up. Check `t5_camera_stats` for drops.
 
 Full recipe: [Camera with permission](Cookbook.md#camera-with-permission).
 
 ## JPEG
 
 `t5_jpeg_size` and `t5_jpeg_decode` use the hardware decoder and produce RGB565. Decoded dimensions are rounded up to 16 px. Call them from a worker task. See [images](UI-Guide.md#images).
+
+## Video planes
+
+The camera preview, the video player and the photo viewer show their pictures as video planes. A plane is an LVGL image object, laid out like any other. Each new frame skips LVGL: the display pipeline scales it, converts it and turns it for the panel in one PPA pass, straight into the framebuffer. LVGL redraws only what lies over the picture. This is internal to the OS for now (`t5_core/plane.h`, `t5_ui/plane.h`).
+
+| | |
+| --- | --- |
+| Cost | The PPA's time goes with the pixels it reads: ~80 ms for a 1600x900 frame, ~51 ms for 1280x720. The panel is portrait and the camera and most video are landscape, so frames are always turned, which the PPA does at no extra cost |
+| Over the picture | Keep it small. LVGL redraws everything over a plane each frame. Small buttons cost a few ms; a full-screen scrim makes every frame a full LVGL redraw |
+| Fast path | The image unscaled, unrotated, opaque, wholly on screen, and on the active screen with no screen animation. Otherwise the frame goes through LVGL like any image |
+
+## Video player
+
+Files, the Camera's gallery and the Videos app play **Motion JPEG in AVI**, with PCM sound (8 or 16 bit, mono or stereo, 8 to 48 kHz). That is what the Camera records. Other sound formats play silently, with a note. To convert a video on a computer:
+
+```sh
+ffmpeg -i in.mp4 -vf scale=1280:-2 -c:v mjpeg -q:v 4 -c:a pcm_s16le out.avi
+```
+
+Each frame is a JPEG for the hardware decoder. Sound sets the clock, and frames that fall behind are skipped without being decoded. Full-screen 1280x720 shows about 19 frames a second, the PPA's limit for turning a frame that size. Smaller videos show more. The Videos app lists the `.avi` files in `/sd/Videos` and `/sd/DCIM`.
 
 ## USB-A host
 

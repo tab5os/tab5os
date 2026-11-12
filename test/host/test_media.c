@@ -1,12 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Phase 6 and 7 logic: audio resampling, mixing, system sounds and echo
  * cancellation; per-app energy; USB-MIDI packets, HID key mapping and
- * keyboard and mouse reports.
+ * keyboard and mouse reports; the AVI container of Motion JPEG recordings.
  */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "unity.h"
+#include "avi.h"
 #include "t5_app/energy.h"
 #include "t5_audio/dsp.h"
 #include "t5_audio/wav.h"
@@ -426,6 +427,95 @@ static void test_hid_mouse_and_late_handler(void)
     TEST_ASSERT_EQUAL(0, s_attached);
 }
 
+
+/* ---- AVI (Motion JPEG recordings) ------------------------------------------------- */
+static uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static void test_avi_header_layout(void)
+{
+    avi_info_t in = { .w = 1280, .h = 720, .us_per_frame = 33205, .frames = 3, .movi_bytes = 300,
+                      .max_chunk = 120, .idx_entries = 3 };
+    uint8_t h[AVI_HDR_LEN];
+    avi_header(h, &in);
+    TEST_ASSERT_EQUAL_MEMORY("RIFF", h, 4);
+    TEST_ASSERT_EQUAL_UINT32(AVI_HDR_LEN - 8 + 300 + 8 + 3 * 16, le32(h + 4));
+    TEST_ASSERT_EQUAL_MEMORY("AVI LIST", h + 8, 8);
+    TEST_ASSERT_EQUAL_UINT32(192, le32(h + 16));        /* the hdrl list */
+    TEST_ASSERT_EQUAL_MEMORY("hdrlavih", h + 20, 8);
+    TEST_ASSERT_EQUAL_UINT32(56, le32(h + 28));
+    TEST_ASSERT_EQUAL_UINT32(33205, le32(h + 32));      /* µs per frame */
+    TEST_ASSERT_EQUAL_UINT32(0x10, le32(h + 44));       /* AVIF_HASINDEX */
+    TEST_ASSERT_EQUAL_UINT32(3, le32(h + 48));          /* frames */
+    TEST_ASSERT_EQUAL_UINT32(1, le32(h + 56));          /* streams */
+    TEST_ASSERT_EQUAL_UINT32(1280, le32(h + 64));
+    TEST_ASSERT_EQUAL_UINT32(720, le32(h + 68));
+    TEST_ASSERT_EQUAL_MEMORY("LIST", h + 88, 4);
+    TEST_ASSERT_EQUAL_UINT32(116, le32(h + 92));        /* the strl list */
+    TEST_ASSERT_EQUAL_MEMORY("strlstrh", h + 96, 8);
+    TEST_ASSERT_EQUAL_MEMORY("vidsMJPG", h + 108, 8);
+    TEST_ASSERT_EQUAL_UINT32(33205, le32(h + 128));     /* scale / rate */
+    TEST_ASSERT_EQUAL_UINT32(1000000, le32(h + 132));
+    TEST_ASSERT_EQUAL_UINT32(3, le32(h + 140));         /* length */
+    TEST_ASSERT_EQUAL_MEMORY("strf", h + 164, 4);
+    TEST_ASSERT_EQUAL_UINT32(40, le32(h + 168));
+    TEST_ASSERT_EQUAL_UINT32(1280, le32(h + 176));
+    TEST_ASSERT_EQUAL_MEMORY("MJPG", h + 188, 4);
+    TEST_ASSERT_EQUAL_MEMORY("LIST", h + 212, 4);
+    TEST_ASSERT_EQUAL_UINT32(4 + 300, le32(h + 216));
+    TEST_ASSERT_EQUAL_MEMORY("movi", h + 220, 4);
+    /* While recording (no index yet): no flag, and no index counted. */
+    in.idx_entries = 0;
+    avi_header(h, &in);
+    TEST_ASSERT_EQUAL_UINT32(0, le32(h + 44));
+    TEST_ASSERT_EQUAL_UINT32(AVI_HDR_LEN - 8 + 300, le32(h + 4));
+}
+
+/* A whole file as the recorder writes it, read back through its index:
+ * odd sizes are padded, an empty chunk repeats a frame. */
+static void test_avi_file_index(void)
+{
+    static uint8_t f[4096];
+    const uint32_t lens[] = { 101, 0, 64, 33 };
+    avi_idx_t idx[4];
+    avi_info_t in = { .w = 320, .h = 240, .us_per_frame = 40000 };
+    size_t at = AVI_HDR_LEN;
+    for (int i = 0; i < 4; i++) {
+        idx[i] = (avi_idx_t){ 4 + in.movi_bytes, lens[i] };
+        avi_chunk_header(f + at, lens[i]);
+        memset(f + at + AVI_CHUNK_HDR, 0xA0 + i, lens[i]);
+        uint32_t n = avi_chunk_bytes(lens[i]);
+        TEST_ASSERT_EQUAL_UINT32(AVI_CHUNK_HDR + lens[i] + (lens[i] & 1), n);
+        if (lens[i] & 1) f[at + AVI_CHUNK_HDR + lens[i]] = 0;
+        at += n;
+        in.movi_bytes += n;
+        in.frames++;
+        if (lens[i] > in.max_chunk) in.max_chunk = lens[i];
+    }
+    avi_idx1_header(f + at, 4);
+    at += 8;
+    for (int i = 0; i < 4; i++, at += 16) avi_idx1_entry(f + at, &idx[i]);
+    in.idx_entries = 4;
+    avi_header(f, &in);
+    TEST_ASSERT_EQUAL_UINT32(at - 8, le32(f + 4));          /* RIFF covers the file */
+    const uint32_t movi = 220;                               /* the 'movi' fourcc */
+    const uint8_t *ix = f + AVI_HDR_LEN + in.movi_bytes;
+    TEST_ASSERT_EQUAL_MEMORY("idx1", ix, 4);
+    TEST_ASSERT_EQUAL_UINT32(4 * 16, le32(ix + 4));
+    for (int i = 0; i < 4; i++) {
+        const uint8_t *e = ix + 8 + i * 16;
+        TEST_ASSERT_EQUAL_MEMORY("00dc", e, 4);
+        TEST_ASSERT_EQUAL_UINT32(lens[i] ? 0x10 : 0, le32(e + 4));
+        const uint8_t *ck = f + movi + le32(e + 8);
+        TEST_ASSERT_EQUAL_MEMORY("00dc", ck, 4);
+        TEST_ASSERT_EQUAL_UINT32(lens[i], le32(ck + 4));
+        TEST_ASSERT_EQUAL_UINT32(lens[i], le32(e + 12));
+        if (lens[i]) TEST_ASSERT_EQUAL_UINT8(0xA0 + i, ck[8]);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -448,5 +538,7 @@ int main(void)
     RUN_TEST(test_hid_keys);
     RUN_TEST(test_hid_keyboard_reports);
     RUN_TEST(test_hid_mouse_and_late_handler);
+    RUN_TEST(test_avi_header_layout);
+    RUN_TEST(test_avi_file_index);
     return UNITY_END();
 }

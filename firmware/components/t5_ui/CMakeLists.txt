@@ -1,6 +1,6 @@
 include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS ${T5_UI_PORTABLE_SRCS} ${T5_UI_LVGL_SRCS} "ui.c" "ui_hw.c" "hid_input.c" "lv_mem_t5.c" "ppa_img_t5.c" "ppa_fill_t5.c"
+    SRCS ${T5_UI_PORTABLE_SRCS} ${T5_UI_LVGL_SRCS} "ui.c" "ui_hw.c" "hid_input.c" "lv_mem_t5.c" "ppa_img_t5.c" "ppa_fill_t5.c" "plane.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core t5_bsp lvgl__lvgl

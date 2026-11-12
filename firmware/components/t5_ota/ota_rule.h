@@ -1,10 +1,79 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Which images a source may install (t5_ota_source_t in ota.h). Pure, for
- * host tests.
+ * Which images a source may install (t5_ota_source_t in ota.h), and which
+ * published release is an update. Pure, for host tests.
  */
 #pragma once
 #include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
 #include "t5_ota/ota.h"
+
+/* <0, 0 or >0 as version a is older than, the same as or newer than b.
+ * Dotted numbers ("0.1.10" is newer than "0.1.9"); a missing part counts
+ * as 0, and anything after the numbers ("-dirty") is ignored. */
+static inline int t5_ota_version_cmp(const char *a, const char *b)
+{
+    for (int i = 0; i < 4; i++) {
+        unsigned long x = 0, y = 0;
+        while (*a >= '0' && *a <= '9') x = x * 10 + (unsigned long)(*a++ - '0');
+        while (*b >= '0' && *b <= '9') y = y * 10 + (unsigned long)(*b++ - '0');
+        if (x != y) return x < y ? -1 : 1;
+        if (*a == '.') a++;
+        if (*b == '.') b++;
+    }
+    return 0;
+}
+
+/* NULL when an image of version `incoming` may replace `running` from this
+ * source, else why not. From Settings without developer mode only the same
+ * or a newer version goes in, so an old signed release (and its old bugs)
+ * can't be put back from a card or a download. The version is the one in
+ * the image's app description, which the signature covers. */
+static inline const char *t5_ota_downgrade_refusal(const char *incoming, const char *running, t5_ota_source_t from,
+                                                   bool consent)
+{
+    if (from != T5_OTA_FROM_SETTINGS || consent) return NULL;
+    return t5_ota_version_cmp(incoming, running) < 0 ? "older than this system: install it in developer mode" : NULL;
+}
+
+/* Where releases are published, and the update file in each one. */
+#define T5_OTA_RELEASES_API "https://api.github.com/repos/tab5os/tab5os/releases?per_page=10"
+#define T5_OTA_ASSET_PREFIX "https://github.com/tab5os/tab5os/releases/download/v"
+
+/* The newest release in a GitHub releases list (JSON) that is newer than
+ * `running`, by its update asset's URL: T5_OTA_ASSET_PREFIX <v>/tab5os-<v>.t5os.
+ * Fills url and version and returns true, or false when there is none.
+ * Text inside a release's notes can't match: its quotes are escaped. */
+static inline bool t5_ota_pick_release(const char *json, const char *running, char *url, size_t url_len, char *version,
+                                       size_t version_len)
+{
+    static const char key[] = "\"browser_download_url\"";
+    const size_t plen = sizeof T5_OTA_ASSET_PREFIX - 1;
+    bool found = false;
+    char best[32] = "";
+    for (const char *p = strstr(json, key); p; p = strstr(p + 1, key)) {
+        const char *u = p + sizeof key - 1;     /* then `: "` with or without spaces */
+        while (*u == ' ' || *u == '\t' || *u == '\n' || *u == '\r') u++;
+        if (*u++ != ':') continue;
+        while (*u == ' ' || *u == '\t' || *u == '\n' || *u == '\r') u++;
+        if (*u++ != '"') continue;
+        const char *end = strchr(u, '"');
+        if (!end || strncmp(u, T5_OTA_ASSET_PREFIX, plen)) continue;
+        const char *v = u + plen, *slash = memchr(v, '/', (size_t)(end - v));
+        if (!slash || slash == v || (size_t)(slash - v) >= sizeof best) continue;
+        char ver[32], want[64];
+        snprintf(ver, sizeof ver, "%.*s", (int)(slash - v), v);
+        snprintf(want, sizeof want, "/tab5os-%s.t5os", ver);
+        if ((size_t)(end - slash) != strlen(want) || strncmp(slash, want, strlen(want))) continue;
+        if (t5_ota_version_cmp(ver, running) <= 0 || (found && t5_ota_version_cmp(ver, best) <= 0)) continue;
+        if ((size_t)(end - u) >= url_len) continue;
+        snprintf(best, sizeof best, "%s", ver);
+        snprintf(url, url_len, "%.*s", (int)(end - u), u);
+        found = true;
+    }
+    if (found) snprintf(version, version_len, "%s", best);
+    return found;
+}
 
 /* NULL when an image with this header may go in from this source, else why
  * not. trusted: a built-in key signed it. */

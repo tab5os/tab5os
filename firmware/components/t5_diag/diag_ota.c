@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0
- * ota [file PATH [unsigned] | url URL [unsigned] | selftest [SIG KEYID] | recovery | safemode]
+ * ota [file PATH [unsigned] | url URL [unsigned] | selftest [SIG KEYID] | recovery | safemode |
+ *      check | online [install]]
  * (plan 9.1-9.3)
  */
 #include <stdio.h>
 #include <string.h>
 #include "esp_console.h"
 #include "t5_ota/ota.h"
+#include "t5_core/os.h"
 #include "t5_ota_net/ota_url.h"
+#include "t5_ota_net/update.h"
 #include "diag_priv.h"
 
 typedef struct {
@@ -46,8 +49,35 @@ static int ota_job(void *arg)
     return e != T5_OK;
 }
 
+/* ota check: check the releases now and wait for the answer (up to 30 s);
+ * ota online: what the last check found; ota online install: install it,
+ * as Settings does (signed by a built-in key, not older than this). */
+static int cmd_online(int argc, char **argv)
+{
+    t5_err_t e = T5_OK;
+    if (!strcmp(argv[1], "check")) {
+        e = t5_update_check_now();
+        t5_update_status_t u;
+        for (int i = 0; e == T5_OK && i < 300; i++) {
+            t5_update_status(&u);
+            if (u.state != T5_UPDATE_CHECKING) break;
+            t5_delay_ms(100);
+        }
+    } else if (argc >= 3 && !strcmp(argv[2], "install")) {
+        e = t5_update_install();
+    }
+    if (e != T5_OK) printf("%s\n", t5_err_str(e));
+    static const char *const names[] = { "not checked", "checking", "up to date", "available", "installing", "failed" };
+    t5_update_status_t u;
+    t5_update_status(&u);
+    printf("online %s%s%s%s%s, checked %lld s ago\n", names[u.state], u.version[0] ? " " : "", u.version,
+           u.error[0] ? ": " : "", u.error, u.checked_us ? (long long)((t5_time_us() - u.checked_us) / 1000000) : -1LL);
+    return e != T5_OK;
+}
+
 static int cmd_ota(int argc, char **argv)
 {
+    if (argc >= 2 && (!strcmp(argv[1], "check") || !strcmp(argv[1], "online"))) return cmd_online(argc, argv);
     /* Writing a slot needs an internal stack; a URL install also does TLS. */
     ota_args_t a = { argc, argv };
     return diag_run_internal("t5_otacmd", 12288, ota_job, &a);
@@ -57,7 +87,7 @@ void diag_register_ota(void)
 {
     const esp_console_cmd_t c = {
         .command = "ota",
-        .help = "Updates: file PATH | url URL [unsigned] | selftest | recovery | safemode",
+        .help = "Updates: file PATH | url URL [unsigned] | selftest | recovery | safemode | check | online [install]",
         .func = cmd_ota,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&c));

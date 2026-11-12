@@ -72,6 +72,8 @@ CONFIG_BT_NIMBLE_DYNAMIC_SERVICE=y
 CONFIG_BT_NIMBLE_42_FEATURE_SUPPORT=y
 CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+# Warnings and errors only: INFO logs every GAP procedure (7 KB of strings).
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 
 # Phase 4: LVGL 9.6 (pinned for API level 1). The UI task owns LVGL and
 # locks it itself (t5_ui_lock).

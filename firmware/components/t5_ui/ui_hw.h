@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_core/plane.h"
 #include "t5_ui/rotation.h"
 
 #include "lvgl.h"
@@ -36,6 +37,21 @@ void t5_ui_hw_set_done_cb(t5_ui_hw_done_t cb);
  * lands. */
 t5_err_t t5_ui_hw_band_async(const uint16_t *src, int32_t stride_px, t5_rect_t dst, uint16_t *fb, t5_rotation_t rot,
                              void *user);
+/* Rotate the block a of a src_w x src_h RGB565 picture into fb where the
+ * logical rectangle dst (the same size) lands. */
+t5_err_t t5_ui_hw_blit_async(const uint16_t *src, int32_t src_w, int32_t src_h, t5_rect_t a, t5_rect_t dst,
+                             uint16_t *fb, t5_rotation_t rot, void *user);
+/* A video plane's frame (t5_core/plane.h) into fb where the logical
+ * rectangle dst (the frame's landed size) lands, turned for the panel. */
+t5_err_t t5_ui_hw_plane_async(const t5_plane_src_t *s, t5_rect_t dst, uint16_t *fb, t5_rotation_t rot);
+/* The same into a logical RGB565 picture at the frame's (dx, dy).
+ * Blocking, renderer client. */
+t5_err_t t5_ui_hw_plane_to(const t5_plane_src_t *s, uint16_t *dst, int32_t dst_w, int32_t dst_h, size_t dst_bytes);
+/* The logical rectangle a of fb, turned back upright, into dst at (dx, dy). */
+t5_err_t t5_ui_hw_readback_async(const uint16_t *fb, t5_rect_t a, t5_rotation_t rot, uint16_t *dst, int32_t dst_w,
+                                 int32_t dst_h, size_t dst_bytes, int32_t dx, int32_t dy);
+/* Black into the rectangle r of a pic_w x pic_h RGB565 picture. Blocking. */
+t5_err_t t5_ui_hw_fill_black(uint16_t *buf, int32_t pic_w, int32_t pic_h, size_t bytes, t5_rect_t r);
 /* Copy a panel-space rectangle between framebuffers. */
 t5_err_t t5_ui_hw_fb_copy_async(const uint16_t *src_fb, uint16_t *dst_fb, t5_rect_t panel, void *user);
 /* Wait until every async transaction has finished. */

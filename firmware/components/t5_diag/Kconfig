@@ -1,0 +1,13 @@
+menu "Tab5 OS console"
+
+    config T5_DIAG_BENCH
+        bool "Phase 0 bench commands (elf, gpio, sleep)"
+        default n
+        help
+            The bring-up benchmarks: `elf bench` (bench check 11; embeds a
+            61 KB test ELF and the same kernels built in), `gpio watch|get`
+            and `sleep light|result` (bench 0.6-0.8). Their results are in
+            docs/bench-results.md. Off in normal builds: about 120 KB of
+            flash that nothing else uses. Turn on to re-run those checks.
+
+endmenu

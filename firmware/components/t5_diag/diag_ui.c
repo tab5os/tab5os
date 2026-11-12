@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
  * ui: display pipeline, rotation and the rendering gate (plan 4.2, 4.8, 4.9).
  *
- *   ui                         rotation, lock, frame counters
+ *   ui                         rotation, lock, frame counters, video planes
  *   ui rot 0|90|180|270        rotate now
  *   ui lock on|off             rotation lock (persists)
  *   ui auto on|off             auto-rotate from the IMU
@@ -33,6 +33,7 @@
 #include "md/md.h"
 #include "md/md_diag.h"
 #include "t5_display/t5_display.h"
+#include "t5_ui/plane.h"
 #include "t5_ui/t5_ui.h"
 #include "t5_ui/ui_diag.h"
 #include "t5_shell/shell.h"
@@ -53,6 +54,10 @@ static void print_status(void)
            (unsigned)s.frames, (unsigned)s.panel_frames, (unsigned)s.fps, (unsigned)s.render_us_avg,
            (unsigned)s.render_us_max, (unsigned)s.copy_us_avg, (unsigned)s.copy_kb_s, (unsigned)s.ui_loop_max_ms,
            (unsigned)s.touch_to_flush_us, (unsigned)s.refresh_period_ms);
+    t5_ui_plane_stats_t ps;
+    t5_ui_plane_stats(&ps);
+    printf("video planes: %u frames straight to the framebuffer, %u through LVGL\n", (unsigned)ps.fast,
+           (unsigned)ps.slow);
 }
 
 typedef struct {

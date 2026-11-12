@@ -9,7 +9,7 @@
  *   audio tone <hz> <ms>
  *   audio play <s> [hz]            a tone stream for s seconds, report underruns (7.3)
  *   audio rec <s> [aec]            record 16 kHz mono, report levels (7.2)
- *   cam open [photo]|close|stats|photo <path>|rec <path> <s>|snap [w h]
+ *   cam open [photo|rgb]|close|stats|photo <path>|rec <path> <s>|snap [w h]  (rec: .avi is MJPEG, else H.264)
  *   usb                            devices and counters
  *   usb host on|off | eject | midi <s> | serial <baud> <text>
  *   usbc console | storage [timeout s]
@@ -457,8 +457,8 @@ static int cmd_cam(int argc, char **argv)
     if (s_cam && !t5_camera_active()) s_cam = NULL;
     if (!strcmp(c, "open")) {
         if (s_cam) return 0;
-        bool photo = argc == 3 && !strcmp(argv[2], "photo");
-        t5_err_t e = photo ? t5_camera_open_photo(&s_cam) : t5_camera_open(&s_cam);
+        bool photo = argc == 3 && !strcmp(argv[2], "photo"), rgb = argc == 3 && !strcmp(argv[2], "rgb");
+        t5_err_t e = photo ? t5_camera_open_photo(&s_cam) : rgb ? t5_camera_open_rgb(&s_cam) : t5_camera_open(&s_cam);
         printf("%s\n", t5_err_str(e));
         return e != T5_OK;
     }
@@ -522,7 +522,7 @@ static int cmd_cam(int argc, char **argv)
         heap_caps_free(px);
         return e != T5_OK;
     }
-    printf("usage: cam [open [photo] | close | stats | photo <path> | rec <path> <s> | uirec <s> | snap [w h]]\n");
+    printf("usage: cam [open [photo|rgb] | close | stats | photo <path> | rec <path> <s> | uirec <s> | snap [w h]]\n");
     return 1;
 }
 

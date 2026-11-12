@@ -159,13 +159,20 @@ static t5_err_t submit(ppa_srm_oper_config_t *op, void *user)
 t5_err_t t5_ui_hw_band_async(const uint16_t *src, int32_t stride_px, t5_rect_t dst, uint16_t *fb, t5_rotation_t rot,
                              void *user)
 {
+    t5_rect_t a = { 0, 0, t5_rect_w(&dst) - 1, t5_rect_h(&dst) - 1 };
+    return t5_ui_hw_blit_async(src, stride_px, t5_rect_h(&dst), a, dst, fb, rot, user);
+}
+
+t5_err_t t5_ui_hw_blit_async(const uint16_t *src, int32_t src_w, int32_t src_h, t5_rect_t a, t5_rect_t dst,
+                             uint16_t *fb, t5_rotation_t rot, void *user)
+{
     if (!s_async) return T5_ERR_STATE;
     t5_rect_t p = t5_rot_rect_to_panel(rot, dst);
-    int32_t w = t5_rect_w(&dst), h = t5_rect_h(&dst);
     ppa_srm_oper_config_t op = {
         .in = {
-            .buffer = src, .pic_w = (uint32_t)stride_px, .pic_h = (uint32_t)h,
-            .block_w = (uint32_t)w, .block_h = (uint32_t)h, .block_offset_x = 0, .block_offset_y = 0,
+            .buffer = src, .pic_w = (uint32_t)src_w, .pic_h = (uint32_t)src_h,
+            .block_w = (uint32_t)t5_rect_w(&a), .block_h = (uint32_t)t5_rect_h(&a),
+            .block_offset_x = (uint32_t)a.x1, .block_offset_y = (uint32_t)a.y1,
             .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
         },
         .out = {
@@ -200,6 +207,114 @@ t5_err_t t5_ui_hw_fb_copy_async(const uint16_t *src_fb, uint16_t *dst_fb, t5_rec
         .scale_x = 1.0f, .scale_y = 1.0f,
     };
     return submit(&op, user);
+}
+
+/* ---- video planes ---------------------------------------------------------------- */
+static int angle_deg(t5_rotation_t r)
+{
+    switch (r) {
+    case T5_ROT_90: return 270;
+    case T5_ROT_180: return 180;
+    case T5_ROT_270: return 90;
+    default: return 0;
+    }
+}
+
+static ppa_srm_rotation_angle_t ppa_rot(int deg)
+{
+    switch (((deg % 360) + 360) % 360) {
+    case 90: return PPA_SRM_ROTATION_ANGLE_90;
+    case 180: return PPA_SRM_ROTATION_ANGLE_180;
+    case 270: return PPA_SRM_ROTATION_ANGLE_270;
+    default: return PPA_SRM_ROTATION_ANGLE_0;
+    }
+}
+
+/* The frame's own turn and mirror (rotate, then mirror the result), then
+ * the panel's turn: R(a2) M R(a1) = M R(a1 - a2), as the PPA does it. */
+static void src_op(ppa_srm_oper_config_t *op, const t5_plane_src_t *s, int panel_deg)
+{
+    float sc = (float)s->k / 16.0f, sy = (float)(s->ky ? s->ky : s->k) / 16.0f;
+    *op = (ppa_srm_oper_config_t){
+        .in = {
+            .buffer = s->buf, .pic_w = s->pic_w, .pic_h = s->pic_h,
+            .block_w = s->w, .block_h = s->h, .block_offset_x = s->x, .block_offset_y = s->y,
+            .srm_cm = s->fmt == T5_PLANE_YUV420 ? PPA_SRM_COLOR_MODE_YUV420 : PPA_SRM_COLOR_MODE_RGB565,
+        },
+        .rotation_angle = ppa_rot(s->mirror ? s->rot - panel_deg : s->rot + panel_deg),
+        .scale_x = sc, .scale_y = sy,
+        .mirror_x = s->mirror,
+    };
+}
+
+t5_err_t t5_ui_hw_plane_async(const t5_plane_src_t *s, t5_rect_t dst, uint16_t *fb, t5_rotation_t rot)
+{
+    if (!s_async) return T5_ERR_STATE;
+    t5_rect_t p = t5_rot_rect_to_panel(rot, dst);
+    ppa_srm_oper_config_t op;
+    src_op(&op, s, angle_deg(rot));
+    op.out = (ppa_out_pic_blk_config_t){
+        .buffer = fb, .buffer_size = (uint32_t)T5_PANEL_W * T5_PANEL_H * 2,
+        .pic_w = T5_PANEL_W, .pic_h = T5_PANEL_H,
+        .block_offset_x = (uint32_t)p.x1, .block_offset_y = (uint32_t)p.y1,
+        .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+    };
+    return submit(&op, NULL);
+}
+
+t5_err_t t5_ui_hw_plane_to(const t5_plane_src_t *s, uint16_t *dst, int32_t dst_w, int32_t dst_h, size_t dst_bytes)
+{
+    if (!s_srm[0]) return T5_ERR_STATE;
+    ppa_srm_oper_config_t op;
+    src_op(&op, s, 0);
+    op.out = (ppa_out_pic_blk_config_t){
+        .buffer = dst, .buffer_size = (uint32_t)dst_bytes, .pic_w = (uint32_t)dst_w, .pic_h = (uint32_t)dst_h,
+        .block_offset_x = s->dx, .block_offset_y = s->dy, .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+    };
+    op.mode = PPA_TRANS_MODE_BLOCKING;
+    return ppa_do_scale_rotate_mirror(s_srm[0], &op) == ESP_OK ? T5_OK : T5_ERR_IO;
+}
+
+t5_err_t t5_ui_hw_readback_async(const uint16_t *fb, t5_rect_t a, t5_rotation_t rot, uint16_t *dst, int32_t dst_w,
+                                 int32_t dst_h, size_t dst_bytes, int32_t dx, int32_t dy)
+{
+    if (!s_async) return T5_ERR_STATE;
+    t5_rect_t p = t5_rot_rect_to_panel(rot, a);
+    ppa_srm_oper_config_t op = {
+        .in = {
+            .buffer = fb, .pic_w = T5_PANEL_W, .pic_h = T5_PANEL_H,
+            .block_w = (uint32_t)t5_rect_w(&p), .block_h = (uint32_t)t5_rect_h(&p),
+            .block_offset_x = (uint32_t)p.x1, .block_offset_y = (uint32_t)p.y1,
+            .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+        },
+        .out = {
+            .buffer = dst, .buffer_size = (uint32_t)dst_bytes, .pic_w = (uint32_t)dst_w, .pic_h = (uint32_t)dst_h,
+            .block_offset_x = (uint32_t)dx, .block_offset_y = (uint32_t)dy, .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+        },
+        .rotation_angle = ppa_rot(360 - angle_deg(rot)),
+        .scale_x = 1.0f, .scale_y = 1.0f,
+    };
+    return submit(&op, NULL);
+}
+
+static ppa_client_handle_t s_fill;
+
+t5_err_t t5_ui_hw_fill_black(uint16_t *buf, int32_t pic_w, int32_t pic_h, size_t bytes, t5_rect_t r)
+{
+    if (!s_fill) {
+        const ppa_client_config_t c = { .oper_type = PPA_OPERATION_FILL, .max_pending_trans_num = 1 };
+        if (ppa_register_client(&c, &s_fill) != ESP_OK) return T5_ERR_IO;
+    }
+    ppa_fill_oper_config_t op = {
+        .out = {
+            .buffer = buf, .buffer_size = (uint32_t)bytes, .pic_w = (uint32_t)pic_w, .pic_h = (uint32_t)pic_h,
+            .block_offset_x = (uint32_t)r.x1, .block_offset_y = (uint32_t)r.y1, .fill_cm = PPA_FILL_COLOR_MODE_RGB565,
+        },
+        .fill_block_w = (uint32_t)t5_rect_w(&r), .fill_block_h = (uint32_t)t5_rect_h(&r),
+        .fill_argb_color = { .val = 0xFF000000u },
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+    return ppa_do_fill(s_fill, &op) == ESP_OK ? T5_OK : T5_ERR_IO;
 }
 
 bool t5_ui_hw_busy(void)

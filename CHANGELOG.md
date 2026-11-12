@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Signed updates over Wi-Fi.** Releases are now signed with the Tab5 OS release key, and the OS trusts it (`firmware/ota_keys/release.pem`). The Tab5 checks the GitHub releases about once a day while Wi-Fi is connected, says when a newer one is out, and Settings > Updates has a new Over Wi-Fi section with Install and Check now. A signed update installs with developer mode off, from Wi-Fi or the SD card. Nothing installs without a tap. From Settings without developer mode, an update older than the running system is refused. Coming from 0.1.3 or earlier, which trust no key, install this release once in developer mode or with `flash_all.sh`. See [installing and updating](docs/flashing.md#updating).
+- **A built-in video player.** Files, the Camera's gallery and a new Videos app play Motion JPEG in AVI, with PCM sound, full screen, with play, pause and a seek bar. The P4 has no H.264 decoder, so H.264 isn't played. To convert a video: `ffmpeg -i in.mp4 -vf scale=1280:-2 -c:v mjpeg -q:v 4 -c:a pcm_s16le out.avi`. See [the video player](docs/wiki/Media-and-USB.md#video-player).
+- **The Camera records video the player can play**: Motion JPEG in AVI (`.avi`), 720p at 30 fps. The quality drops a little if the card can't keep up. Apps still choose H.264 by recording to any other file name.
+- **A smoother camera preview**, 15 fps where it was 11. The preview, videos and photos are now drawn straight into the screen by the PPA in one pass, without going through the UI renderer (video planes).
+- **Zoom in the photo viewer**: pinch, or double-tap to zoom in on a spot and back out; drag to move around while zoomed in.
+- **A smaller OS image.** The Phase 0 bench commands (`elf bench`, `gpio watch|get`, `sleep light|result`) are left out of normal builds, and NimBLE logs only warnings and errors. The image is 132 KB smaller, about 3.5% of an update slot. Apps, the app API and the SDK are unchanged. To get the bench commands back, build with `CONFIG_T5_DIAG_BENCH=y` (see [bench procedures](docs/bench-procedures.md)).
+
 ## 0.1.3 (pre-release), Nov 10, 2026
 
 The standby screen shows every app card in a stack you can scroll, beside a clock that fills half the screen.

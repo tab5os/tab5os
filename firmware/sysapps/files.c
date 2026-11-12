@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Files (plan 6.6): browse /sd, /data and a USB drive at /usb; install a
- * .t5app by tapping it; open photos in the Camera app's gallery; delete;
+ * .t5app by tapping it; view photos and play videos (.avi); delete;
  * safe eject of the SD card and the USB drive. The launch argument opens a
  * directory.
  */
@@ -49,7 +49,7 @@ static const char *icon_for(const entry_t *e)
     if (e->dir) return MD_ICON_FOLDER;
     if (ends_with(e->name, ".t5app")) return MD_ICON_EXTENSION;
     if (ends_with(e->name, ".jpg") || ends_with(e->name, ".jpeg") || ends_with(e->name, ".png")) return MD_ICON_IMAGE;
-    if (ends_with(e->name, ".h264") || ends_with(e->name, ".mp4")) return MD_ICON_VIDEOCAM;
+    if (ends_with(e->name, ".h264") || ends_with(e->name, ".mp4") || ends_with(e->name, ".avi")) return MD_ICON_VIDEOCAM;
     if (ends_with(e->name, ".wav") || ends_with(e->name, ".mp3")) return MD_ICON_MUSIC_NOTE;
     return MD_ICON_INSERT_DRIVE_FILE;
 }
@@ -291,6 +291,7 @@ static void entry_menu_picked(int item, void *ud)
         if (m->dir) open_dir(m->path);
         else if (ends_with(m->path, ".t5app")) ask_install(m->path);
         else if (sa_photo_can_open(m->path)) sa_photo_open(t5_app_screen(s_app), m->path, NULL);
+        else if (sa_video_can_open(m->path)) sa_video_open(t5_app_screen(s_app), m->path, NULL);
         else md_snackbar_show("No app on the Tab5 opens this kind of file", NULL, NULL, NULL);
     } else if (item == 1) {
         ask_delete(m->path, m->dir);
@@ -318,6 +319,7 @@ static void clicked(uint32_t i, void *ud)
     if (e->dir) open_dir(full);
     else if (ends_with(e->name, ".t5app")) ask_install(full);
     else if (sa_photo_can_open(full)) sa_photo_open(t5_app_screen(s_app), full, NULL);
+    else if (sa_video_can_open(full)) sa_video_open(t5_app_screen(s_app), full, NULL);
     else entry_menu(p, i);
 }
 
@@ -507,6 +509,7 @@ static void on_destroy(t5_app_t *app)
 {
     (void)app;
     sa_photo_close();
+    sa_video_close();
     s_app = NULL;                  /* a running format reports to nobody */
     sa_nav_destroy(&s_nav);
 }

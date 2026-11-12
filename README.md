@@ -49,6 +49,8 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 
 ## Bring-up console
 
+Commands marked "bench builds only" are left out unless the firmware is built with `CONFIG_T5_DIAG_BENCH=y` (see [bench procedures](docs/bench-procedures.md)).
+
 | Command | Purpose |
 | --- | --- |
 | `sys` | Chip revision, clocks, PSRAM, heap, partition, reset reason |
@@ -62,9 +64,9 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `fs df\|ls\|cat\|rm\|stress\|verify\|eject\|rescan\|sdraw\|sdbench` | `/data` and `/sd` |
 | `disp` / `disp bl\|fill\|sleep\|wake\|ids` | Display |
 | `touch` / `touch watch <s>` / `touch dots on\|off` | Touch |
-| `gpio watch <ms> [pins] [log]` / `gpio get` | Edge watcher for bench checks |
-| `sleep light <ms> [MB] [g<pin>...]` / `sleep result` | Light-sleep test |
-| `elf bench [rounds]` | ELF-in-PSRAM benchmark |
+| `gpio watch <ms> [pins] [log]` / `gpio get` | Edge watcher for bench checks (bench builds only) |
+| `sleep light <ms> [MB] [g<pin>...]` / `sleep result` | Light-sleep test (bench builds only) |
+| `elf bench [rounds]` | ELF-in-PSRAM benchmark (bench builds only) |
 | `dmesg` | Log since boot |
 | `power` / `power locks\|hooks\|sleep\|wake\|screenoff` | Power state, wake locks, suspend hooks |
 | `power lock <type> [ms]` / `unlock` / `profile` / `timers` / `alarm <s>` / `off --force` | Locks, idle timers, scheduled wake, soft off |
@@ -83,7 +85,7 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `shell home\|qs\|toast <text>\|launch <id> [arg]` | Shell: go home, quick settings, a snackbar, open an app with an argument |
 | `audio` / `audio vol\|mute\|sounds\|sound\|tone ...` | Audio state, volume, system sounds, a test tone |
 | `audio play <s>` / `rec <s> [aec]` / `echo <s>` | Playback (underruns), recording (levels), echo cancellation with and without |
-| `cam open\|close\|stats\|photo <path>\|rec <path> <s>\|snap` | Camera: stats, a JPEG, an H.264 recording, the preview as base64 |
+| `cam open [photo\|rgb]\|close\|stats\|photo <path>\|rec <path> <s>\|snap` | Camera: stats, a JPEG, a recording (`.avi` is Motion JPEG, else H.264), the preview as base64 |
 | `usb` / `usb host on\|off\|eject\|midi <s>\|serial <baud> <text>` | USB-A devices and classes |
 | `usbc console\|storage [s]\|trace` | USB-C role: hand the SD card to a computer until it ejects it (or for s seconds); the console is gone meanwhile |
 | `py exec <code>\|run <file>\|test` | MicroPython: run code (statements separated by `;`), a script, or the containment checks |

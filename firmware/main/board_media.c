@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "t5_camera/camera.h"
+#include "t5_ui/plane.h"
 #include "t5_ui/t5_ui.h"
 #include "board_media.h"
 
@@ -27,6 +28,7 @@ void board_media_wire(void)
         .lend_ram = t5_ui_lend_internal,
         .reclaim_ram = t5_ui_reclaim_internal,
         .ui_call = ui_call,
+        .plane_show = t5_ui_plane_create,
     };
     t5_camera_set_host(&host);
     /* The UI starts last; by then internal RAM has no 100 KB piece left for

@@ -13,8 +13,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+#include <stdio.h>
 #include "esp_err.h"
 #include "t5_ota/ota.h"
+#include "t5_ota_net/update.h"
 #include "t5_abi/t5_abi.h"
 #include "t5_battery/battery.h"
 #include "t5_bsp/board.h"
@@ -58,6 +60,14 @@ static void start(const char *what, t5_err_t e)
     T5_LOGE(TAG, "%s failed: %s", what, t5_err_str(e));
     if (s_nfailed < BOOT_FAILS_MAX) s_failed[s_nfailed] = what;
     s_nfailed++;
+}
+
+/* A newer release turned up in the daily check: say so once. */
+static void update_found(const char *version)
+{
+    char msg[96];
+    snprintf(msg, sizeof msg, "Tab5 OS %s is available. Install it in Settings > Updates.", version);
+    T5_IGNORE(t5_shell_toast(msg));     /* no UI: the log has it */
 }
 
 static void boot_summary(void)
@@ -146,6 +156,7 @@ void app_main(void)
 
     /* Developer mode (plan 8.5): listens on the network only if it is on. */
     start("developer mode", t5_dev_init());
+    start("update check", t5_update_start(update_found));   /* daily, over Wi-Fi */
     ESP_ERROR_CHECK(t5_diag_start());
     boot_summary();
     /* Healthy once the shell is on the panel, or after 10 s (a boot without
