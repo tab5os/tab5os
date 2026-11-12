@@ -1,6 +1,6 @@
 # Tab5 OS: device emulation and raw radio access for apps
 
-Nov 12, 2026 · @Kanishka · draft for review · targets API level 2
+Nov 12, 2026 · @Kanishka · built on branch io-access (not yet run on hardware) · API level 2
 
 ## Summary
 
@@ -89,7 +89,7 @@ typedef struct {
     const char *manufacturer, *product, *serial;   /* NULL: "Tab5 OS", the app's name, the chip's */
     uint8_t hid_count;            /* 0..3 */
     t5_usbdev_hid_t hid[3];
-    uint8_t midi_cables;          /* 0 = no MIDI, 1..4 virtual cables in each direction */
+    bool midi;                    /* one USB MIDI port (cable 0) */
 } t5_usbdev_cfg_t;
 
 /* Asks the user the first time (blocks until answered: T5_ERR_DENIED), then
@@ -166,7 +166,7 @@ t5_err_t t5_usb_close(t5_usb_handle_t *h);   /* releases every claim */
 
 - The `usb.t5` client already opens every device to build the device list, and claims MIDI interfaces itself (`usb_midi.c`). Raw handles go through that same client, so there's one owner per interface and no second client to coordinate.
 - **Taking over from an OS driver.** HID interfaces close in `hid_host` (the keyboard or mouse disappears from the UI's input devices), MIDI and CDC-ACM close their streams, and the interface is then claimed for the app. Releasing it, or the app ending, gives it back and the OS driver attaches as if the device had just been plugged in. Mass storage is never taken over while mounted: the app gets `T5_ERR_BUSY` and should ask the user to eject first. Hubs can't be claimed.
-- Which HID devices `hid_host` claims today needs checking in the spike (phase 0). If it claims every HID interface, gamepads and macro pads would need a take-over prompt for no reason. The plan is for the OS to keep only boot keyboards and mice, and leave other HID interfaces free.
+- The OS opened every HID interface it was offered, including ones it ignored. It now opens only boot keyboards and mice, so gamepads, macro pads and vendor HID devices are free to claim without a take-over question.
 - **Isochronous transfers** (USB audio interfaces, webcams outside UVC) are left out of the first version: they need scheduling and buffer sizes chosen per device. They come later (see Decisions).
 
 ## 4. Bluetooth LE HID and MIDI: `t5/ble.h` additions
@@ -191,30 +191,29 @@ A built-in profile in `t5_net/ble_hid.c` (not on top of the generic server), reg
 typedef struct t5_ble_hid t5_ble_hid_t;
 typedef struct {
     uint32_t size;
-    const char *name;             /* NULL: "Tab5 <app name>" */
-    uint16_t appearance;
-    const uint8_t *report_desc;
-    uint16_t desc_len;
-    bool pairable;                /* accept new hosts, not only bonded ones */
+    const char *name;             /* advertised; NULL: "Tab5" */
+    uint16_t appearance;          /* T5_BLE_APPEARANCE_KEYBOARD, _MOUSE, _GAMEPAD; 0: HID */
 } t5_ble_hid_cfg_t;
 t5_err_t t5_ble_hid_open(const t5_ble_hid_cfg_t *cfg, t5_ble_hid_t **out);
-t5_err_t t5_ble_hid_send(t5_ble_hid_t *h, uint8_t report_id, const void *data, size_t len);
+/* part: T5_HID_PART_KEYBOARD, _MOUSE, _CONSUMER, _GAMEPAD or _ABSOLUTE */
+t5_err_t t5_ble_hid_send(t5_ble_hid_t *h, uint32_t part, const void *report, size_t len, uint32_t timeout_ms);
+bool t5_ble_hid_connected(t5_ble_hid_t *h);
 /* Events: connected (bonded host's address and name), disconnected,
  * output report (LEDs), protocol mode, suspend/exit suspend. */
 int t5_ble_hid_next(t5_ble_hid_t *h, t5_ble_hid_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
 t5_err_t t5_ble_hid_close(t5_ble_hid_t *h);
 ```
 
-- **One identity per HID app.** Hosts cache a bonded device's GATT database and its report map. If two apps (a keyboard and a gamepad) used one address, the host could keep using the old report map. Service Changed is meant to prevent that, but host support for it with HID is unreliable, and the spike should check how unreliable. So each app's HID profile advertises with its own random static address, derived from the app id and a per-device secret. To the host each app is a separate Bluetooth device ("Tab5 Keyboard", "Tab5 Gamepad"), and both can stay paired. Normal scanning and the generic server keep the device's usual identity.
+- **One identity, one report map.** The first plan gave each HID app its own random static address, so the host would see separate devices. NimBLE keys its bond store by the peer's address alone, so a second identity bonded to the same computer would overwrite the first one's keys. Instead the HID, battery and device information services are registered at every stack start, before any app's dynamic service, so their handles never move, and every app shares one report map: t5_hid's descriptor of every part (keyboard, mouse, media keys, gamepad, absolute pointer, with fixed report IDs). A computer that paired once keeps a correct cached copy whichever app is in front. Apps send reports by part (`t5_ble_hid_send(h, T5_HID_PART_MOUSE, ...)`).
 - **Reconnecting** to a bonded host uses directed advertising for a few seconds, then normal advertising if `pairable`.
-- **Latency.** The profile asks for a 7.5 to 15 ms connection interval. HCI runs over SDIO to the C6, which adds some delay we haven't measured yet. The phase 0 spike measures key-to-host latency against a USB-C keyboard.
+- **Latency.** HCI runs over SDIO to the C6, which adds some delay that hasn't been measured yet.
 - **Foreground only.** In the background the link stays up but reports stop, as on USB-C.
-- **Bond slots.** Per-app identities take one bond per app and host pair, so the store is raised to 16 bonds. When it's full, the least recently connected bond goes. Settings > Bluetooth lists paired hosts grouped by app, and Forget works per host or per app.
+- **Bond slots.** The store keeps 16 bonds in NVS; when it's full, the oldest goes. Settings > Bluetooth lists paired devices and forgets them.
 - **Limits.** The HID profile uses the advertiser, so it gets `T5_ERR_BUSY` if an app has `t5_ble_adv_start` running, and vice versa. It counts one link against `T5_BLE_MAX_LINKS`.
 
 ### BLE MIDI
 
-The standard service (03B8E5A2-C8B1-...) with its one characteristic, with BLE MIDI timestamps packed and unpacked by the OS. `t5_ble_midi_open/send/next/close` take and return the same 1 to 3 byte messages as `t5_usb_midi_*`, so a MIDI app treats both transports the same way. macOS (Audio MIDI Setup), iOS and Android all support BLE MIDI. Whether each one insists on bonding is something phase 4 has to find out. Unlike USB MIDI, it leaves the Tab5's audio on.
+Not built as its own API: an app can already do it with the GATT server (`t5_ble_server_open` with the BLE MIDI service and characteristic, a connectable advertiser), packing the BLE MIDI timestamps itself. A helper can come later if apps need it.
 
 ## 5. Wi-Fi monitor mode and raw frames: `t5/wifi.h`
 
@@ -224,8 +223,10 @@ The standard service (03B8E5A2-C8B1-...) with its one characteristic, with BLE M
 
 - **Control**: start (channel, frame-type filter, control-frame filter, snap length, rate limit), stop, set channel, transmit frame. These are esp_hosted peer-data messages (`CONFIG_ESP_HOSTED_CP_FEAT_PEER_DATA` on the C6, `eh_host_peer_data_send` on the P4).
 - **Frames to the P4**: the promiscuous callback copies each frame (cut to the snap length) with its `rx_ctrl` metadata into a ring buffer. A task packs them into batches of up to ~1.5 KB and sends those to the P4. When the ring is full, frames are dropped and counted, and the count travels with the next batch, so the app sees exactly how much it missed.
-- **Throughput is the main risk.** A busy 2.4 GHz channel carries 1,000 to 3,000 frames a second, about 400 KB/s at a 128-byte snap length. Peer data travels with RPC messages. If the phase 0 spike shows it can't keep up, frames move to their own esp_hosted interface type on the SDIO data path, which already carries Wi-Fi traffic at several MB/s. The default filter is management frames only, which is enough for scanners and much lighter.
-- **Raw transmit** uses `esp_wifi_80211_tx` as ESP-IDF provides it, including the frame types it refuses in its sanity check. Tab5 OS doesn't patch around those. A rate limit per app (default 50 frames/s, at most 500) is enforced on the C6.
+- **Throughput is the main risk.** A busy 2.4 GHz channel carries 1,000 to 3,000 frames a second, about 400 KB/s at a 128-byte snap length. Peer data travels with RPC messages. If measurement shows it can't keep up, frames move to their own esp_hosted interface type on the SDIO data path, which already carries Wi-Fi traffic at several MB/s. The default filter is management frames only, which is enough for scanners and much lighter.
+- **Raw transmit** uses `esp_wifi_80211_tx` as ESP-IDF provides it, including the frame types it refuses in its sanity check. Tab5 OS doesn't patch around those. A rate limit (default 50 frames/s, at most 500, set at open) is enforced on the C6.
+- **Hopping** is the app's loop over `t5_wifimon_set_channel`; there is no separate call.
+- **Size.** The C6 image grew to 1,504,480 bytes of the 1,572,864-byte `c6fw` partition (96%).
 
 ### P4 API
 
@@ -239,8 +240,9 @@ typedef struct {
     uint32_t size;
     uint8_t channel;              /* 0: the current one */
     uint8_t types;                /* T5_WIFIMON_* */
-    uint16_t snaplen;             /* bytes kept per frame, 24..2500; 0 = 256 */
+    uint16_t snaplen;             /* bytes kept per frame, 24..1350; 0 = 256 */
     bool exclusive;               /* may pause the station connection to change channel */
+    uint16_t tx_per_s;            /* raw transmit limit, 1..500; 0 = 50 */
 } t5_wifimon_cfg_t;
 typedef struct {
     uint64_t time_us;             /* the C6's receive time */
@@ -259,9 +261,7 @@ t5_err_t t5_wifimon_open(const t5_wifimon_cfg_t *cfg, t5_wifimon_t **out);
 int t5_wifimon_next(t5_wifimon_t *m, t5_wifimon_frame_t *meta, void *buf, size_t cap, uint32_t timeout_ms);
 /* T5_ERR_STATE while the station is connected and the monitor isn't exclusive. */
 t5_err_t t5_wifimon_set_channel(t5_wifimon_t *m, uint8_t channel);
-/* Hop through channels, dwell_ms on each (exclusive only). */
-t5_err_t t5_wifimon_hop(t5_wifimon_t *m, const uint8_t *channels, int n, uint16_t dwell_ms);
-typedef struct { uint32_t frames, dropped_radio, dropped_queue, sent, refused; } t5_wifimon_stats_t;
+typedef struct { uint32_t frames, dropped_radio, dropped_link, dropped_queue, sent, refused; uint8_t channel; } t5_wifimon_stats_t;
 void t5_wifimon_stats(t5_wifimon_t *m, t5_wifimon_stats_t *out);
 /* Send one raw 802.11 frame (asks the user the first time). T5_ERR_DENIED
  * for frame types ESP-IDF refuses, T5_ERR_BUSY over the rate limit. */
@@ -286,11 +286,12 @@ An app that wants the hardware itself, rather than the OS's view of it, claims t
 - gives everything back on release: the OS resets the hardware to a known state and restarts its own drivers and stacks, as after boot.
 
 ```c
-typedef enum { T5_EXCL_USBC, T5_EXCL_USBA, T5_EXCL_WIFI, T5_EXCL_BT } t5_excl_t;
-typedef struct t5_excl t5_excl_handle_t;
+typedef enum { T5_EXCL_USBC, T5_EXCL_USBA, T5_EXCL_WIFI, T5_EXCL_BT } t5_excl_kind_t;
+typedef struct t5_excl t5_excl_t;
 /* Blocks until the user answers and the OS has let go. T5_ERR_BUSY if another app holds it. */
-t5_err_t t5_excl_claim(t5_excl_t what, t5_excl_handle_t **out);
-t5_err_t t5_excl_release(t5_excl_handle_t *h);
+t5_err_t t5_excl_claim(t5_excl_kind_t what, t5_excl_t **out);
+bool t5_excl_active(t5_excl_t *h);       /* false once the person stopped it */
+t5_err_t t5_excl_release(t5_excl_t *h);
 ```
 
 The calls below take the handle, so they only work while it's held.
@@ -302,16 +303,18 @@ What stops: the console and audio (as with any device mode), storage mode, and m
 The app supplies the whole descriptor set (device, configuration, strings, and BOS with Microsoft OS 2.0 descriptors so Windows binds WinUSB without a driver), and then handles every class and vendor control request and every endpoint itself. This is a TinyUSB application class driver (`usbd_app_driver_get_cb`) that passes everything through to the app, so any class works: vendor-specific/WebUSB, CDC, HID with its own control handling, audio, DFU-style protocols.
 
 ```c
-t5_err_t t5_usbc_raw_start(t5_excl_handle_t *h, const t5_usbc_raw_desc_t *desc);
-/* Events: bus reset, configured, suspend/resume, and setup packets for the
- * app to answer with t5_usbc_raw_ctrl_reply (data or zero-length) or
- * t5_usbc_raw_ctrl_stall. */
-int t5_usbc_raw_next(t5_excl_handle_t *h, t5_usbc_raw_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
-int t5_usbc_raw_xfer(t5_excl_handle_t *h, uint8_t ep, void *buf, size_t len, uint32_t timeout_ms);
-t5_err_t t5_usbc_raw_stall(t5_excl_handle_t *h, uint8_t ep, bool on);
+t5_err_t t5_usbc_raw_start(t5_excl_t *h, const t5_usbc_raw_desc_t *desc);
+/* Events: mounted, unmounted, suspend/resume, and class or vendor
+ * requests; one with needs_reply waits for t5_usbc_raw_ctrl_reply (data or
+ * zero-length) or t5_usbc_raw_ctrl_stall. */
+int t5_usbc_raw_next(t5_excl_t *h, t5_usbc_raw_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
+t5_err_t t5_usbc_raw_ctrl_reply(t5_excl_t *h, const void *data, size_t len);
+t5_err_t t5_usbc_raw_ctrl_stall(t5_excl_t *h);
+int t5_usbc_raw_xfer(t5_excl_t *h, uint8_t ep, void *buf, size_t len, uint32_t timeout_ms);
+t5_err_t t5_usbc_raw_stall(t5_excl_t *h, uint8_t ep, bool on);
 ```
 
-The controller is full speed (12 Mbit/s) with the P4's endpoint count, which the descriptor check enforces before the PHY moves.
+The controller is full speed (12 Mbit/s); endpoints 1..5, bulk or interrupt, up to 64-byte packets, checked before the PHY moves. Requests that send data to the device are acknowledged automatically and reach the app with their bytes. Python apps don't get this one yet.
 
 ### USB-A: the whole bus
 
@@ -319,9 +322,9 @@ What stops: every OS class driver (keyboard and mouse input, `/usb` storage, whi
 
 The app sees every device with the raw handles from section 3, can claim any interface without take-over prompts, and also gets:
 
-- `t5_usba_power(h, on)`: switch the port's 5 V rail, to power-cycle a stuck device;
-- `t5_usba_reset(h, addr)`: reset one device's port, so it enumerates again;
-- the bus speed and the hub topology (which port each device hangs off).
+- `t5_usba_power(h, on)`: switch the port's 5 V and root port, to power-cycle every device.
+
+Taking the bus unmounts a drive cleanly, then cycles the power with the OS's drivers held off, so everything enumerates again free for the app. The ESP-IDF host library has no per-device port reset, so there is no single-device reset.
 
 The hub driver itself stays in the ESP-IDF host library, because the bus doesn't work without it. Isochronous transfers come later (see Decisions).
 
@@ -336,9 +339,9 @@ The app runs the C6's Wi-Fi itself:
 - **Soft AP**: SSID, security, channel, max clients, client list and events, with a DHCP server on its interface.
 - **Radio settings**: country, channel and bandwidth (HT20/HT40), TX power, protocol set (b/g/n/ax), power save, MAC address of each interface.
 - **Monitor and raw frames** from section 5, without the station limits: any channel, hopping, and a higher TX limit (500 frames/s). ESP-IDF's frame-type restrictions on raw transmit stay.
-- **ESP-NOW**, if the phase 0 spike shows esp_hosted carries it, or through the same peer-data channel as monitor frames if it doesn't.
+- **ESP-NOW**: not built yet.
 
-Most of this is esp_wifi_remote calls that esp_hosted already forwards. The OS's `t5_net` steps back and becomes a pass-through while the claim is held.
+The calls are `t5_wifi_excl_scan`, `_connect`, `_disconnect`, `_ap_start`, `_ap_stop`, `_ap_clients`, `_radio` and `_mac`. Most of this is esp_wifi_remote calls that esp_hosted already forwards. The net task still handles the station's events, so a network the app joins gets the OS's netif and sockets, but it never reconnects by itself while the claim is held.
 
 ### Bluetooth: the controller over HCI
 
@@ -347,39 +350,38 @@ What stops: the OS's NimBLE host, so every BLE handle, system Bluetooth features
 The app gets the C6's Bluetooth LE controller as raw HCI. It can run its own host stack (BTstack, its own NimBLE build, a small custom one) or send commands directly:
 
 ```c
-t5_err_t t5_bt_hci_send(t5_excl_handle_t *h, uint8_t type, const void *pkt, size_t len);   /* command, ACL, ISO */
-int t5_bt_hci_next(t5_excl_handle_t *h, uint8_t *type, void *buf, size_t cap, uint32_t timeout_ms);   /* events, ACL, ISO */
+/* H4 frames: the packet type byte (1 command, 2 ACL, 4 event, 5 ISO) first */
+t5_err_t t5_bt_hci_send(t5_excl_t *h, const void *frame, size_t len);
+int t5_bt_hci_next(t5_excl_t *h, void *buf, size_t cap, uint32_t timeout_ms);
 ```
 
 On claim, NimBLE stops and the controller is reset. The app owns it from HCI Reset onwards, including Espressif vendor commands. On release, the OS resets the controller and starts NimBLE again. The controller is the C6's: Bluetooth LE 5.x, no Classic.
 
 ## Python
 
-The same functions, in the `t5` module's style (`bindings.txt` plus `mod_*.c`), with Python versions of the helpers:
+The same calls with the same permissions and questions (`t5_py/mod_io.c`):
 
-- `t5.hid`: descriptors, report builders, `type_text("hello", layout="us")`.
-- `t5.usbdev.open(hid=[t5.hid.KEYBOARD, t5.hid.MOUSE], midi=1)`, `.send(...)`, `.events(timeout)`.
-- `t5.usb.open(addr)`, `.claim(...)`, `.control(...)`, `.read(ep, n)`, `.write(ep, data)`.
-- `t5.ble.hid(...)`, `t5.ble.midi(...)`.
-- `t5.wifi.monitor(...)` iterating frames, `.pcap(path)` to save a capture to `/sd`.
-- `t5.exclusive("wifi")` as a context manager, so leaving the `with` block gives the hardware back, with the section 6 calls as methods on what it returns.
+- `t5.hid`: `descriptor(parts)`, `keys(text, layout)`, `keyboard()`, `mouse()`, `consumer()`, `gamepad()`, `absolute()`.
+- `t5.usbdev.open(hid=[desc, ...], midi=False, product=None, boot=None)` with `send()`, `midi()`, `event()`, `mounted()`.
+- `t5.ble.hid(name, appearance)` with `send(part, report)`, `event()`, `connected()`.
+- `t5.wifi.monitor(channel, types=, snaplen=, exclusive=, tx_per_s=)` with `frame()`, `set_channel()`, `stats()`, `send()`, `pcap(path, seconds)`.
+- `t5.usb.devices()` and `t5.usb.open(addr)` with descriptors, `claim()`, `control()`, `read()`, `write()`, `stream()`, `next()`.
+- `t5.exclusive("usba" | "wifi" | "bt")` as a context manager, with `power()`, `scan()`, `connect()`, `ap()`, `radio()`, `mac()`, `hci_send()`, `hci_next()`. Exclusive USB-C is native-only for now.
 
 ## ABI
 
 All new symbols are level 2 (`since=2` in `sdk/abi/api_v1.sym`, `T5_API_LEVEL` 2), together with notifications. The new headers (`t5/hid.h`, `t5/usbdev.h`, `t5/wifi.h`) and the additions to `t5/usb.h` and `t5/ble.h` go through the layout lock as usual. Nothing in level 1 changes.
 
-## Phases
+## Status
 
-Each phase is its own PR to `main`. Device test runs stay at 5 minutes or less.
+Everything above is built on the `io-access` branch: host tests pass (`t5_hid`, the claims, pcap records), the firmware and the C6 image build, and the ABI and lint checks pass. **None of it has run on hardware yet.** Next, on Unit A, in order:
 
-| Phase | Work | Done when |
-| --- | --- | --- |
-| 0. Spikes | (a) TinyUSB HID+MIDI composite on the PHY swap, enumerating on the Mac, with the console coming back cleanly 20 times in a row. (b) NimBLE pairing and bonding with the Mac as a HID keyboard (the user has to accept pairing in System Settings). (c) C6 promiscuous over peer data: frames/s and drop rate on a busy channel. (d) `hid_host`: which interfaces it claims, and detaching one. (e) Stopping and restarting NimBLE and `t5_net` in place, 20 times, checking the heap afterwards. (f) Whether esp_hosted carries ESP-NOW. | A short findings note per spike, and a go/no-go on peer data versus a dedicated SDIO interface. |
-| 1. `t5/hid.h` | Descriptors, report builders, text to keys. | Host tests pass, including round-tripping every layout's printable characters. |
-| 2. USB-C device mode | `usbc_take/give`, `t5/usbdev.h`, the `t5_excl_*` framework and exclusive USB-C (raw device), prompts, Quick Settings tile, Python, an example "Keyboard & Trackpad" app a MIDI pad example, and `t5_ui_touch_points`. | Types and moves the pointer on macOS, Windows and Linux; a MIDI note reaches a DAW; the console returns after close, exit, crash and the tile; HID stops in the background with no stuck keys; a vendor-class raw device does a bulk loopback with a host script. |
-| 3. USB-A raw host | Raw handles, claim and take-over, streams, exclusive bus with power and reset, Python, an example that reads a gamepad. | A gamepad's reports and a vendor-specific device's bulk loopback work; unplugging mid-transfer is clean; after an exclusive claim, `/usb` and the keyboard come back. |
-| 4. Bluetooth | Security manager and bonds, system pairing prompt, Settings list, HID profile, BLE MIDI, exclusive raw HCI, the example app gets a "Bluetooth" switch. | Pairs and reconnects with macOS, iOS, Android and Windows; a bond survives reboot; two HID apps stay paired at once; an app sends HCI Reset and scans over raw HCI, and the OS stack comes back after it. |
-| 5. Wi-Fi | C6 module, P4 API, pcap helpers, exclusive radio (modes, soft AP, radio settings), prompts, status bar, Python, an example "Wi-Fi Scanner" app that shows nearby networks and saves a capture. | A capture opens in Wireshark with correct radiotap fields; the station reconnects after an exclusive monitor; drop counts are right under load; an exclusive soft AP serves a phone; the saved network reconnects after release. |
+1. `t5 hil usbc_device` (USB-C HID and MIDI echo against this Mac, with the console coming back).
+2. `net mon 10` and `net mon 10 6 all` (monitor frames, drops; needs the new C6 image: `t5 c6-stage`, then `net update`).
+3. Bluetooth HID: pair the Mac with the Tab5 from System Settings, confirm the code, type from a test app.
+4. USB-A raw access with a gamepad or vendor device; exclusive USB-A with a drive mounted.
+5. Exclusive Wi-Fi and Bluetooth: release brings the network and NimBLE back.
+6. Exclusive USB-C with a vendor-class loopback.
 
 ## Decisions
 
