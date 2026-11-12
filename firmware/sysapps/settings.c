@@ -312,10 +312,30 @@ static void page_wifi(void)
 
 /* ---- Bluetooth --------------------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *sw, *status, *list;
+    lv_obj_t *sw, *status, *list, *paired;
     t5_ble_dev_t devs[T5_BLE_MAX_SCAN];
     int n, shown;
+    t5_ble_bond_t bonds[16];
+    int nb, bonds_shown, forget;      /* forget: the bond the open dialog is about */
 } ble_page_t;
+
+static void ble_forget_answered(int button, void *ud)
+{
+    ble_page_t *b = ud;
+    if (button != 0 || b->forget < 0 || b->forget >= b->nb) return;
+    t5_err_t e = t5_ble_sys_forget(b->bonds[b->forget].addr, b->bonds[b->forget].addr_type);
+    md_snackbar_show(e == T5_OK ? "Forgotten. Remove the Tab5 on that device too." : "Couldn't forget it", NULL, NULL,
+                     NULL);
+    b->bonds_shown = -1;
+}
+
+static void ble_bond_clicked(lv_event_t *e)
+{
+    ble_page_t *b = s_nav.lv[s_nav.depth - 1].arg;
+    b->forget = (int)(intptr_t)lv_event_get_user_data(e);
+    md_dialog_show("Forget this device?", "It will have to pair again to connect.", "Forget", "Cancel",
+                   ble_forget_answered, b);
+}
 
 static void ble_toggle(bool on)
 {
@@ -346,12 +366,15 @@ static void ble_dev_clicked(lv_event_t *e)
     md_snackbar_show(err == T5_OK ? "Connecting..." : "Couldn't connect to this device", NULL, NULL, NULL);
 }
 
+static void ble_bonds_refresh(ble_page_t *b);
+
 static void ble_refresh(sa_nav_t *nav, void *arg)
 {
     (void)nav;
     ble_page_t *b = arg;
     bool on = t5_ble_ready();
     bool conn = on && t5_ble_sys_connected();
+    ble_bonds_refresh(b);
     set_switch(b->sw, on);
     sa_set_text(b->status, !on   ? "Off. Turn on Bluetooth to find devices nearby."
                            : conn ? "Connected. Tap the device to disconnect."
@@ -373,6 +396,23 @@ static void ble_refresh(sa_nav_t *nav, void *arg)
     else if (!b->n) sa_note(b->list, "No devices found yet. Tap the refresh button to look for 5 seconds.");
 }
 
+/* Computers and phones paired with the Tab5 (as a keyboard, for instance). */
+static void ble_bonds_refresh(ble_page_t *b)
+{
+    b->nb = t5_ble_sys_bonds(b->bonds, 16);
+    int key = b->nb * 2 + t5_ble_ready();
+    if (key == b->bonds_shown) return;
+    b->bonds_shown = key;
+    lv_obj_clean(b->paired);
+    char addr[18];
+    for (int i = 0; i < b->nb; i++) {
+        t5_ble_format_addr(b->bonds[i].addr, addr);
+        lv_obj_t *r = md_row_create(b->paired, MD_ICON_BLUETOOTH, addr, "Tap to forget");
+        md_row_set_clickable(r, ble_bond_clicked, (void *)(intptr_t)i);
+    }
+    if (!b->nb) sa_note(b->paired, t5_ble_ready() ? "Nothing paired." : "Turn on Bluetooth to see paired devices.");
+}
+
 static void page_ble(void)
 {
     ble_page_t *b = calloc(1, sizeof *b);
@@ -382,9 +422,12 @@ static void page_ble(void)
     b->sw = switch_row(body, MD_ICON_BLUETOOTH, "Use Bluetooth", "Bluetooth LE sensors and accessories", t5_ble_ready(),
                        ble_toggle);
     b->status = sa_note(body, "");
+    md_section_create(body, "Paired devices");
+    b->paired = row_list(body);
     md_section_create(body, "Devices nearby");
     b->list = row_list(body);
     b->shown = -1;
+    b->bonds_shown = -1;
     sa_set_refresh(&s_nav, ble_refresh, b, free);
 }
 

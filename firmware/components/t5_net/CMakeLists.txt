@@ -1,10 +1,10 @@
 include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS ${T5_NET_PORTABLE_SRCS} "net.c" "ble.c" "hosted_compat.c" "sock.c" "http.c" "ws.c" "mqtt.c" "httpd.c" "download.c"
+    SRCS ${T5_NET_PORTABLE_SRCS} "net.c" "ble.c" "ble_hid.c" "hosted_compat.c" "sock.c" "http.c" "ws.c" "mqtt.c" "httpd.c" "download.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES t5_core
-    PRIV_REQUIRES t5_bootfmt t5_storage t5_bsp t5_pins t5_power t5_time esp_wifi esp_netif esp_event nvs_flash esp_partition
+    PRIV_REQUIRES t5_hid t5_battery t5_bootfmt t5_storage t5_bsp t5_pins t5_power t5_time esp_wifi esp_netif esp_event nvs_flash esp_partition
                   esp_driver_gpio lwip bt espressif__esp_hosted esp-tls mbedtls esp_timer espressif__mqtt esp_mm heap
 )
 

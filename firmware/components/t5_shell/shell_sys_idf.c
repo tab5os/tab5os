@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "md/md.h"
 #include "t5_app/apps.h"
 #include "t5_core/event.h"
 #include "t5_audio/audio.h"
@@ -412,6 +413,72 @@ static void input_added(t5_event_id_t id, const void *data, size_t len, void *ar
     T5_LOG_ON_ERR(TAG, t5_ui_async(input_added_ui, NULL));
 }
 
+/* ---- Bluetooth pairing: the system's dialog, never an app's ---------------- */
+static struct {
+    lv_obj_t *dlg;
+    uint16_t conn;
+    bool asked;               /* a confirm dialog (action 1) is waiting */
+} s_pair;
+
+static void pair_answered(int button, void *ud)
+{
+    (void)ud;
+    if (s_pair.asked) T5_LOG_ON_ERR(TAG, t5_ble_sys_pair_reply(s_pair.conn, button == 0));
+    s_pair.dlg = NULL;
+    s_pair.asked = false;
+}
+
+static void pair_show(void *arg)
+{
+    t5_ev_ble_pair_t *ev = arg;
+    if (s_pair.dlg) {
+        md_dialog_close(s_pair.dlg);       /* an older request: refuse it */
+        if (s_pair.asked) T5_IGNORE(t5_ble_sys_pair_reply(s_pair.conn, false));
+    }
+    char title[64], text[128];
+    snprintf(title, sizeof title, "Pair with %02X:%02X:%02X:%02X:%02X:%02X?", ev->addr[5], ev->addr[4], ev->addr[3],
+             ev->addr[2], ev->addr[1], ev->addr[0]);
+    unsigned a = (unsigned)(ev->passkey / 1000), b = (unsigned)(ev->passkey % 1000);
+    s_pair.conn = ev->conn;
+    s_pair.asked = ev->action == 1;
+    if (ev->action == 1) {
+        snprintf(text, sizeof text, "Check that the other device shows %03u %03u too.", a, b);
+        void *saved = shell_sys_enter();
+        s_pair.dlg = md_dialog_show(title, text, "Pair", "Cancel", pair_answered, NULL);
+        shell_sys_leave(saved);
+    } else {
+        snprintf(text, sizeof text, "Type %03u %03u on the other device.", a, b);
+        void *saved = shell_sys_enter();
+        s_pair.dlg = md_dialog_show(title, text, "OK", NULL, pair_answered, NULL);
+        shell_sys_leave(saved);
+    }
+    free(ev);
+}
+
+static void pair_done(void *arg)
+{
+    t5_ev_ble_pair_t *ev = arg;
+    if (s_pair.dlg && s_pair.conn == ev->conn) {
+        md_dialog_close(s_pair.dlg);
+        s_pair.dlg = NULL;
+        s_pair.asked = false;
+        t5_shell_toast(ev->err == T5_OK ? "Paired." : "Pairing didn't work.");
+    }
+    free(ev);
+}
+
+static void pair_event(t5_event_id_t id, const void *data, size_t len, void *arg)
+{
+    (void)arg;
+    t5_ev_ble_pair_t *ev = malloc(sizeof *ev);
+    if (!ev || len < sizeof *ev) {
+        free(ev);
+        return;
+    }
+    memcpy(ev, data, sizeof *ev);
+    if (t5_ui_async(id == T5_EV_BLE_PAIRING ? pair_show : pair_done, ev) != T5_OK) free(ev);
+}
+
 void shell_sys_stop(uint8_t stop)
 {
     if (stop) t5_io_hold_stop((t5_io_kind_t)(stop - 1));
@@ -439,6 +506,8 @@ t5_err_t t5_shell_register(void)
 {
     t5_apps_set_home(&s_home);
     T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_USBC_MODE, usbc_event, NULL));
+    T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_BLE_PAIRING, pair_event, NULL));
+    T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_BLE_PAIRED, pair_event, NULL));
     T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_POWER_STATE, standby_power, NULL));
     T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_USB_POWER, standby_power, NULL));
     return t5_event_subscribe(T5_EV_UI_INPUT_ADDED, input_added, NULL);

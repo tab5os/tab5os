@@ -2245,6 +2245,11 @@ t5_ble_gatt_notification | perm=ble | int t5_ble_gatt_notification(t5_ble_conn_t
 t5_ble_gatt_read | perm=ble | int t5_ble_gatt_read(t5_ble_conn_t * c, uint16_t handle, void * buf, size_t cap, uint32_t timeout_ms);
 t5_ble_gatt_subscribe | perm=ble | t5_err_t t5_ble_gatt_subscribe(t5_ble_conn_t * c, uint16_t val_handle, bool on, uint32_t timeout_ms);
 t5_ble_gatt_write | perm=ble | t5_err_t t5_ble_gatt_write(t5_ble_conn_t * c, uint16_t handle, const void * data, size_t len, bool response, uint32_t timeout_ms);
+t5_ble_hid_close | perm=ble,since=2 | t5_err_t t5_ble_hid_close(t5_ble_hid_t * h);
+t5_ble_hid_connected | perm=ble,since=2 | bool t5_ble_hid_connected(t5_ble_hid_t * h);
+t5_ble_hid_next | perm=ble,since=2 | int t5_ble_hid_next(t5_ble_hid_t * h, t5_ble_hid_ev_t * ev, void * buf, size_t cap, uint32_t timeout_ms);
+t5_ble_hid_open | perm=ble,since=2 | t5_err_t t5_ble_hid_open(const t5_ble_hid_cfg_t * cfg, t5_ble_hid_t ** out);
+t5_ble_hid_send | perm=ble,since=2 | t5_err_t t5_ble_hid_send(t5_ble_hid_t * h, uint32_t part, const void * report, size_t len, uint32_t timeout_ms);
 t5_ble_parse_addr |  | bool t5_ble_parse_addr(const char * s, uint8_t out[6]);
 t5_ble_ready |  | bool t5_ble_ready(void);
 t5_ble_scan_next | perm=ble | t5_err_t t5_ble_scan_next(t5_ble_scanner_t * s, t5_ble_report_t * out, uint32_t timeout_ms);

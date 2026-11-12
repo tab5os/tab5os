@@ -40,6 +40,8 @@ const char *t5_event_name(t5_event_id_t id)
     case T5_EV_BLE_SCAN_DONE: return "ble.scan_done";
     case T5_EV_BLE_CONNECTED: return "ble.connected";
     case T5_EV_BLE_DISCONNECTED: return "ble.disconnected";
+    case T5_EV_BLE_PAIRING: return "ble.pairing";
+    case T5_EV_BLE_PAIRED: return "ble.paired";
     case T5_EV_UI_ROTATE: return "ui.rotate";
     case T5_EV_UI_STALL: return "ui.stall";
     case T5_EV_UI_INPUT_ADDED: return "ui.input_added";
