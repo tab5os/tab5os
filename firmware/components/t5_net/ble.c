@@ -17,6 +17,8 @@
 #include <string.h>
 #include <strings.h>
 #include "esp_heap_caps.h"
+#include "eh_host_feat_bt.h"
+#include "eh_host_feat_bt_mcu.h"
 #include "esp_hosted_bt_host_stack.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -1443,7 +1445,7 @@ static void host_task(void *arg)
 static bool s_excl;
 static t5_mutex_t s_life;
 static MessageBufferHandle_t s_hci_rx;
-static esp_hosted_bt_hci_tx_fn_t s_hci_tx;
+static eh_host_bt_mcu_hci_tx_fn_t s_hci_tx;
 static t5_wakelock_t *s_excl_lock;
 static uint32_t s_hci_dropped;
 
@@ -1572,25 +1574,31 @@ static void hci_rx(const uint8_t *frame, uint16_t len, void *ctx)
     if (!s_hci_rx || xMessageBufferSend(s_hci_rx, frame, len, 0) != len) s_hci_dropped++;
 }
 
-/* The controller to the app's HCI (under s_life). */
+/* The controller to the app's HCI (under s_life). esp_hosted's host-stack
+ * helper is built for NimBLE only, so this goes one layer down: the
+ * controller RPCs and the raw HCI channel it would have used. */
 static t5_err_t raw_up(void)
 {
-    esp_hosted_bt_host_stack_cfg_t cfg = ESP_HOSTED_BT_HOST_STACK_CONFIG_DEFAULT();
-    cfg.stack = ESP_HOSTED_BT_HOST_STACK_CUSTOM;
-    cfg.custom.rx = hci_rx;
-    t5_net_status_t ns;
-    t5_net_status(&ns);
-    if (ns.c6_version[0] && atoi(ns.c6_version) < 2) cfg.bring_up_controller = false;
-    if (esp_hosted_bt_host_stack_setup(&cfg) != ESP_OK || !cfg.custom.tx) return T5_ERR_IO;
-    s_hci_tx = cfg.custom.tx;
-    return T5_OK;
+    esp_err_t r = ESP_FAIL;
+    for (int waited = 0; waited <= 5000; waited += 100) {
+        r = eh_host_bt_controller_init();
+        if (r == ESP_OK || r == ESP_ERR_INVALID_STATE) break;   /* INVALID_STATE: already up */
+        t5_delay_ms(100);
+    }
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) return T5_ERR_IO;
+    r = eh_host_bt_controller_enable();
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) return T5_ERR_IO;
+    s_hci_tx = eh_host_bt_mcu_hci_register(hci_rx, NULL);
+    return s_hci_tx ? T5_OK : T5_ERR_IO;
 }
 
 static void raw_down(void)
 {
     if (!s_hci_tx) return;
     s_hci_tx = NULL;
-    esp_hosted_bt_host_stack_teardown();
+    eh_host_bt_mcu_hci_unregister();
+    eh_host_bt_controller_disable();
+    eh_host_bt_controller_deinit(false);    /* NimBLE's setup brings it up again */
 }
 
 void t5_ble_on_link(bool up)
@@ -1653,7 +1661,7 @@ t5_err_t t5_bt_hci_send(t5_excl_t *h, const void *frame, size_t len)
 {
     if (!frame || len < 2 || len > 1024) return T5_ERR_INVALID_ARG;
     if (!t5_excl_holds(h, T5_EXCL_BT)) return T5_ERR_STATE;
-    esp_hosted_bt_hci_tx_fn_t tx = s_hci_tx;
+    eh_host_bt_mcu_hci_tx_fn_t tx = s_hci_tx;
     if (!tx) return T5_ERR_STATE;
     return tx(frame, (uint16_t)len) == 0 ? T5_OK : T5_ERR_IO;
 }

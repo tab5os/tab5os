@@ -41,6 +41,7 @@
 #include "t5_usb/usb.h"
 #include "t5_usb/usb_diag.h"
 #include "t5_usb/usbdev.h"
+#include "t5_core/excl.h"
 #include "t5_hid/hid.h"
 #include "t5_core/log.h"
 #include "diag_priv.h"
@@ -667,8 +668,72 @@ static void usbdev_test_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* usbc raw S: exclusive USB-C self-test. A vendor-class device (303A:4FF0)
+ * whose bulk OUT endpoint 0x01 echoes back on IN 0x81, and whose vendor
+ * request 0x01 (IN) answers "tab5". The console is gone meanwhile. */
+static const uint8_t RAW_DEV[18] = { 18, 1, 0x00, 0x02, 0xff, 0, 0, 64, 0x3a, 0x30, 0xf0, 0x4f, 0x00, 0x01, 1, 2, 3, 1 };
+static const uint8_t RAW_CFG[] = {
+    9, 2, 32, 0, 1, 1, 0, 0x80, 50,                 /* configuration: 1 interface */
+    9, 4, 0, 0, 2, 0xff, 0, 0, 0,                   /* interface 0: vendor, 2 endpoints */
+    7, 5, 0x01, 2, 64, 0, 0,                        /* bulk OUT 1 */
+    7, 5, 0x81, 2, 64, 0, 0,                        /* bulk IN 1 */
+};
+static struct {
+    volatile bool running;
+    int32_t err;
+    uint32_t ctrl, echoed;
+} s_raw;
+
+static void raw_test_task(void *arg)
+{
+    uint32_t secs = (uint32_t)(uintptr_t)arg;
+    t5_excl_t *h = NULL;
+    s_raw.err = t5_excl_claim(T5_EXCL_USBC, &h);
+    static const char *const strs[] = { "Tab5 OS", "Tab5 raw self-test", "0001" };
+    const t5_usbc_raw_desc_t d = { .size = sizeof d, .device = RAW_DEV, .config = RAW_CFG, .strings = strs,
+                                   .string_count = 3 };
+    if (s_raw.err == T5_OK) s_raw.err = t5_usbc_raw_start(h, &d);
+    int64_t until = t5_time_us() + (int64_t)secs * 1000000;
+    uint8_t buf[512];
+    while (s_raw.err == T5_OK && t5_time_us() < until) {
+        t5_usbc_raw_ev_t ev;
+        int n = t5_usbc_raw_next(h, &ev, buf, sizeof buf, 10);
+        if (n >= 0 && ev.type == T5_USBC_RAW_SETUP && ev.needs_reply) {
+            if (ev.b_request == 1 && (ev.bm_request_type & 0x80)) T5_IGNORE(t5_usbc_raw_ctrl_reply(h, "tab5", 4));
+            else T5_IGNORE(t5_usbc_raw_ctrl_stall(h));
+            s_raw.ctrl++;
+        }
+        int r = t5_usbc_raw_xfer(h, 0x01, buf, 64, 10);       /* echo what arrives */
+        if (r > 0 && t5_usbc_raw_xfer(h, 0x81, buf, (size_t)r, 500) == r) s_raw.echoed++;
+    }
+    if (h) T5_IGNORE(t5_excl_release(h));
+    T5_LOGI("t5.diag", "usbc raw test: %s, %u control, %u echoed", t5_err_str(s_raw.err), (unsigned)s_raw.ctrl,
+            (unsigned)s_raw.echoed);
+    s_raw.running = false;
+    vTaskDelete(NULL);
+}
+
 static int cmd_usbc(int argc, char **argv)
 {
+    if (argc >= 3 && !strcmp(argv[1], "raw") && !strcmp(argv[2], "status")) {
+        printf("usbc raw test: %s, %s, %u control, %u echoed\n", s_raw.running ? "running" : "done",
+               t5_err_str(s_raw.err), (unsigned)s_raw.ctrl, (unsigned)s_raw.echoed);
+        return 0;
+    }
+    if (argc >= 2 && !strcmp(argv[1], "raw")) {
+        uint32_t t = 20;
+        if (argc >= 3 && !diag_parse_u32(argv[2], 3, 600, &t)) return 1;
+        if (s_raw.running) return 1;
+        memset(&s_raw, 0, sizeof s_raw);
+        s_raw.running = true;
+        printf("exclusive USB-C self-test for %u s; the console comes back afterwards\n", (unsigned)t);
+        fflush(stdout);
+        if (xTaskCreatePinnedToCore(raw_test_task, "usbc.rawtest", 4096, (void *)(uintptr_t)t, 5, NULL, 1) != pdPASS) {
+            s_raw.running = false;
+            return 1;
+        }
+        return 0;
+    }
     if (argc >= 3 && !strcmp(argv[1], "device") && !strcmp(argv[2], "status")) {
         printf("usbc device test: %s, open %s, mounted %u, events %u, hid echo %u, midi echo %u, send errors %u"
                " (hid %u, midi %u, last %s)\n",
