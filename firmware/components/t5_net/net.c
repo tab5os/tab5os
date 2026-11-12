@@ -913,6 +913,11 @@ static void handle(const msg_t *m)
         if (s_hosted_up && !s_suspended_off) reset_c6(m->type == EV_LINK_FAIL ? "transport failure" : "transport down");
         break;
     case EV_WAKE:
+        /* A C6 that Sleep powered off can't be asking for us: the edge was
+         * latched while it went down (data it had queued, or the rail
+         * falling). Waking for it powered the C6 straight back on, and
+         * Sleep then never lasted. */
+        if (s_suspended_off || !s_hosted_up) break;
         t5_mutex_lock(s_mtx);
         s_st.wakes++;
         t5_mutex_unlock(s_mtx);
