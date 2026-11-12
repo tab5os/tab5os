@@ -49,6 +49,8 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 
 ## Bring-up console
 
+Commands marked "bench builds only" are left out unless the firmware is built with `CONFIG_T5_DIAG_BENCH=y` (see [bench procedures](docs/bench-procedures.md)).
+
 | Command | Purpose |
 | --- | --- |
 | `sys` | Chip revision, clocks, PSRAM, heap, partition, reset reason |
@@ -62,9 +64,9 @@ esptool erase-region 0x11000 0x2F000 && esptool erase-region 0xB50000 0x40000
 | `fs df\|ls\|cat\|rm\|stress\|verify\|eject\|rescan\|sdraw\|sdbench` | `/data` and `/sd` |
 | `disp` / `disp bl\|fill\|sleep\|wake\|ids` | Display |
 | `touch` / `touch watch <s>` / `touch dots on\|off` | Touch |
-| `gpio watch <ms> [pins] [log]` / `gpio get` | Edge watcher for bench checks |
-| `sleep light <ms> [MB] [g<pin>...]` / `sleep result` | Light-sleep test |
-| `elf bench [rounds]` | ELF-in-PSRAM benchmark |
+| `gpio watch <ms> [pins] [log]` / `gpio get` | Edge watcher for bench checks (bench builds only) |
+| `sleep light <ms> [MB] [g<pin>...]` / `sleep result` | Light-sleep test (bench builds only) |
+| `elf bench [rounds]` | ELF-in-PSRAM benchmark (bench builds only) |
 | `dmesg` | Log since boot |
 | `power` / `power locks\|hooks\|sleep\|wake\|screenoff` | Power state, wake locks, suspend hooks |
 | `power lock <type> [ms]` / `unlock` / `profile` / `timers` / `alarm <s>` / `off --force` | Locks, idle timers, scheduled wake, soft off |

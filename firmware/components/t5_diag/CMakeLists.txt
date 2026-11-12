@@ -1,5 +1,12 @@
+set(srcs "t5_diag.c" "diag_sys.c" "diag_i2c.c" "diag_exp.c" "diag_dev.c" "diag_log.c" "diag_power.c" "diag_net.c" "diag_ports.c"
+         "diag_ui.c" "diag_app.c" "diag_media.c" "diag_prof.c" "diag_py.c" "diag_ota.c" "diag_devmode.c")
+# The Phase 0 bench commands (Kconfig T5_DIAG_BENCH) are off in normal builds.
+if(CONFIG_T5_DIAG_BENCH)
+    list(APPEND srcs "diag_bench.c" "diag_elf.c")
+endif()
+
 idf_component_register(
-    SRCS "t5_diag.c" "diag_sys.c" "diag_i2c.c" "diag_exp.c" "diag_dev.c" "diag_bench.c" "diag_log.c" "diag_elf.c" "diag_power.c" "diag_net.c" "diag_ports.c" "diag_ui.c" "diag_app.c" "diag_media.c" "diag_prof.c" "diag_py.c" "diag_ota.c" "diag_devmode.c"
+    SRCS ${srcs}
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES console
@@ -9,7 +16,7 @@ idf_component_register(
 
 # Bench check 11: build elfbench.elf with the target compiler and embed it.
 # Position-independent, no libc, entry app_main: the same shape as a Phase 5 app.
-if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+if(CONFIG_T5_DIAG_BENCH AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     file(STRINGS "${CMAKE_BINARY_DIR}/toolchain/cflags" _t5_arch REGEX "^-m")
     set(_elf_src "${CMAKE_CURRENT_LIST_DIR}/elfbench/elf_entry.c")
     set(_elf_out "${CMAKE_CURRENT_BINARY_DIR}/elfbench.elf")

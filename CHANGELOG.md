@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A smaller OS image.** The Phase 0 bench commands (`elf bench`, `gpio watch|get`, `sleep light|result`) are left out of normal builds, and NimBLE logs only warnings and errors. The image is 132 KB smaller, about 3.5% of an update slot. Apps, the app API and the SDK are unchanged. To get the bench commands back, build with `CONFIG_T5_DIAG_BENCH=y` (see [bench procedures](docs/bench-procedures.md)).
+
 ## 0.1.3 (pre-release), Nov 10, 2026
 
 The standby screen shows every app card in a stack you can scroll, beside a clock that fills half the screen.

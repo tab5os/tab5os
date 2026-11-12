@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include <stdlib.h>
 #include "esp_console.h"
+#include "sdkconfig.h"
 #include "esp_check.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -45,9 +46,11 @@ esp_err_t t5_diag_start(void)
     diag_register_i2c();
     diag_register_exp();
     diag_register_dev();
+#if CONFIG_T5_DIAG_BENCH
     diag_register_bench();
-    diag_register_log();
     diag_register_elf();
+#endif
+    diag_register_log();
     diag_register_power();
     diag_register_net();
     diag_register_ports();
