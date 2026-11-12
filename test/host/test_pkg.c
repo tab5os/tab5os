@@ -603,7 +603,7 @@ static const struct {
     { "com.kanishka.airlog", "com..airlog", "reverse-DNS" },
     { "com.kanishka.airlog", "com.kanishka-airlog.x", "reverse-DNS" },
     { "com.kanishka.airlog", "com.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "longer than" },
-    { "api = 1", "api = 2", "API level 2" },
+    { "api = 1", "api = 99", "API level 99" },
     { "api = 1", "api = 0", "at least 1" },
     { "api = 1", "api = \"1\"", "integer" },
     { "\"native\"", "\"wasm\"", "runtime: unknown 'wasm'" },

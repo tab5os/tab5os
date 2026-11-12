@@ -159,7 +159,7 @@ def main():
     zips["fx_pkg_noentry"] = make_zip([("manifest.toml", manifest("1.0.0", entry="main.py", icon=False)),
                                        ("app.elf", b"x")])
     zips["fx_pkg_nomanifest"] = make_zip([("app.elf", b"x")])
-    zips["fx_pkg_badapi"] = make_zip([("manifest.toml", manifest("1.0.0", api=2, icon=False)), ("app.elf", b"x")])
+    zips["fx_pkg_badapi"] = make_zip([("manifest.toml", manifest("1.0.0", api=99, icon=False)), ("app.elf", b"x")])
     zips["fx_pkg_other"] = make_zip([("manifest.toml", manifest("2.0.0", icon=False)
                                       .replace(b"com.example.hello", b"com.example.other")
                                       .replace(b'runtime = "native"', b'runtime = "micropython"')
