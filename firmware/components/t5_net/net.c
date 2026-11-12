@@ -901,7 +901,9 @@ static void handle(const msg_t *m)
         on_got_ip(m);
         break;
     case EV_SCAN_DONE:
-        on_scan_done();
+        /* A held radio's scan is an app's (wifi_excl.c): its results are its own. */
+        if (s_held) s_scanning = false;
+        else on_scan_done();
         break;
     case EV_LINK_DOWN:
     case EV_LINK_FAIL:
@@ -979,6 +981,7 @@ static void net_task(void *arg)
 
 t5_err_t t5_net_init(void)
 {
+    wifi_excl_init();
     if (s_inited) return T5_OK;
     esp_err_t e = nvs_ready();
     if (e != ESP_OK) T5_LOGE(TAG, "nvs: %s", esp_err_to_name(e));

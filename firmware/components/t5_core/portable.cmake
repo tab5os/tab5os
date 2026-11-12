@@ -6,4 +6,5 @@ set(T5_CORE_PORTABLE_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/t5_event.c
     ${CMAKE_CURRENT_LIST_DIR}/t5_event_names.c
     ${CMAKE_CURRENT_LIST_DIR}/t5_res.c
-    ${CMAKE_CURRENT_LIST_DIR}/t5_io_hold.c)
+    ${CMAKE_CURRENT_LIST_DIR}/t5_io_hold.c
+    ${CMAKE_CURRENT_LIST_DIR}/t5_excl.c)

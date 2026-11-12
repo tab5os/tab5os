@@ -17,6 +17,7 @@
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "t5_core/event.h"
+#include "t5_core/excl_sys.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
@@ -53,6 +54,8 @@ static QueueHandle_t s_work;
 static t5_usb_dev_t s_devs[T5_USB_MAX_DEVICES];
 static int s_ndevs;
 static t5_usb_stats_t s_st;
+/* An app has the whole bus (t5_core/excl.h): the OS's drivers stay off it. */
+static volatile bool s_excl;
 
 const char *t5_usb_class_name(t5_usb_class_t c)
 {
@@ -177,7 +180,7 @@ static void client_event(const usb_host_client_event_msg_t *msg, void *arg)
                 }
                 d.product[k] = 0;
             }
-            usb_midi_check(h, addr, cd);    /* claims the interface if it is MIDI */
+            if (!s_excl) usb_midi_check(h, addr, cd);    /* claims the interface if it is MIDI */
         }
         usb_midi_release_if_unused(h, addr);
         t5_mutex_lock(s_mx);
@@ -377,7 +380,7 @@ static void hid_open(hid_host_device_handle_t h)
     if (hid_host_device_get_params(h, &p) != ESP_OK) return;
     /* Only boot keyboards and mice: other HID devices (gamepads, macro
      * pads, vendor ones) stay free for apps to claim (t5_usb_claim). */
-    if (p.proto != HID_PROTOCOL_KEYBOARD && p.proto != HID_PROTOCOL_MOUSE) return;
+    if (s_excl || (p.proto != HID_PROTOCOL_KEYBOARD && p.proto != HID_PROTOCOL_MOUSE)) return;
     const hid_host_device_config_t dc = { .callback = hid_iface_event, .callback_arg = NULL };
     if (hid_host_device_open(h, &dc) != ESP_OK) return;
     if (p.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
@@ -429,7 +432,7 @@ static void msc_unmount(void)
 
 static void msc_mount(uint8_t addr)
 {
-    if (s_msc) return;                              /* one drive at /usb */
+    if (s_msc || s_excl) return;                    /* one drive at /usb; none while an app has the bus */
     if (msc_host_install_device(addr, &s_msc) != ESP_OK) {
         s_msc = NULL;
         return;
@@ -740,6 +743,57 @@ static t5_err_t power_on(bool on)
     return T5_OK;
 }
 
+/* Cut USB-A's power and restore it: every device leaves and enumerates
+ * again (under s_mx). */
+static void bus_cycle(void)
+{
+    if (s_installed) usb_host_lib_set_root_port_power(false);
+    power_on(false);
+    t5_delay_ms(300);
+    power_on(true);
+    t5_delay_ms(200);
+    if (s_installed) usb_host_lib_set_root_port_power(true);
+}
+
+static t5_err_t excl_take(void)
+{
+    if (!s_installed || !s_enabled) return T5_ERR_STATE;
+    if (s_serial || s_uvc) return T5_ERR_BUSY;      /* an app's serial port or camera */
+    t5_mutex_lock(s_mx);
+    msc_unmount();                                  /* cleanly, before the power goes */
+    s_excl = true;
+    bus_cycle();
+    t5_mutex_unlock(s_mx);
+    T5_LOGW(TAG, "an app has the USB-A bus");
+    return T5_OK;
+}
+
+static void excl_give(void)
+{
+    t5_mutex_lock(s_mx);
+    s_excl = false;
+    if (s_enabled) bus_cycle();                     /* the OS's drivers find everything again */
+    t5_mutex_unlock(s_mx);
+    T5_LOGI(TAG, "USB-A back to the system");
+}
+
+t5_err_t t5_usba_power(t5_excl_t *h, bool on)
+{
+    if (!t5_excl_holds(h, T5_EXCL_USBA)) return T5_ERR_STATE;
+    t5_mutex_lock(s_mx);
+    t5_err_t e = T5_OK;
+    if (on) {
+        e = power_on(true);
+        t5_delay_ms(200);
+        if (e == T5_OK && s_installed) usb_host_lib_set_root_port_power(true);
+    } else {
+        if (s_installed) usb_host_lib_set_root_port_power(false);
+        power_on(false);
+    }
+    t5_mutex_unlock(s_mx);
+    return e;
+}
+
 t5_err_t t5_usb_host_enable(bool on)
 {
     if (!s_inited) return T5_ERR_STATE;
@@ -812,6 +866,8 @@ t5_err_t t5_usb_init(void)
     }
     usb_midi_init();
     usbc_init();
+    static const t5_excl_provider_t prov = { excl_take, excl_give };
+    t5_excl_set_provider(T5_EXCL_USBA, &prov);
     s_inited = true;
     const t5_suspend_hook_t hook = {
         .name = "usb", .prio = T5_SUSPEND_PRIO_MEDIA, .budget_ms = 200, .suspend = usb_suspend,

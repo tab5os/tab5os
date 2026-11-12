@@ -21,6 +21,11 @@ t5_err_t net_station_hold(bool on);
 /* The Wi-Fi driver is running (the C6 is up with Wi-Fi on). */
 bool net_wifi_up(void);
 
+/* wifimon.c: an open monitor ends (exclusive Wi-Fi is being claimed or given back). */
+void wifimon_end_for_excl(void);
+/* wifi_excl.c: registers the exclusive Wi-Fi provider (t5_net_init). */
+void wifi_excl_init(void);
+
 /* Ask the net task to start or stop BLE to match its setting. */
 void net_ble_changed(void);
 /* ble.c, on the net task: the C6 link came up or is going down, or the

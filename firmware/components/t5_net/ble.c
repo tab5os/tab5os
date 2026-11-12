@@ -20,6 +20,7 @@
 #include "esp_hosted_bt_host_stack.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/message_buffer.h"
 #include "freertos/semphr.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
@@ -32,6 +33,7 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "t5_core/event.h"
+#include "t5_core/excl_sys.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
@@ -1435,9 +1437,22 @@ static void host_task(void *arg)
     nimble_port_freertos_deinit();
 }
 
+/* Exclusive Bluetooth (t5_core/excl.h): an app has the controller over raw
+ * HCI and NimBLE is stopped. s_life orders the stack's start and stop
+ * between the net task and an app's claim. */
+static bool s_excl;
+static t5_mutex_t s_life;
+static MessageBufferHandle_t s_hci_rx;
+static esp_hosted_bt_hci_tx_fn_t s_hci_tx;
+static t5_wakelock_t *s_excl_lock;
+static uint32_t s_hci_dropped;
+
+static t5_err_t excl_take(void);
+static void excl_give(void);
+
 static void stack_start(void)
 {
-    if (s_running || !s_enabled || !s_link_up) return;
+    if (s_running || !s_enabled || !s_link_up || s_excl) return;
     esp_hosted_bt_host_stack_cfg_t cfg = ESP_HOSTED_BT_HOST_STACK_CONFIG_DEFAULT();
     /* C6 firmware before esp_hosted 2.x (the factory 1.4.1 on Unit A) brings
      * its controller up at boot and doesn't know the controller RPCs. */
@@ -1535,7 +1550,10 @@ static void ensure_init(void)
     t5_mutex_lock(m);
     if (!s_inited) {
         s_mx = t5_mutex_create();
+        s_life = t5_mutex_create();
         s_sync = xSemaphoreCreateBinary();
+        static const t5_excl_provider_t prov = { excl_take, excl_give };
+        t5_excl_set_provider(T5_EXCL_BT, &prov);
         nvs_handle_t h;
         uint8_t v = 0;
         if (net_nvs_open(NVS_READONLY, &h) == ESP_OK) {
@@ -1548,12 +1566,105 @@ static void ensure_init(void)
     t5_mutex_unlock(m);
 }
 
+static void hci_rx(const uint8_t *frame, uint16_t len, void *ctx)
+{
+    (void)ctx;
+    if (!s_hci_rx || xMessageBufferSend(s_hci_rx, frame, len, 0) != len) s_hci_dropped++;
+}
+
+/* The controller to the app's HCI (under s_life). */
+static t5_err_t raw_up(void)
+{
+    esp_hosted_bt_host_stack_cfg_t cfg = ESP_HOSTED_BT_HOST_STACK_CONFIG_DEFAULT();
+    cfg.stack = ESP_HOSTED_BT_HOST_STACK_CUSTOM;
+    cfg.custom.rx = hci_rx;
+    t5_net_status_t ns;
+    t5_net_status(&ns);
+    if (ns.c6_version[0] && atoi(ns.c6_version) < 2) cfg.bring_up_controller = false;
+    if (esp_hosted_bt_host_stack_setup(&cfg) != ESP_OK || !cfg.custom.tx) return T5_ERR_IO;
+    s_hci_tx = cfg.custom.tx;
+    return T5_OK;
+}
+
+static void raw_down(void)
+{
+    if (!s_hci_tx) return;
+    s_hci_tx = NULL;
+    esp_hosted_bt_host_stack_teardown();
+}
+
 void t5_ble_on_link(bool up)
 {
     ensure_init();
+    t5_mutex_lock(s_life);
     s_link_up = up;
-    if (up && s_enabled) stack_start();
-    else stack_stop();
+    if (s_excl) {
+        /* The app's transport follows the C6 like NimBLE would. */
+        if (up && !s_hci_tx) T5_LOG_ON_ERR(TAG, raw_up());
+        else if (!up) raw_down();
+    } else if (up && s_enabled) {
+        stack_start();
+    } else {
+        stack_stop();
+    }
+    t5_mutex_unlock(s_life);
+}
+
+static t5_err_t excl_take(void)
+{
+    ensure_init();
+    t5_mutex_lock(s_life);
+    t5_err_t e = s_link_up ? T5_OK : T5_ERR_STATE;      /* the C6 is off: Bluetooth and Wi-Fi off */
+    if (e == T5_OK && !s_hci_rx) {
+        s_hci_rx = xMessageBufferCreateWithCaps(32 * 1024, MALLOC_CAP_SPIRAM);
+        if (!s_hci_rx) e = T5_ERR_NO_MEM;
+    }
+    if (e == T5_OK) {
+        s_excl = true;
+        stack_stop();                              /* every BLE handle's link drops */
+        xMessageBufferReset(s_hci_rx);
+        s_hci_dropped = 0;
+        e = raw_up();
+        if (e != T5_OK) {
+            s_excl = false;
+            stack_start();
+        } else {
+            s_excl_lock = t5_wakelock_acquire_system(T5_LOCK_NET, "bt.excl");
+            T5_LOGW(TAG, "an app has the Bluetooth controller (raw HCI)");
+        }
+    }
+    t5_mutex_unlock(s_life);
+    return e;
+}
+
+static void excl_give(void)
+{
+    t5_mutex_lock(s_life);
+    raw_down();
+    s_excl = false;
+    if (s_excl_lock) t5_wakelock_release(s_excl_lock);
+    s_excl_lock = NULL;
+    stack_start();                                 /* NimBLE resets the controller */
+    t5_mutex_unlock(s_life);
+    T5_LOGI(TAG, "Bluetooth back to the system");
+}
+
+t5_err_t t5_bt_hci_send(t5_excl_t *h, const void *frame, size_t len)
+{
+    if (!frame || len < 2 || len > 1024) return T5_ERR_INVALID_ARG;
+    if (!t5_excl_holds(h, T5_EXCL_BT)) return T5_ERR_STATE;
+    esp_hosted_bt_hci_tx_fn_t tx = s_hci_tx;
+    if (!tx) return T5_ERR_STATE;
+    return tx(frame, (uint16_t)len) == 0 ? T5_OK : T5_ERR_IO;
+}
+
+int t5_bt_hci_next(t5_excl_t *h, void *buf, size_t cap, uint32_t timeout_ms)
+{
+    if (!buf || !cap) return T5_ERR_INVALID_ARG;
+    if (!t5_excl_holds(h, T5_EXCL_BT) || !s_hci_rx) return T5_ERR_STATE;
+    size_t n = xMessageBufferReceive(s_hci_rx, buf, cap, ticks(timeout_ms));
+    if (!n) return t5_excl_holds(h, T5_EXCL_BT) ? T5_ERR_TIMEOUT : T5_ERR_STATE;
+    return (int)n;
 }
 
 /* ---- the system's API (ble_sys.h) ------------------------------------------ */

@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_core/excl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -217,6 +218,20 @@ t5_err_t t5_ble_hid_send(t5_ble_hid_t *h, uint32_t part, const void *report, siz
  * count is returned. 0 for other events, T5_ERR_TIMEOUT. 16 are queued. */
 int t5_ble_hid_next(t5_ble_hid_t *h, t5_ble_hid_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
 t5_err_t t5_ble_hid_close(t5_ble_hid_t *h);
+
+/* ---- raw HCI: exclusive Bluetooth (API level 2) ---------------------------
+ * With an exclusive claim (t5_excl_claim(T5_EXCL_BT); t5/excl.h) the OS's
+ * Bluetooth stack is stopped and the app talks HCI to the C6's Bluetooth LE
+ * controller: run its own host stack, or send commands directly. Frames
+ * are H4: the packet type byte (1 command, 2 ACL, 4 event, 5 ISO) first.
+ * The controller is the app's from the claim on (send HCI Reset first); on
+ * release the OS resets it and starts its own stack again, with saved
+ * pairings intact. If the C6 restarts meanwhile, events stop until it's
+ * back. */
+t5_err_t t5_bt_hci_send(t5_excl_t *h, const void *frame, size_t len);
+/* The next frame from the controller (cut to cap): its length,
+ * T5_ERR_TIMEOUT, or T5_ERR_STATE once the claim ended. 32 KB are queued. */
+int t5_bt_hci_next(t5_excl_t *h, void *buf, size_t cap, uint32_t timeout_ms);
 
 /* ---- helpers (no permission, pure) ---------------------------------------- */
 bool t5_ble_parse_addr(const char *s, uint8_t out[6]);           /* "aa:bb:cc:dd:ee:ff" */

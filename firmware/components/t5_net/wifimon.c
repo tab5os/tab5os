@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
+#include "t5_core/excl_sys.h"
 #include "t5_core/io_hold.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
@@ -161,6 +162,7 @@ static bool connected(uint8_t *channel)
 static t5_err_t make_room(t5_wifimon_t *m, uint8_t channel)
 {
     uint8_t cur = 0;
+    if (t5_excl_claimed(T5_EXCL_WIFI)) return T5_OK;   /* the app holds the radio: the station is held already */
     if (!channel || !connected(&cur) || m->held) return T5_OK;
     if (!m->exclusive) return channel == cur ? T5_OK : T5_ERR_STATE;
     T5_RETURN_ON_ERR(net_station_hold(true));
@@ -204,6 +206,11 @@ static void stop_for_person(void)
     t5_wifimon_t *m = s_mon;
     t5_mutex_unlock(mx());
     if (m) stop_locked_out(m);
+}
+
+void wifimon_end_for_excl(void)
+{
+    stop_for_person();
 }
 
 static void release_handle(void *h)

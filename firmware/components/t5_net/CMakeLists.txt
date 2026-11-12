@@ -1,6 +1,6 @@
 include(${CMAKE_CURRENT_LIST_DIR}/portable.cmake)
 idf_component_register(
-    SRCS ${T5_NET_PORTABLE_SRCS} "net.c" "ble.c" "ble_hid.c" "wifimon.c" "hosted_compat.c" "sock.c" "http.c" "ws.c" "mqtt.c" "httpd.c" "download.c"
+    SRCS ${T5_NET_PORTABLE_SRCS} "net.c" "ble.c" "ble_hid.c" "wifimon.c" "wifi_excl.c" "hosted_compat.c" "sock.c" "http.c" "ws.c" "mqtt.c" "httpd.c" "download.c"
     INCLUDE_DIRS "include"
     # "." and the C6 firmware's side of the Wi-Fi monitor protocol (t5_wifimon_proto.h).
     PRIV_INCLUDE_DIRS "." "${CMAKE_CURRENT_LIST_DIR}/../../../c6/main"

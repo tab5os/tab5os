@@ -29,6 +29,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_core/excl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -85,6 +86,67 @@ void t5_wifimon_stats(t5_wifimon_t *m, t5_wifimon_stats_t *out);
  * the per-second limit. */
 t5_err_t t5_wifimon_send(t5_wifimon_t *m, const void *frame, size_t len, bool use_sys_seq);
 t5_err_t t5_wifimon_close(t5_wifimon_t *m);
+
+/* ---- the radio: exclusive Wi-Fi ---------------------------------------------
+ * With t5_excl_claim(T5_EXCL_WIFI) (t5/excl.h) the OS's network connection
+ * pauses (other apps and the system lose the network; developer mode,
+ * update checks and time sync stop) and the app runs the radio. A monitor
+ * it opens may change channel freely. On release the OS undoes the app's
+ * settings (soft AP off, radio settings back) and rejoins its network. */
+typedef struct {
+    uint8_t bssid[6];
+    char ssid[33];
+    int8_t rssi;
+    uint8_t channel;
+    uint8_t auth;             /* 0 open, 1 WEP, 2 WPA, 3 WPA2, 4 WPA/WPA2, 6 WPA3, 7 WPA2/WPA3... (wifi_auth_mode_t) */
+} t5_wifi_ap_t;
+
+typedef struct {
+    uint32_t size;
+    uint8_t channel;          /* 0: every channel */
+    bool passive;             /* listen for beacons instead of asking */
+    bool show_hidden;
+    uint16_t dwell_ms;        /* per channel, 0: the radio's default */
+} t5_wifi_scan_cfg_t;
+/* Blocks until done: the networks found (up to max), or a negative t5_err_t. */
+int t5_wifi_excl_scan(t5_excl_t *h, const t5_wifi_scan_cfg_t *cfg, t5_wifi_ap_t *out, int max);
+/* Join a network as a station with the app's credentials (never saved).
+ * Waits for an address; then sockets and t5/net.h work over it. */
+t5_err_t t5_wifi_excl_connect(t5_excl_t *h, const char *ssid, const char *pass, uint32_t timeout_ms);
+t5_err_t t5_wifi_excl_disconnect(t5_excl_t *h);
+
+typedef struct {
+    uint32_t size;
+    const char *ssid;         /* 1..32 bytes */
+    const char *pass;         /* NULL or "": open; else 8..63 (WPA2) */
+    uint8_t channel;          /* 1..13, 0: 6 */
+    uint8_t max_clients;      /* 1..8, 0: 4 */
+    bool hidden;
+} t5_wifi_ap_cfg_t;
+/* A soft access point (with a DHCP server at 192.168.4.1) alongside the
+ * station. T5_ERR_NOT_SUPPORTED if the radio firmware can't. */
+t5_err_t t5_wifi_excl_ap_start(t5_excl_t *h, const t5_wifi_ap_cfg_t *cfg);
+t5_err_t t5_wifi_excl_ap_stop(t5_excl_t *h);
+/* MAC addresses of the stations on the soft AP: the count, or an error. */
+int t5_wifi_excl_ap_clients(t5_excl_t *h, uint8_t (*mac)[6], int max);
+
+#define T5_WIFI_PROTO_B 0x01
+#define T5_WIFI_PROTO_G 0x02
+#define T5_WIFI_PROTO_N 0x04
+#define T5_WIFI_PROTO_AX 0x20
+typedef struct {
+    uint32_t size;
+    char country[3];          /* "US", "DE"...; "" leaves it */
+    int8_t tx_power_dbm;      /* 2..20, 0 leaves it */
+    uint8_t protocols;        /* T5_WIFI_PROTO_*, 0 leaves it */
+    uint8_t bandwidth;        /* 20 or 40 (MHz), 0 leaves it */
+} t5_wifi_radio_t;
+/* Change the station's radio settings (set may be NULL) and read them back
+ * (get may be NULL). */
+t5_err_t t5_wifi_excl_radio(t5_excl_t *h, const t5_wifi_radio_t *set, t5_wifi_radio_t *get);
+/* The station's MAC address: read it, or set it (a locally administered
+ * unicast address) while not connected. */
+t5_err_t t5_wifi_excl_mac(t5_excl_t *h, uint8_t mac[6], bool set);
 
 /* pcap files (LINKTYPE_IEEE802_11_RADIOTAP, 127) that open in Wireshark:
  * the 24-byte file header, then one record per frame. Pure. */

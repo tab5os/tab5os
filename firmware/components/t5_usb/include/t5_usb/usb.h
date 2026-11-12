@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_core/excl.h"
 #include "t5_storage/paths.h"   /* T5_USB_PATH */
 
 #ifdef __cplusplus
@@ -143,6 +144,18 @@ t5_err_t t5_usb_stream_stop(t5_usb_handle_t *h, uint8_t ep);
 bool t5_usb_handle_up(t5_usb_handle_t *h);
 /* Stops streams and releases every claim. */
 t5_err_t t5_usb_close(t5_usb_handle_t *h);
+
+/* ---- the whole bus: exclusive USB-A (API level 2) -------------------------
+ * With t5_excl_claim(T5_EXCL_USBA) (t5/excl.h) the OS's USB drivers let go:
+ * a drive at /usb is unmounted cleanly first, then the port's power is
+ * cycled so every device enumerates again with no OS driver on it
+ * (keyboards and mice stop working for the system, other apps' raw handles
+ * see their device leave). The app opens and claims anything with the raw
+ * calls above, without take-over questions. T5_ERR_BUSY if an app has the
+ * serial port or a camera open. On release the power is cycled again and
+ * the OS's drivers find everything. */
+/* Switch USB-A's 5 V and root port: off then on power-cycles every device. */
+t5_err_t t5_usba_power(t5_excl_t *h, bool on);
 
 /* USB-C role. Storage mode hands the SD card to the computer; the Tab5
  * takes it back when the computer ejects it, when asked
