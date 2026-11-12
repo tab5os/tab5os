@@ -8,8 +8,9 @@
 #               image, C6 radio image, flash_all.sh (one esptool command,
 #               nothing else needed)
 #   tab5os-<v>.t5os         the OS as an update (signed with KEY if given)
-#   tab5os-c6-<v>.t5c6      the C6 radio firmware for that OS (signed the same);
-#                           the OS fetches it from the release (t5_ota_net/c6.h)
+#   tab5os-c6-<c6v>.t5c6    the C6 radio firmware, version c6/VERSION (signed the
+#                           same); the OS fetches it from its release when the C6
+#                           runs another version (t5_ota_net/c6.h)
 #   apps/*.t5app            the example apps
 #   tab5os-sdk-<v>.tar.gz   the app SDK, self-contained (tools/sdk_release.sh)
 #   SHA256SUMS
@@ -32,6 +33,8 @@ OUT="$ROOT/dist/tab5os-$VER"
 FW="$ROOT/firmware/build"
 rm -rf "$OUT"
 mkdir -p "$OUT/firmware" "$OUT/apps"
+
+python3 "$ROOT/tools/t5/release_rules.py"
 
 echo "== firmware"
 git -C "$ROOT" submodule update --init third_party/micropython >/dev/null
@@ -69,7 +72,8 @@ PY="${IDF_PYTHON_ENV_PATH:+$IDF_PYTHON_ENV_PATH/bin/python}"
 PY="${PY:-python3}"
 "$PY" "$ROOT/tools/ota/t5ota.py" pack "$FW/tab5os.bin" -o "$OUT/tab5os-$VER.t5os" ${KEY:+--sign "$KEY"}
 
-"$PY" "$ROOT/tools/ota/t5ota.py" pack-c6 "$ROOT/c6/build/tab5os_c6.bin" -o "$OUT/tab5os-c6-$VER.t5c6" ${KEY:+--sign "$KEY"}
+C6VER="$(tr -d '[:space:]' < "$ROOT/c6/VERSION")"
+"$PY" "$ROOT/tools/ota/t5ota.py" pack-c6 "$ROOT/c6/build/tab5os_c6.bin" -o "$OUT/tab5os-c6-$C6VER.t5c6" ${KEY:+--sign "$KEY"}
 
 echo "== example apps"
 "$T5" examples >/dev/null

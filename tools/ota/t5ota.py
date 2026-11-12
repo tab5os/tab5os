@@ -6,8 +6,8 @@
   t5ota.py inspect FILE.t5os|FILE.t5c6 [--chip-rev X.Y]
 
 A .t5c6 is the same header with magic "T5C6" and an ESP32-C6 image built by
-c6/ (version "t5-c6-<OS version>"); releases publish it beside the .t5os,
-and the OS fetches the one for its own version (t5_ota_net/c6.h).
+c6/ (version "t5-c6-<c6/VERSION>"); releases publish it beside the .t5os,
+and the OS fetches the one it was built with (t5_ota_net/c6.h).
 
 A .t5os is a header (t5_ota_hdr_t in firmware/components/t5_ota/include/
 t5_ota/ota.h, whose constants are read from there) and the OS image. The

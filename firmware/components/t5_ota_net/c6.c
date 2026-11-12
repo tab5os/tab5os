@@ -71,9 +71,8 @@ static void tries_set(int n)
  * T5_ERR_STATE: neither is reachable yet (no card file, no Wi-Fi). */
 static t5_err_t fetch(const t5_net_status_t *n, char *err, size_t errlen)
 {
-    const char *osv = esp_app_get_description()->version;
     char name[64], path[128];
-    t5_ota_c6_file(osv, name, sizeof name);
+    t5_ota_c6_file(T5_C6_VERSION, name, sizeof name);
     static const char *const dirs[] = { T5_SD_PATH, T5_SD_PATH "/update" };
     for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
         snprintf(path, sizeof path, "%s/%s", dirs[i], name);
@@ -85,7 +84,7 @@ static t5_err_t fetch(const t5_net_status_t *n, char *err, size_t errlen)
     }
     if (n->state != T5_NET_CONNECTED) return T5_ERR_STATE;
     char url[192];
-    t5_ota_c6_url(osv, url, sizeof url);
+    t5_ota_c6_url(esp_app_get_description()->version, T5_C6_VERSION, url, sizeof url);
     say("downloading %s", name);
     t5_download_t *dl;
     T5_RETURN_ON_ERR(t5_download_open(url, &dl, NULL, err, errlen));
@@ -188,7 +187,7 @@ static void scheduler(void *arg)
 t5_err_t t5_c6_sync_start(void)
 {
     if (!t5_mutex_once(&s_mx)) return T5_ERR_NO_MEM;
-    t5_ota_c6_version(esp_app_get_description()->version, s_want, sizeof s_want);
+    t5_ota_c6_version(T5_C6_VERSION, s_want, sizeof s_want);
     snprintf(s_msg, sizeof s_msg, "not checked yet");
     T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_NET_C6_UPDATE, on_update, NULL));
     return t5_task_create_lp("t5_c6_sched", scheduler, NULL, 4096, 2, T5_CORE_ANY, NULL);

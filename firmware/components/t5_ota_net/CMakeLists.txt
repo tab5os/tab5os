@@ -9,3 +9,8 @@ idf_component_register(
     REQUIRES t5_core t5_ota
     PRIV_REQUIRES t5_net t5_storage esp_app_format
 )
+# The C6 firmware this OS expects: c6/VERSION, the version c6/ builds.
+set(C6_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/../../../c6/VERSION")
+file(STRINGS "${C6_VERSION_FILE}" T5_C6_VERSION LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${C6_VERSION_FILE}")
+target_compile_definitions(${COMPONENT_LIB} PRIVATE T5_C6_VERSION="${T5_C6_VERSION}")

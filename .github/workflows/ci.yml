@@ -108,7 +108,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: UI density, coding standard, sim LVGL config, ABI symbols, API reference (tools/t5/t5 lint)
+      # fetch-depth 0 brings the release tags: the release rules compare against the last one.
+      - name: UI density, coding standard, sim LVGL config, ABI symbols, API reference, release rules (tools/t5/t5 lint)
         run: tools/t5/t5 lint
 
   sim:

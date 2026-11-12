@@ -276,8 +276,9 @@ static void test_c6_rules(void)
     char v[48], url[192];
     t5_ota_c6_version("0.2.0", v, sizeof v);
     TEST_ASSERT_EQUAL_STRING("t5-c6-0.2.0", v);
-    t5_ota_c6_url("0.2.0", url, sizeof url);
-    TEST_ASSERT_EQUAL_STRING("https://github.com/tab5os/tab5os/releases/download/v0.2.0/tab5os-c6-0.2.0.t5c6", url);
+    /* An OS release carries the C6 firmware it was built with, whose version moves on its own. */
+    t5_ota_c6_url("0.2.3", "0.2.0", url, sizeof url);
+    TEST_ASSERT_EQUAL_STRING("https://github.com/tab5os/tab5os/releases/download/v0.2.3/tab5os-c6-0.2.0.t5c6", url);
     t5_ota_c6_file("0.2.0", url, sizeof url);
     TEST_ASSERT_EQUAL_STRING("tab5os-c6-0.2.0.t5c6", url);
 

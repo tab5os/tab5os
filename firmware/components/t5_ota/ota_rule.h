@@ -77,22 +77,25 @@ static inline bool t5_ota_pick_release(const char *json, const char *running, ch
     return found;
 }
 
-/* The C6 image an OS of this version expects: "t5-c6-<version>". */
-static inline void t5_ota_c6_version(const char *os_version, char *out, size_t n)
+/* The C6 image's version string for a C6 firmware version (c6/VERSION):
+ * "t5-c6-<version>". */
+static inline void t5_ota_c6_version(const char *c6_version, char *out, size_t n)
 {
-    snprintf(out, n, "%s%s", T5_OTA_C6_PREFIX, os_version);
+    snprintf(out, n, "%s%s", T5_OTA_C6_PREFIX, c6_version);
 }
 
-/* Where the release of this OS version publishes its .t5c6, and the file's
- * name on an SD card (top folder or /update). */
-static inline void t5_ota_c6_url(const char *os_version, char *out, size_t n)
+/* Every release publishes the C6 firmware it was built with, so an OS finds
+ * the one it expects in its own release: <os_version>'s release,
+ * tab5os-c6-<c6_version>.t5c6. On an SD card (top folder or /update) the
+ * file has the same name. */
+static inline void t5_ota_c6_url(const char *os_version, const char *c6_version, char *out, size_t n)
 {
-    snprintf(out, n, T5_OTA_ASSET_PREFIX "%s/tab5os-c6-%s.t5c6", os_version, os_version);
+    snprintf(out, n, T5_OTA_ASSET_PREFIX "%s/tab5os-c6-%s.t5c6", os_version, c6_version);
 }
 
-static inline void t5_ota_c6_file(const char *os_version, char *out, size_t n)
+static inline void t5_ota_c6_file(const char *c6_version, char *out, size_t n)
 {
-    snprintf(out, n, "tab5os-c6-%s.t5c6", os_version);
+    snprintf(out, n, "tab5os-c6-%s.t5c6", c6_version);
 }
 
 #define T5_OTA_C6_HEAD_LEN (T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF + T5_IMG_DESC_VERSION_LEN)

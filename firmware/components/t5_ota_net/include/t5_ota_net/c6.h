@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Keeping the C6 radio's firmware matched to the OS.
  *
- * Each OS expects the C6 firmware built from the same tree ("t5-c6-" and
- * its own version, T5_OTA_C6_PREFIX in t5_ota/ota.h). Once a boot is
+ * Each OS expects the C6 firmware it was built with: "t5-c6-" and
+ * c6/VERSION (T5_OTA_C6_PREFIX in t5_ota/ota.h), which is raised only when
+ * the C6 image changes, so most updates leave the C6 alone. Once a boot is
  * confirmed (not on trial, not safe mode) and the C6 is up, the sync:
  *   1. stops if the C6 already runs that version;
  *   2. otherwise, if the c6fw partition doesn't hold it, takes the release's
- *      .t5c6 from the SD card (tab5os-c6-<v>.t5c6 in the top folder or
- *      /update) or, with Wi-Fi, from the GitHub release of this version,
+ *      .t5c6 from the SD card (tab5os-c6-<c6 version>.t5c6 in the top folder
+ *      or /update) or, with Wi-Fi, from the GitHub release of this OS version
+ *      (every release publishes the C6 firmware it was built with),
  *      and writes it to c6fw (t5_ota_c6_install_stream, as
  *      T5_OTA_FROM_SETTINGS without consent: signed by a built-in key);
  *   3. has t5_net update the C6 from c6fw.
