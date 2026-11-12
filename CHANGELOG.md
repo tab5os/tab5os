@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Signed updates over Wi-Fi.** Releases are now signed with the Tab5 OS release key, and the OS trusts it (`firmware/ota_keys/release.pem`). The Tab5 checks the GitHub releases about once a day while Wi-Fi is connected, says when a newer one is out, and Settings > Updates has a new Over Wi-Fi section with Install and Check now. A signed update installs with developer mode off, from Wi-Fi or the SD card. Nothing installs without a tap. From Settings without developer mode, an update older than the running system is refused. Coming from 0.1.3 or earlier, which trust no key, install this release once in developer mode or with `flash_all.sh`. See [installing and updating](docs/flashing.md#updating).
 - **A smaller OS image.** The Phase 0 bench commands (`elf bench`, `gpio watch|get`, `sleep light|result`) are left out of normal builds, and NimBLE logs only warnings and errors. The image is 132 KB smaller, about 3.5% of an update slot. Apps, the app API and the SDK are unchanged. To get the bench commands back, build with `CONFIG_T5_DIAG_BENCH=y` (see [bench procedures](docs/bench-procedures.md)).
 
 ## 0.1.3 (pre-release), Nov 10, 2026

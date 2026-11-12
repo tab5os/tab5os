@@ -44,6 +44,7 @@ _Static_assert(sizeof T5_OTA_PROJECT <= T5_IMG_DESC_PROJECT_LEN, "project name")
 #define CHUNK 4096
 #define SD_SCAN_MAX 16
 #define HEAD_LEN 128                 /* image header, segment header, app description */
+_Static_assert(HEAD_LEN >= T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF + T5_IMG_DESC_VERSION_LEN, "head");
 _Static_assert(HEAD_LEN >= T5_IMG_DESC_OFF + T5_IMG_DESC_PROJECT_OFF + T5_IMG_DESC_PROJECT_LEN, "head");
 
 typedef struct {
@@ -56,6 +57,8 @@ typedef struct {
     size_t nhead;
     bool checked;
     int key;                     /* index into t5_ota_keys, -1 unsigned or unknown */
+    t5_ota_source_t from;
+    bool consent;
 } ota_t;
 
 static t5_ota_status_t s_st;
@@ -163,6 +166,8 @@ static t5_err_t ota_begin(const t5_ota_hdr_t *hdr, t5_ota_source_t from, bool co
     o->hdr = *hdr;
     o->part = part;
     o->key = key;
+    o->from = from;
+    o->consent = consent;
     psa_crypto_init();
     o->sha = psa_hash_operation_init();
     if (psa_hash_setup(&o->sha, PSA_ALG_SHA_256) != PSA_SUCCESS ||
@@ -207,6 +212,11 @@ static t5_err_t check_head(const ota_t *o, char *err, size_t errlen)
     if (desc_magic != ESP_APP_DESC_MAGIC_WORD || strncmp(project, T5_OTA_PROJECT, T5_IMG_DESC_PROJECT_LEN)) {
         return fail(T5_ERR_INVALID_ARG, err, errlen, "not a Tab5 OS image");
     }
+    char version[T5_IMG_DESC_VERSION_LEN + 1];
+    snprintf(version, sizeof version, "%.*s", T5_IMG_DESC_VERSION_LEN,
+             (const char *)o->head + T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF);
+    const char *why = t5_ota_downgrade_refusal(version, esp_app_get_description()->version, o->from, o->consent);
+    if (why) return fail(T5_ERR_DENIED, err, errlen, why);
     return T5_OK;
 }
 

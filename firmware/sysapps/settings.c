@@ -25,6 +25,7 @@
 #include "t5_dev/dev.h"
 #include "t5_net/ble_sys.h"
 #include "t5_ota/ota.h"
+#include "t5_ota_net/update.h"
 #include "sysapps_priv.h"
 
 
@@ -924,8 +925,9 @@ static void page_usb(void)
 
 /* ---- Updates (plan 9.1-9.3) ---------------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *state, *list;
+    lv_obj_t *state, *list, *online, *check, *install;
     int shown;
+    char online_sig[160];
 } upd_page_t;
 
 static char s_upd_path[128];
@@ -988,10 +990,67 @@ static void restart_now(lv_event_t *e)
     t5_power_restart();
 }
 
+static void upd_check_clicked(lv_event_t *e)
+{
+    (void)e;
+    if (t5_update_check_now() != T5_OK) md_snackbar_show("A check or an install is already running", NULL, NULL, NULL);
+}
+
+static void upd_online_answer(int b, void *ud)
+{
+    (void)ud;
+    if (b == 0 && t5_update_install() != T5_OK) md_snackbar_show("Couldn't start the update", NULL, NULL, NULL);
+}
+
+static void upd_install_clicked(lv_event_t *e)
+{
+    (void)e;
+    t5_update_status_t u;
+    t5_update_status(&u);
+    char title[64];
+    snprintf(title, sizeof title, "Install Tab5 OS %s?", u.version);
+    md_dialog_show(title,
+                   "It downloads and installs alongside the current system, which keeps running until you restart. "
+                   "It goes in only if it's signed by a trusted key. If the new one doesn't start properly, the "
+                   "current one comes back by itself.",
+                   "Install", "Cancel", upd_online_answer, NULL);
+}
+
+/* The Over Wi-Fi section: what the last check found, and its buttons. */
+static void upd_online_refresh(upd_page_t *p)
+{
+    t5_update_status_t u;
+    t5_update_status(&u);
+    char buf[160];
+    int64_t ago_min = u.checked_us ? (t5_time_us() - u.checked_us) / 60000000 : -1;
+    char when[40] = "";
+    if (ago_min >= 120) snprintf(when, sizeof when, ", checked %d hours ago", (int)(ago_min / 60));
+    else if (ago_min >= 1) snprintf(when, sizeof when, ", checked %d min ago", (int)ago_min);
+    else if (ago_min == 0) snprintf(when, sizeof when, ", checked just now");
+    switch (u.state) {
+    case T5_UPDATE_CHECKING: snprintf(buf, sizeof buf, "Checking for updates"); break;
+    case T5_UPDATE_CURRENT: snprintf(buf, sizeof buf, "Up to date%s", when); break;
+    case T5_UPDATE_AVAILABLE:
+        if (u.error[0]) snprintf(buf, sizeof buf, "Tab5 OS %s is available. %s", u.version, u.error);
+        else snprintf(buf, sizeof buf, "Tab5 OS %s is available", u.version);
+        break;
+    case T5_UPDATE_INSTALLING: snprintf(buf, sizeof buf, "Downloading and installing Tab5 OS %s", u.version); break;
+    case T5_UPDATE_FAILED: snprintf(buf, sizeof buf, "%s", u.error); break;
+    default: snprintf(buf, sizeof buf, "Checks once a day while Wi-Fi is connected"); break;
+    }
+    if (!strcmp(buf, p->online_sig)) return;
+    snprintf(p->online_sig, sizeof p->online_sig, "%s", buf);
+    md_row_set_secondary(p->online, buf);
+    bool busy = u.state == T5_UPDATE_CHECKING || u.state == T5_UPDATE_INSTALLING;
+    lv_obj_set_hidden(p->install, u.state != T5_UPDATE_AVAILABLE);
+    lv_obj_set_hidden(p->check, busy);
+}
+
 static void upd_refresh(sa_nav_t *nav, void *arg)
 {
     (void)nav;
     upd_page_t *p = arg;
+    upd_online_refresh(p);
     t5_ota_status_t st;
     t5_ota_status(&st);
     char buf[160];
@@ -1046,10 +1105,18 @@ static void page_updates(void)
     snprintf(buf, sizeof buf, "Version %s%s%s", n.c6_version[0] ? n.c6_version : "unknown",
              n.c6_image[0] ? ", update ready: " : "", n.c6_image);
     md_row_create(body, MD_ICON_WIFI, "Wi-Fi and Bluetooth radio", buf);
+    md_section_create(body, "Over Wi-Fi");
+    p->online = md_row_create(body, MD_ICON_CLOUD, "Tab5 OS releases", " ");
+    lv_obj_t *brow = sa_button_row(body);
+    p->check = md_button_create(brow, "Check now", MD_BUTTON_TEXT);
+    lv_obj_add_event_cb(p->check, upd_check_clicked, LV_EVENT_CLICKED, NULL);
+    p->install = md_button_create(brow, "Install", MD_BUTTON_CONTAINED);
+    lv_obj_add_event_cb(p->install, upd_install_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_hidden(p->install, true);
     md_section_create(body, "From the SD card");
     p->list = row_list(body);
-    sa_note(body, "An update installs only if it's built for this Tab5 and signed by a trusted key, or sent from a "
-                  "paired computer in developer mode.");
+    sa_note(body, "An update installs only if it's built for this Tab5, signed by a trusted key and not older than "
+                  "this system, or in developer mode.");
     md_section_create(body, "Repair");
     lv_obj_t *r = md_row_create(body, MD_ICON_HEALING, "Restart in safe mode", "Apps you installed stay off");
     md_row_set_clickable(r, safemode_clicked, NULL);
