@@ -10,3 +10,4 @@ t5_app(rs485_console SRCS rs485_console/main.c MANIFEST rs485_console/manifest.t
 t5_app(ble_explorer SRCS ble_explorer/main.c MANIFEST ble_explorer/manifest.toml ICON ble_explorer/icon.png)
 t5_app(ui_gallery SRCS ui_gallery/main.c MANIFEST ui_gallery/manifest.toml ICON ui_gallery/icon.png)
 t5_app(calculator SRCS calculator/main.c calculator/calc.c calculator/calc_font_40.c calculator/calc_font_80.c MANIFEST calculator/manifest.toml ICON calculator/icon.png)
+t5_app(hid_remote SRCS hid_remote/main.c MANIFEST hid_remote/manifest.toml ICON hid_remote/icon.png)

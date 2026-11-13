@@ -44,6 +44,19 @@ t5_err_t t5_ble_sys_connect(const uint8_t addr[6], uint8_t addr_type);
 t5_err_t t5_ble_sys_disconnect(void);
 bool t5_ble_sys_connected(void);
 
+/* Pairing (any link): the answer to T5_EV_BLE_PAIRING action 1, after
+ * the person compared the codes. */
+t5_err_t t5_ble_sys_pair_reply(uint16_t conn, bool accept);
+/* Bonded devices (kept across reboots, 16 at most: the least recently
+ * paired goes first) and forgetting one. The other device keeps its side:
+ * remove the Tab5 there too. */
+typedef struct {
+    uint8_t addr[6];
+    uint8_t addr_type;
+} t5_ble_bond_t;
+int t5_ble_sys_bonds(t5_ble_bond_t *out, int max);
+t5_err_t t5_ble_sys_forget(const uint8_t addr[6], uint8_t addr_type);
+
 #ifdef __cplusplus
 }
 #endif

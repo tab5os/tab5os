@@ -58,7 +58,7 @@ static const char *TAG = "t5.net";
 
 typedef enum {
     CMD_START, CMD_STOP, CMD_SCAN, CMD_CONNECT, CMD_DISCONNECT, CMD_FORGET, CMD_RESET, CMD_SUSPEND, CMD_RESUME,
-    CMD_UPDATE, CMD_ANTENNA, CMD_BLE,
+    CMD_UPDATE, CMD_ANTENNA, CMD_BLE, CMD_HOLD,
     EV_STA_START, EV_CONNECTED, EV_DISCONNECTED, EV_GOT_IP, EV_SCAN_DONE, EV_LINK_DOWN, EV_LINK_FAIL, EV_WAKE,
     EV_SNTP,
 } msg_type_t;
@@ -84,6 +84,7 @@ static t5_rail_hold_t *s_rail;
 static esp_netif_t *s_netif;
 static bool s_hosted_up, s_wifi_up, s_sntp_started;
 static bool s_auto = true;           /* auto-connect to saved networks */
+static bool s_held;                  /* an app's monitor has the radio (net_station_hold) */
 static bool s_scan_for_auto;
 static bool s_scanning;
 static bool s_got_ip;
@@ -673,8 +674,21 @@ static void read_image_version(void)
     t5_mutex_unlock(s_mtx);
 }
 
+/* Which firmware the C6 runs. Our radio firmware names its build
+ * ("t5-c6-0.2.0", the version in its image); esp_hosted only reports its
+ * own protocol version ("3.1.0"), the same for every build, which is all
+ * there is for firmware that doesn't answer. A build name also goes into
+ * the status. */
 static bool running_version(char *out, size_t cap)
 {
+    char build[32];
+    if (wifimon_c6_build(build, sizeof build) == T5_OK && build[0]) {
+        scpy(out, cap, build, sizeof build);
+        t5_mutex_lock(s_mtx);
+        scpy(s_st.c6_version, sizeof s_st.c6_version, build, sizeof build);
+        t5_mutex_unlock(s_mtx);
+        return true;
+    }
     esp_hosted_app_desc_t d = {0};
     if (esp_hosted_get_coprocessor_app_desc(&d) != ESP_OK) return false;
     scpy(out, cap, d.version, sizeof d.version);
@@ -810,6 +824,7 @@ static void handle(const msg_t *m)
         start_scan(false);
         break;
     case CMD_CONNECT:
+        if (s_held) break;                  /* an app's monitor has the radio */
         s_auto = true;
         s_pending_save = m->flag;
         scpy(s_pending_pass, sizeof s_pending_pass, m->pass, sizeof m->pass);
@@ -866,6 +881,23 @@ static void handle(const msg_t *m)
         else if (!radio_wanted() && s_hosted_up) power_down();
         else t5_ble_on_link(s_hosted_up);
         break;
+    case CMD_HOLD:
+        if (m->flag && !s_held) {
+            s_held = true;
+            s_auto = false;
+            if (s_wifi_up && (s_st.state == T5_NET_CONNECTED || s_st.state == T5_NET_CONNECTING)) {
+                s_expect_leave = true;
+                esp_wifi_disconnect();
+            }
+            set_state(T5_NET_IDLE);
+            T5_LOGW(TAG, "station paused: an app has the radio");
+        } else if (!m->flag && s_held) {
+            s_held = false;
+            s_auto = true;
+            T5_LOGI(TAG, "station back");
+            if (s_wifi_up && !rejoin_last()) s_next_scan = t5_time_ms();
+        }
+        break;
     case EV_STA_START:
         break;
     case EV_CONNECTED:
@@ -882,7 +914,9 @@ static void handle(const msg_t *m)
         on_got_ip(m);
         break;
     case EV_SCAN_DONE:
-        on_scan_done();
+        /* A held radio's scan is an app's (wifi_excl.c): its results are its own. */
+        if (s_held) s_scanning = false;
+        else on_scan_done();
         break;
     case EV_LINK_DOWN:
     case EV_LINK_FAIL:
@@ -892,6 +926,11 @@ static void handle(const msg_t *m)
         if (s_hosted_up && !s_suspended_off) reset_c6(m->type == EV_LINK_FAIL ? "transport failure" : "transport down");
         break;
     case EV_WAKE:
+        /* A C6 that Sleep powered off can't be asking for us: the edge was
+         * latched while it went down (data it had queued, or the rail
+         * falling). Waking for it powered the C6 straight back on, and
+         * Sleep then never lasted. */
+        if (s_suspended_off || !s_hosted_up) break;
         t5_mutex_lock(s_mtx);
         s_st.wakes++;
         t5_mutex_unlock(s_mtx);
@@ -960,6 +999,7 @@ static void net_task(void *arg)
 
 t5_err_t t5_net_init(void)
 {
+    wifi_excl_init();
     if (s_inited) return T5_OK;
     esp_err_t e = nvs_ready();
     if (e != ESP_OK) T5_LOGE(TAG, "nvs: %s", esp_err_to_name(e));
@@ -1047,6 +1087,17 @@ t5_err_t t5_net_connect(const char *ssid, const char *pass, bool save)
     return e;
 }
 
+t5_err_t net_station_hold(bool on)
+{
+    msg_t m = { .type = CMD_HOLD, .flag = on };
+    return send(&m);
+}
+
+bool net_wifi_up(void)
+{
+    return s_wifi_up;
+}
+
 t5_err_t t5_net_disconnect(void)
 {
     msg_t m = { .type = CMD_DISCONNECT };
@@ -1085,6 +1136,14 @@ t5_err_t t5_net_c6_reset(void)
 {
     msg_t m = { .type = CMD_RESET };
     return send(&m);
+}
+
+t5_err_t t5_net_c6_running(char *out, size_t n)
+{
+    if (n) out[0] = 0;
+    read_image_version();                   /* c6fw may have been rewritten since */
+    if (!s_hosted_up) return T5_ERR_STATE;
+    return running_version(out, n) ? T5_OK : T5_ERR_IO;
 }
 
 t5_err_t t5_net_c6_update(bool force)

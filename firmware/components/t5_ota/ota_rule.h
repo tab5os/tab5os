@@ -5,7 +5,9 @@
 #pragma once
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
+#include "t5_bootfmt/espimg.h"
 #include "t5_ota/ota.h"
 
 /* <0, 0 or >0 as version a is older than, the same as or newer than b.
@@ -73,6 +75,46 @@ static inline bool t5_ota_pick_release(const char *json, const char *running, ch
     }
     if (found) snprintf(version, version_len, "%s", best);
     return found;
+}
+
+/* The C6 image's version string for a C6 firmware version (c6/VERSION):
+ * "t5-c6-<version>". */
+static inline void t5_ota_c6_version(const char *c6_version, char *out, size_t n)
+{
+    snprintf(out, n, "%s%s", T5_OTA_C6_PREFIX, c6_version);
+}
+
+/* Every release publishes the C6 firmware it was built with, so an OS finds
+ * the one it expects in its own release: <os_version>'s release,
+ * tab5os-c6-<c6_version>.t5c6. On an SD card (top folder or /update) the
+ * file has the same name. */
+static inline void t5_ota_c6_url(const char *os_version, const char *c6_version, char *out, size_t n)
+{
+    snprintf(out, n, T5_OTA_ASSET_PREFIX "%s/tab5os-c6-%s.t5c6", os_version, c6_version);
+}
+
+static inline void t5_ota_c6_file(const char *c6_version, char *out, size_t n)
+{
+    snprintf(out, n, "tab5os-c6-%s.t5c6", c6_version);
+}
+
+#define T5_OTA_C6_HEAD_LEN (T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF + T5_IMG_DESC_VERSION_LEN)
+
+/* NULL when head (an image's first T5_OTA_C6_HEAD_LEN bytes) starts an
+ * ESP32-C6 app image of version want (NULL: any version), else why not. */
+static inline const char *t5_ota_c6_head_refusal(const uint8_t *head, size_t len, const char *want)
+{
+    if (len < T5_OTA_C6_HEAD_LEN || head[0] != T5_IMG_MAGIC) return "not a firmware image";
+    if ((head[T5_IMG_CHIP_ID_OFF] | head[T5_IMG_CHIP_ID_OFF + 1] << 8) != T5_IMG_CHIP_ESP32C6) {
+        return "not an ESP32-C6 image";
+    }
+    const uint8_t *d = head + T5_IMG_DESC_OFF;
+    uint32_t magic = (uint32_t)d[0] | (uint32_t)d[1] << 8 | (uint32_t)d[2] << 16 | (uint32_t)d[3] << 24;
+    if (magic != T5_IMG_DESC_MAGIC) return "not an app image";
+    if (want && strncmp((const char *)d + T5_IMG_DESC_VERSION_OFF, want, T5_IMG_DESC_VERSION_LEN)) {
+        return "not the radio firmware this system expects";
+    }
+    return NULL;
 }
 
 /* NULL when an image with this header may go in from this source, else why

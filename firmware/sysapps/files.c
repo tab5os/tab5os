@@ -12,6 +12,8 @@
 #include "t5/storage.h"
 #include "t5/system.h"
 #include "t5/usb.h"
+#include "t5_gui/t5ui_icons.h"
+#include "t5_gui/t5ui_sys.h"
 #include "sysapps_priv.h"
 
 #define MAX_ENTRIES 512
@@ -26,7 +28,7 @@ typedef struct {
     char path[192];
     entry_t *e;
     int n;
-    lv_obj_t *list, *empty;
+    t5ui_obj_t *list, *empty;
 } dir_page_t;
 
 static sa_nav_t s_nav;
@@ -46,12 +48,12 @@ static bool ends_with(const char *s, const char *suf)
 
 static const char *icon_for(const entry_t *e)
 {
-    if (e->dir) return MD_ICON_FOLDER;
-    if (ends_with(e->name, ".t5app")) return MD_ICON_EXTENSION;
-    if (ends_with(e->name, ".jpg") || ends_with(e->name, ".jpeg") || ends_with(e->name, ".png")) return MD_ICON_IMAGE;
-    if (ends_with(e->name, ".h264") || ends_with(e->name, ".mp4") || ends_with(e->name, ".avi")) return MD_ICON_VIDEOCAM;
-    if (ends_with(e->name, ".wav") || ends_with(e->name, ".mp3")) return MD_ICON_MUSIC_NOTE;
-    return MD_ICON_INSERT_DRIVE_FILE;
+    if (e->dir) return T5UI_ICON_FOLDER;
+    if (ends_with(e->name, ".t5app")) return T5UI_ICON_EXTENSION;
+    if (ends_with(e->name, ".jpg") || ends_with(e->name, ".jpeg") || ends_with(e->name, ".png")) return T5UI_ICON_IMAGE;
+    if (ends_with(e->name, ".h264") || ends_with(e->name, ".mp4") || ends_with(e->name, ".avi")) return T5UI_ICON_VIDEOCAM;
+    if (ends_with(e->name, ".wav") || ends_with(e->name, ".mp3")) return T5UI_ICON_MUSIC_NOTE;
+    return T5UI_ICON_INSERT_DRIVE_FILE;
 }
 
 static void load(dir_page_t *p)
@@ -82,19 +84,20 @@ static void load(dir_page_t *p)
     if (p->n) qsort(p->e, (size_t)p->n, sizeof *p->e, by_name);
 }
 
-static void bind(md_list_row_t *r, uint32_t i, void *ud)
+static void bind(t5ui_event_t *ev)
 {
-    dir_page_t *p = ud;
-    if ((int)i >= p->n) return;
+    dir_page_t *p = t5ui_event_user(ev);
+    t5ui_obj_t *r = t5ui_event_target(ev);
+    int i = (int)t5ui_event_index(ev);
+    if (i < 0 || i >= p->n) return;
     entry_t *e = &p->e[i];
-    lv_label_set_text(r->primary, e->name);
-    lv_label_set_text(r->icon, icon_for(e));
-    if (r->secondary) {
-        char b[32];
-        if (e->dir) snprintf(b, sizeof b, "Folder");
-        else sa_fmt_bytes(b, sizeof b, e->size);
-        lv_label_set_text(r->secondary, b);
-    }
+    t5ui_set_str(r, T5UI_P_TEXT, e->name);
+    t5ui_set_str(r, T5UI_P_ICON, icon_for(e));
+    /* Two-line rows: a one-line row has no second line, and this does nothing. */
+    char b[32];
+    if (e->dir) snprintf(b, sizeof b, "Folder");
+    else sa_fmt_bytes(b, sizeof b, e->size);
+    t5ui_set_str(r, T5UI_P_SECONDARY, b);
 }
 
 static void open_dir(const char *path);
@@ -117,7 +120,7 @@ static void install_answer(int b, void *ud)
         else if (e == T5_OK) snprintf(msg, sizeof msg, "Installed. Find it in your apps.");
         else snprintf(msg, sizeof msg, "Couldn't install: %s", err[0] ? err : t5_err_str(e));
         free(man);
-        md_snackbar_show(msg, NULL, NULL, NULL);
+        t5ui_snackbar(msg, NULL, NULL, NULL);
     }
     free(in);
 }
@@ -130,7 +133,7 @@ static void ask_install(const char *path)
     const char *base = strrchr(path, '/');
     char title[96];
     snprintf(title, sizeof title, "Install %s?", base ? base + 1 : path);
-    md_dialog_show(title, T5_NATIVE_APP_WARNING, "Install", "Cancel", install_answer, in);
+    t5ui_dialog(title, T5_NATIVE_APP_WARNING, "Install", "Cancel", install_answer, in);
 }
 
 /* ---- background jobs: delete and format ------------------------------------------
@@ -157,9 +160,9 @@ static void reload_top(void)
     if (l->refresh == dir_refresh && l->arg) {
         dir_page_t *p = l->arg;
         load(p);
-        md_list_set_count(p->list, (uint32_t)p->n);
-        md_list_refresh(p->list);
-        lv_obj_set_hidden(p->empty, p->n > 0);
+        t5ui_set_int(p->list, T5UI_P_COUNT, p->n);
+        t5ui_cmd(p->list, T5UI_CMD_LIST_REFRESH, 0, 0, 0, NULL);
+        t5ui_set_int(p->empty, T5UI_P_HIDDEN, p->n > 0);
     }
 }
 
@@ -192,7 +195,7 @@ static void job_done(void *arg)
         static const char *ok[] = { "Deleted", "SD card formatted", "USB drive formatted" };
         static const char *bad[] = { "Couldn't delete everything: some files are still there",
                                      "Couldn't format the SD card", "Couldn't format the USB drive" };
-        md_snackbar_show(j->err == T5_OK ? ok[j->kind] : bad[j->kind], NULL, NULL, NULL);
+        t5ui_snackbar(j->err == T5_OK ? ok[j->kind] : bad[j->kind], NULL, NULL, NULL);
         if (j->kind == JOB_DELETE) reload_top();
         else sa_pop_to_root(&s_nav);
     }
@@ -207,7 +210,7 @@ static void job_task(void *arg)
     case JOB_FORMAT_SD: j->err = t5_storage_sd_format(); break;
     case JOB_FORMAT_USB: j->err = t5_usb_storage_format(); break;
     }
-    if (t5_ui_async(job_done, j) != T5_OK) {
+    if (t5ui_async(job_done, j) != T5_OK) {
         s_busy = false;
         free(j);
     }
@@ -216,7 +219,7 @@ static void job_task(void *arg)
 static void start_job(job_kind_t kind, const char *path)
 {
     if (s_busy) {
-        md_snackbar_show("Wait for the current delete or format to finish", NULL, NULL, NULL);
+        t5ui_snackbar("Wait for the current delete or format to finish", NULL, NULL, NULL);
         return;
     }
     job_t *j = calloc(1, sizeof *j);
@@ -225,7 +228,7 @@ static void start_job(job_kind_t kind, const char *path)
     snprintf(j->path, sizeof j->path, "%s", path ? path : "");
     s_busy = true;
     static const char *msg[] = { "Deleting...", "Formatting the SD card...", "Formatting the USB drive..." };
-    md_snackbar_show(msg[kind], NULL, NULL, NULL);
+    t5ui_snackbar(msg[kind], NULL, NULL, NULL);
     void *ctx = kind == JOB_DELETE ? NULL : t5_sys_enter();
     t5_err_t e = t5_task_create("files.job", job_task, j, 6144, 4, T5_CORE_ANY, NULL);
     if (kind != JOB_DELETE) t5_sys_leave(ctx);
@@ -255,9 +258,9 @@ static void ask_delete(const char *path, bool dir)
     char title[96];
     const char *base = strrchr(path, '/');
     snprintf(title, sizeof title, "Delete %s?", base ? base + 1 : path);
-    md_dialog_show(title, dir ? "The folder and everything in it are deleted. This can't be undone."
+    t5ui_dialog(title, dir ? "The folder and everything in it are deleted. This can't be undone."
                               : "The file is deleted. This can't be undone.",
-                   "Delete", "Cancel", delete_answer, m);
+                "Delete", "Cancel", delete_answer, m);
 }
 
 static void format_answer(int b, void *ud)
@@ -268,14 +271,14 @@ static void format_answer(int b, void *ud)
 static void ask_format(bool usb)
 {
     if (usb ? !t5_usb_storage_mounted() : t5_storage_sd_state() != T5_SD_MOUNTED) {
-        md_snackbar_show(usb ? "No USB drive to format" : "No SD card to format", NULL, NULL, NULL);
+        t5ui_snackbar(usb ? "No USB drive to format" : "No SD card to format", NULL, NULL, NULL);
         return;
     }
-    md_dialog_show(usb ? "Format the USB drive?" : "Format the SD card?",
-                   usb ? "Everything on the drive is erased, and it gets one FAT partition. This can't be undone."
-                       : "Everything on the card is erased, including apps installed on it and photos. "
-                         "This can't be undone.",
-                   "Format", "Cancel", format_answer, (void *)(intptr_t)(usb ? JOB_FORMAT_USB : JOB_FORMAT_SD));
+    t5ui_dialog(usb ? "Format the USB drive?" : "Format the SD card?",
+                usb ? "Everything on the drive is erased, and it gets one FAT partition. This can't be undone."
+                    : "Everything on the card is erased, including apps installed on it and photos. "
+                      "This can't be undone.",
+                "Format", "Cancel", format_answer, (void *)(intptr_t)(usb ? JOB_FORMAT_USB : JOB_FORMAT_SD));
 }
 
 static bool is_drive_root(const char *path, bool *usb)
@@ -290,9 +293,9 @@ static void entry_menu_picked(int item, void *ud)
     if (item == 0) {
         if (m->dir) open_dir(m->path);
         else if (ends_with(m->path, ".t5app")) ask_install(m->path);
-        else if (sa_photo_can_open(m->path)) sa_photo_open(t5_app_screen(s_app), m->path, NULL);
-        else if (sa_video_can_open(m->path)) sa_video_open(t5_app_screen(s_app), m->path, NULL);
-        else md_snackbar_show("No app on the Tab5 opens this kind of file", NULL, NULL, NULL);
+        else if (sa_photo_can_open(m->path)) sa_photo_open(t5ui_root(s_app), m->path, NULL);
+        else if (sa_video_can_open(m->path)) sa_video_open(t5ui_root(s_app), m->path, NULL);
+        else t5ui_snackbar("No app on the Tab5 opens this kind of file", NULL, NULL, NULL);
     } else if (item == 1) {
         ask_delete(m->path, m->dir);
     }
@@ -306,27 +309,30 @@ static void entry_menu(dir_page_t *p, uint32_t i)
     snprintf(m->path, sizeof m->path, "%s/%s", p->path, p->e[i].name);
     m->dir = p->e[i].dir;
     static const char *items[] = { "Open", "Delete" };
-    md_menu_show(NULL, items, 2, entry_menu_picked, m);
+    /* Anchored to the whole screen: the top right corner, as a menu with no anchor. */
+    t5ui_menu(t5ui_sys_layer(T5UI_LAYER_TOP), items, 2, entry_menu_picked, m);
 }
 
-static void clicked(uint32_t i, void *ud)
+static void clicked(t5ui_event_t *ev)
 {
-    dir_page_t *p = ud;
-    if ((int)i >= p->n) return;
+    dir_page_t *p = t5ui_event_user(ev);
+    int i = (int)t5ui_event_index(ev);
+    if (i < 0 || i >= p->n) return;
     entry_t *e = &p->e[i];
     char full[256];
     snprintf(full, sizeof full, "%s/%s", p->path, e->name);
     if (e->dir) open_dir(full);
     else if (ends_with(e->name, ".t5app")) ask_install(full);
-    else if (sa_photo_can_open(full)) sa_photo_open(t5_app_screen(s_app), full, NULL);
-    else if (sa_video_can_open(full)) sa_video_open(t5_app_screen(s_app), full, NULL);
-    else entry_menu(p, i);
+    else if (sa_photo_can_open(full)) sa_photo_open(t5ui_root(s_app), full, NULL);
+    else if (sa_video_can_open(full)) sa_video_open(t5ui_root(s_app), full, NULL);
+    else entry_menu(p, (uint32_t)i);
 }
 
-static void long_pressed(uint32_t i, void *ud)
+static void long_pressed(t5ui_event_t *ev)
 {
-    dir_page_t *p = ud;
-    if ((int)i < p->n) entry_menu(p, i);
+    dir_page_t *p = t5ui_event_user(ev);
+    int i = (int)t5ui_event_index(ev);
+    if (i >= 0 && i < p->n) entry_menu(p, (uint32_t)i);
 }
 
 static void folder_menu_picked(int item, void *ud)
@@ -340,14 +346,13 @@ static void folder_menu_picked(int item, void *ud)
     else if (item == 1) ask_delete(p->path, true);
 }
 
-static void more_clicked(lv_event_t *e)
+static void more_clicked(t5ui_event_t *e)
 {
     dir_page_t *p = s_nav.lv[s_nav.depth - 1].arg;
     bool usb;
     static const char *folder[] = { "Refresh", "Delete this folder" };
     static const char *drive[] = { "Refresh", "Format this drive" };
-    md_menu_show(lv_event_get_current_target_obj(e), is_drive_root(p->path, &usb) ? drive : folder, 2,
-                 folder_menu_picked, NULL);
+    t5ui_menu(t5ui_event_obj(e), is_drive_root(p->path, &usb) ? drive : folder, 2, folder_menu_picked, NULL);
 }
 
 static void eject(bool usb)
@@ -356,10 +361,10 @@ static void eject(bool usb)
     char msg[96];
     if (err == T5_OK) snprintf(msg, sizeof msg, "%s ejected. You can remove it now.", usb ? "USB drive" : "SD card");
     else snprintf(msg, sizeof msg, "Couldn't eject the %s (%s)", usb ? "USB drive" : "SD card", t5_err_str(err));
-    md_snackbar_show(msg, NULL, NULL, NULL);
+    t5ui_snackbar(msg, NULL, NULL, NULL);
 }
 
-static void eject_clicked(lv_event_t *e)
+static void eject_clicked(t5ui_event_t *e)
 {
     (void)e;
     dir_page_t *p = s_nav.lv[s_nav.depth - 1].arg;
@@ -396,41 +401,51 @@ static void open_dir(const char *path)
     if (!p) return;
     snprintf(p->path, sizeof p->path, "%s", path);
     load(p);
-    lv_obj_t *body = sa_push(&s_nav, title_for(path));
-    lv_obj_set_scrollable(body, false);
-    lv_obj_t *bar = sa_bar(&s_nav);
+    t5ui_obj_t *body = sa_push(&s_nav, title_for(path));
+    t5ui_set_int(body, T5UI_P_SCROLLABLE, false);
+    t5ui_obj_t *bar = sa_bar(&s_nav);
     bool removable = !strncmp(path, T5_SD_PATH, strlen(T5_SD_PATH)) || !strncmp(path, T5_USB_PATH, strlen(T5_USB_PATH));
-    if (removable) md_appbar_add_action(bar, MD_ICON_EJECT, eject_clicked, NULL);
-    md_appbar_add_action(bar, MD_ICON_MORE_VERT, more_clicked, NULL);
-    p->list = md_list_create(body, (uint32_t)p->n, MD_LIST_ROW_2_DP, bind, clicked, p);
-    md_list_set_long_press(p->list, long_pressed);
-    lv_obj_set_width(p->list, LV_PCT(100));
-    lv_obj_set_flex_grow(p->list, 1);
+    if (removable) {
+        t5ui_obj_t *a = t5ui_create(bar, T5UI_MD_APPBAR_ACTION);
+        t5ui_set_str(a, T5UI_P_ICON, T5UI_ICON_EJECT);
+        t5ui_on(a, T5UI_EV_CLICK, eject_clicked, NULL);
+    }
+    t5ui_obj_t *more = t5ui_create(bar, T5UI_MD_APPBAR_ACTION);
+    t5ui_set_str(more, T5UI_P_ICON, T5UI_ICON_MORE_VERT);
+    t5ui_on(more, T5UI_EV_CLICK, more_clicked, NULL);
+    p->list = t5ui_create(body, T5UI_MD_LIST);
+    t5ui_on(p->list, T5UI_EV_BIND, bind, p);
+    t5ui_on(p->list, T5UI_EV_ITEM, clicked, p);
+    t5ui_on(p->list, T5UI_EV_ITEM_LONG, long_pressed, p);
+    t5ui_set_int(p->list, T5UI_P_ROW_DP, 64);           /* two-line rows */
+    t5ui_set_int(p->list, T5UI_P_COUNT, p->n);
+    t5ui_set_int(p->list, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(p->list, T5UI_P_GROW, 1);
     p->empty = sa_note(body, "This folder is empty.");
-    lv_obj_set_hidden(p->empty, p->n > 0);
+    t5ui_set_int(p->empty, T5UI_P_HIDDEN, p->n > 0);
     sa_set_refresh(&s_nav, dir_refresh, p, dir_free);
 }
 
 /* ---- roots --------------------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *sd, *data, *usb;
+    t5ui_obj_t *sd, *data, *usb;
     int shown_sd, shown_usb;
 } root_t;
 
-static void root_clicked(lv_event_t *e)
+static void root_clicked(t5ui_event_t *e)
 {
-    const char *path = lv_event_get_user_data(e);
+    const char *path = t5ui_event_user(e);
     if (!strcmp(path, T5_SD_PATH) && t5_storage_sd_state() != T5_SD_MOUNTED) {
         if (t5_storage_sd_rescan() != T5_OK) {
             bool bad = t5_storage_sd_state() == T5_SD_FAILED;
-            md_snackbar_show(bad ? "Couldn't read the SD card. Long press to format it."
-                                 : "No SD card. Insert one, then tap again.",
-                             NULL, NULL, NULL);
+            t5ui_snackbar(bad ? "Couldn't read the SD card. Long press to format it."
+                              : "No SD card. Insert one, then tap again.",
+                          NULL, NULL, NULL);
             return;
         }
     }
     if (!strcmp(path, T5_USB_PATH) && !t5_usb_storage_mounted()) {
-        md_snackbar_show("No USB drive. Plug one into the USB-A port.", NULL, NULL, NULL);
+        t5ui_snackbar("No USB drive. Plug one into the USB-A port.", NULL, NULL, NULL);
         return;
     }
     open_dir(path);
@@ -448,11 +463,11 @@ static void drive_menu_picked(int item, void *ud)
     }
 }
 
-static void drive_long(lv_event_t *e)
+static void drive_long(t5ui_event_t *e)
 {
-    lv_indev_wait_release(lv_indev_active());
+    t5ui_cmd(t5ui_event_obj(e), T5UI_CMD_IGNORE_PRESS, 0, 0, 0, NULL);
     static const char *items[] = { "Open", "Eject", "Format" };
-    md_menu_show(lv_event_get_current_target_obj(e), items, 3, drive_menu_picked, lv_event_get_user_data(e));
+    t5ui_menu(t5ui_event_obj(e), items, 3, drive_menu_picked, t5ui_event_user(e));
 }
 
 static void root_refresh(sa_nav_t *nav, void *arg)
@@ -473,32 +488,41 @@ static void root_refresh(sa_nav_t *nav, void *arg)
         bool known = (unsigned)sd < sizeof st / sizeof st[0] && st[sd];
         snprintf(buf, sizeof buf, "%s", known ? st[sd] : t5_storage_sd_state_str(sd));
     }
-    md_row_set_secondary(r->sd, buf);
+    t5ui_set_str(r->sd, T5UI_P_SECONDARY, buf);
     uint64_t total = 0, used = 0;
     if (t5_storage_data_usage(&total, &used) == T5_OK) {
         sa_fmt_bytes(a, sizeof a, total - used);
         sa_fmt_bytes(b, sizeof b, total);
         snprintf(buf, sizeof buf, "%s free of %s", a, b);
-        md_row_set_secondary(r->data, buf);
+        t5ui_set_str(r->data, T5UI_P_SECONDARY, buf);
     }
-    md_row_set_secondary(r->usb, t5_usb_storage_mounted() ? "Connected" : "Plug a drive into the USB-A port");
+    t5ui_set_str(r->usb, T5UI_P_SECONDARY,
+                 t5_usb_storage_mounted() ? "Connected" : "Plug a drive into the USB-A port");
+}
+
+/* A drive's row: its icon and name, a line for its state, a tap opens it. */
+static t5ui_obj_t *drive_row(t5ui_obj_t *body, const char *icon, const char *name, const char *path)
+{
+    t5ui_obj_t *row = t5ui_create(body, T5UI_MD_ROW);
+    t5ui_set_str(row, T5UI_P_ICON, icon);
+    t5ui_set_str(row, T5UI_P_TEXT, name);
+    t5ui_set_str(row, T5UI_P_SECONDARY, " ");
+    t5ui_on(row, T5UI_EV_CLICK, root_clicked, (void *)path);
+    return row;
 }
 
 static void on_create(t5_app_t *app)
 {
     s_app = app;
     sa_nav_init(&s_nav, app);
-    lv_obj_t *body = sa_push(&s_nav, "Files");
+    t5ui_obj_t *body = sa_push(&s_nav, "Files");
     root_t *r = calloc(1, sizeof *r);
     if (!r) return;
-    r->sd = md_row_create(body, MD_ICON_SD_STORAGE, "SD card", " ");
-    md_row_set_clickable(r->sd, root_clicked, (void *)T5_SD_PATH);
-    lv_obj_add_event_cb(r->sd, drive_long, LV_EVENT_LONG_PRESSED, NULL);
-    r->usb = md_row_create(body, MD_ICON_USB, "USB drive", " ");
-    md_row_set_clickable(r->usb, root_clicked, (void *)T5_USB_PATH);
-    lv_obj_add_event_cb(r->usb, drive_long, LV_EVENT_LONG_PRESSED, (void *)1);
-    r->data = md_row_create(body, MD_ICON_STORAGE, "Internal storage", " ");
-    md_row_set_clickable(r->data, root_clicked, (void *)T5_DATA_PATH);
+    r->sd = drive_row(body, T5UI_ICON_SD_STORAGE, "SD card", T5_SD_PATH);
+    t5ui_on(r->sd, T5UI_EV_LONG_PRESS, drive_long, NULL);
+    r->usb = drive_row(body, T5UI_ICON_USB, "USB drive", T5_USB_PATH);
+    t5ui_on(r->usb, T5UI_EV_LONG_PRESS, drive_long, (void *)1);
+    r->data = drive_row(body, T5UI_ICON_STORAGE, "Internal storage", T5_DATA_PATH);
     sa_note(body, "Open a .t5app file to install it. Long press a drive, file or folder for more options.");
     sa_set_refresh(&s_nav, root_refresh, r, free);
     const char *arg = t5_app_launch_arg(app);
@@ -522,5 +546,5 @@ const t5_builtin_app_t sysapp_files = {
     .desc = &s_desc,
     .perms = T5_PERM_STORAGE | T5_PERM_USB | T5_PERM_SYSTEM,
     .orientation = T5_ORIENT_ANY,
-    .icon = MD_ICON_FOLDER,
+    .icon = T5UI_ICON_FOLDER,
 };

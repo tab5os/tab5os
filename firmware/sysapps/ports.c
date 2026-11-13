@@ -8,10 +8,48 @@
 #include <string.h>
 #include "t5/port.h"
 #include "t5/system.h"
+#include "t5_gui/t5ui.h"
+#include "t5_gui/t5ui_icons.h"
 #include "sysapp_system.h"
 #include "sysapps_priv.h"
 
 static sa_nav_t s_nav;
+
+/* A list row, as md made them: grows when its second line wraps. */
+static t5ui_obj_t *row_create(t5ui_obj_t *parent, const char *icon, const char *primary, const char *secondary)
+{
+    t5ui_obj_t *r = t5ui_create(parent, T5UI_MD_ROW);
+    if (icon) t5ui_set_str(r, T5UI_P_ICON, icon);
+    t5ui_set_str(r, T5UI_P_TEXT, primary ? primary : "");
+    if (secondary) {
+        t5ui_set_str(r, T5UI_P_SECONDARY, secondary);
+        t5ui_set_int(r, T5UI_P_HEIGHT, T5UI_CONTENT);
+        t5ui_set_int(r, T5UI_P_MIN_HEIGHT, t5ui_dp(64));
+    }
+    return r;
+}
+
+static void section(t5ui_obj_t *parent, const char *title)
+{
+    t5ui_set_str(t5ui_create(parent, T5UI_MD_SECTION), T5UI_P_TEXT, title);
+}
+
+/* A plain column filling the width. */
+static t5ui_obj_t *column(t5ui_obj_t *parent)
+{
+    t5ui_obj_t *c = t5ui_create(parent, T5UI_BOX);
+    t5ui_set_int(c, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(c, T5UI_P_HEIGHT, T5UI_CONTENT);
+    t5ui_set_int(c, T5UI_P_FLOW, T5UI_COLUMN);
+    return c;
+}
+
+/* A row that opens a page. */
+static void page_row(t5ui_obj_t *parent, const char *icon, const char *primary, const char *secondary,
+                     t5ui_event_cb_t cb)
+{
+    t5ui_on(row_create(parent, icon, primary, secondary), T5UI_EV_CLICK, cb, NULL);
+}
 
 /* ---- names people know ------------------------------------------------------------
  * The port table's ids (mbus.uart) are what code and the console use; the
@@ -76,7 +114,7 @@ static const char *level_text(int level)
 
 /* ---- ports and pins -------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *list;
+    t5ui_obj_t *list;
     uint32_t hash;
 } pins_t;
 
@@ -95,7 +133,7 @@ static void pins_refresh(sa_nav_t *nav, void *arg)
     }
     if (h == p->hash) return;
     p->hash = h;
-    lv_obj_clean(p->list);
+    t5ui_clean(p->list);
     char title[64], sub[128], tb[32];
     int nports = t5_ports_count();
     for (int i = 0; i < n; i++) {
@@ -121,29 +159,26 @@ static void pins_refresh(sa_nav_t *nav, void *arg)
         else off = snprintf(sub, sizeof sub, "Free, %s", level_text(f->level));
         if (f->risky && off < (int)sizeof sub)
             snprintf(sub + off, sizeof sub - (size_t)off, ". Boot-sensitive pin");
-        md_row_create(p->list, f->claimed ? MD_ICON_LOCK : MD_ICON_LOCK_OPEN, title, sub);
+        row_create(p->list, f->claimed ? T5UI_ICON_LOCK : T5UI_ICON_LOCK_OPEN, title, sub);
     }
 }
 
-static void open_pins(lv_event_t *e)
+static void open_pins(t5ui_event_t *e)
 {
     (void)e;
     pins_t *p = calloc(1, sizeof *p);
     if (!p) return;
-    lv_obj_t *body = sa_push(&s_nav, "Pins");
+    t5ui_obj_t *body = sa_push(&s_nav, "Pins");
     sa_note(body, "Boot-sensitive pins are the power key and the chip's strapping pins. An app has to ask "
                   "specially to use them.");
-    p->list = lv_obj_create(body);
-    lv_obj_remove_style_all(p->list);
-    lv_obj_set_size(p->list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(p->list, LV_FLEX_FLOW_COLUMN);
+    p->list = column(body);
     p->hash = UINT32_MAX;
     sa_set_refresh(&s_nav, pins_refresh, p, free);
 }
 
 /* ---- rails -------------------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *row[T5_RAIL_COUNT];
+    t5ui_obj_t *row[T5_RAIL_COUNT];
 } rails_t;
 
 static void rails_refresh(sa_nav_t *nav, void *arg)
@@ -161,23 +196,23 @@ static void rails_refresh(sa_nav_t *nav, void *arg)
         uint32_t err = t5_rail_errors((t5_rail_t)i);
         if (err && k < (int)sizeof buf - 2)
             snprintf(buf + k, sizeof buf - (size_t)k, ". %u switching error%s", (unsigned)err, err == 1 ? "" : "s");
-        md_row_set_secondary(r->row[i], buf);
+        t5ui_set_str(r->row[i], T5UI_P_SECONDARY, buf);
     }
 }
 
-static void open_rails(lv_event_t *e)
+static void open_rails(t5ui_event_t *e)
 {
     (void)e;
     rails_t *r = calloc(1, sizeof *r);
     if (!r) return;
-    lv_obj_t *body = sa_push(&s_nav, "Power rails");
+    t5ui_obj_t *body = sa_push(&s_nav, "Power rails");
     for (int i = 0; i < T5_RAIL_COUNT; i++) {
         static const char *const names[T5_RAIL_COUNT] = { [T5_RAIL_USB5V] = "USB-A power",
                                                           [T5_RAIL_EXT5V] = "External 5V (Grove, M5-Bus)",
                                                           [T5_RAIL_WLAN] = "Wi-Fi and Bluetooth radio",
                                                           [T5_RAIL_SPK] = "Speaker amplifier",
                                                           [T5_RAIL_BACKLIGHT] = "Screen backlight" };
-        r->row[i] = md_row_create(body, MD_ICON_BOLT, names[i] ? names[i] : t5_rail_name((t5_rail_t)i), " ");
+        r->row[i] = row_create(body, T5UI_ICON_BOLT, names[i] ? names[i] : t5_rail_name((t5_rail_t)i), " ");
     }
     sa_note(body, "A rail stays on while anything uses it. When an app closes, the rails it used are released.");
     sa_set_refresh(&s_nav, rails_refresh, r, free);
@@ -185,16 +220,16 @@ static void open_rails(lv_event_t *e)
 
 /* ---- I2C ------------------------------------------------------------------------------ */
 typedef struct {
-    lv_obj_t *bus, *devs, *trace;
+    t5ui_obj_t *bus, *devs, *trace;
     bool tracing;
 } i2c_t;
 
-static void trace_toggle(lv_event_t *e)
+static void trace_toggle(t5ui_event_t *e)
 {
     i2c_t *p = s_nav.lv[s_nav.depth - 1].arg;
-    p->tracing = lv_obj_has_state(lv_event_get_target_obj(e), LV_STATE_CHECKED);
+    p->tracing = t5ui_get_int(t5ui_event_target(e), T5UI_P_CHECKED, 0);
     t5_i2c_trace_enable(p->tracing);
-    if (!p->tracing) lv_obj_set_hidden(p->trace, true);
+    if (!p->tracing) t5ui_set_int(p->trace, T5UI_P_HIDDEN, true);
 }
 
 static void i2c_refresh(sa_nav_t *nav, void *arg)
@@ -225,13 +260,13 @@ static void i2c_refresh(sa_nav_t *nav, void *arg)
             snprintf(buf, sizeof buf, "%u transfers, %u errors (%u no answer, %u timed out)", (unsigned)ds[i].xfers,
                      (unsigned)ds[i].errors, (unsigned)ds[i].nacks, (unsigned)ds[i].timeouts);
         else snprintf(buf, sizeof buf, "%u transfers, no errors", (unsigned)ds[i].xfers);
-        lv_obj_t *row = i < (int)lv_obj_get_child_count(p->devs) ? lv_obj_get_child(p->devs, i) : NULL;
-        if (!row) row = md_row_create(p->devs, MD_ICON_MEMORY, title, buf);
-        md_row_set_text(row, title);
-        md_row_set_secondary(row, buf);
-        md_row_set_icon(row, ds[i].faulted ? MD_ICON_ERROR : MD_ICON_MEMORY);
+        t5ui_obj_t *row = i < (int)t5ui_child_count(p->devs) ? t5ui_child(p->devs, i) : NULL;
+        if (!row) row = row_create(p->devs, T5UI_ICON_MEMORY, title, buf);
+        t5ui_set_str(row, T5UI_P_TEXT, title);
+        t5ui_set_str(row, T5UI_P_SECONDARY, buf);
+        t5ui_set_str(row, T5UI_P_ICON, ds[i].faulted ? T5UI_ICON_ERROR : T5UI_ICON_MEMORY);
     }
-    while ((int)lv_obj_get_child_count(p->devs) > n) lv_obj_delete(lv_obj_get_child(p->devs, -1));
+    while ((int)t5ui_child_count(p->devs) > n) t5ui_delete(t5ui_child(p->devs, -1));
     if (!p->tracing) return;
     t5_i2c_trace_t tr[24];
     int k = t5_i2c_trace_read(tr, 24);
@@ -244,7 +279,7 @@ static void i2c_refresh(sa_nav_t *nav, void *arg)
                         tr[i].err ? t5_err_str((t5_err_t)tr[i].err) : "ok");
     }
     sa_set_text(p->trace, k ? text : "No traffic in the last second.");
-    lv_obj_set_hidden(p->trace, false);
+    t5ui_set_int(p->trace, T5UI_P_HIDDEN, false);
 }
 
 static void i2c_free(void *arg)
@@ -254,50 +289,49 @@ static void i2c_free(void *arg)
     free(p);
 }
 
-static void open_i2c(lv_event_t *e)
+static void open_i2c(t5ui_event_t *e)
 {
     (void)e;
     i2c_t *p = calloc(1, sizeof *p);
     if (!p) return;
-    lv_obj_t *body = sa_push(&s_nav, "System I2C bus");
+    t5ui_obj_t *body = sa_push(&s_nav, "System I2C bus");
     p->bus = sa_note(body, "");
-    lv_obj_set_style_text_opa(p->bus, md_scheme()->on_surface.high, 0);
-    md_section_create(body, "Devices");
-    p->devs = lv_obj_create(body);
-    lv_obj_remove_style_all(p->devs);
-    lv_obj_set_size(p->devs, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(p->devs, LV_FLEX_FLOW_COLUMN);
-    md_section_create(body, "Traffic");
-    lv_obj_t *r = md_row_create(body, MD_ICON_TERMINAL, "Show live traffic", "The latest transfers, every second");
-    lv_obj_t *sw = md_row_switch(r, false);
-    lv_obj_add_event_cb(sw, trace_toggle, LV_EVENT_VALUE_CHANGED, NULL);
-    p->trace = md_label_create(body, "", MD_TYPE_CAPTION);
-    lv_obj_set_style_text_font(p->trace, md_font_mono(), 0);   /* columns line up */
-    lv_obj_set_style_text_letter_space(p->trace, 0, 0);
-    lv_obj_set_style_pad_hor(p->trace, T5_DP(16), 0);
-    lv_obj_set_style_pad_bottom(p->trace, T5_DP(16), 0);
-    lv_obj_set_hidden(p->trace, true);
+    t5ui_set_int(p->bus, T5UI_P_TEXT_OPA, t5ui_theme_emphasis(T5UI_EMPHASIS_HIGH));
+    section(body, "Devices");
+    p->devs = column(body);
+    section(body, "Traffic");
+    t5ui_obj_t *r = row_create(body, T5UI_ICON_TERMINAL, "Show live traffic", "The latest transfers, every second");
+    t5ui_obj_t *sw = t5ui_create(r, T5UI_MD_ROW_SWITCH);
+    t5ui_on(sw, T5UI_EV_VALUE, trace_toggle, NULL);
+    p->trace = t5ui_create(body, T5UI_MD_TEXT);
+    t5ui_set_int(p->trace, T5UI_P_TEXT_STYLE, T5UI_TEXT_CAPTION);
+    t5ui_set_int(p->trace, T5UI_P_TEXT_STYLE, T5UI_TEXT_MONO);   /* columns line up; the caption's line spacing stays */
+    t5ui_set_int(p->trace, T5UI_P_LETTER_SPACE, 0);
+    t5ui_set_int(p->trace, T5UI_P_PAD_LEFT, t5ui_dp(16));
+    t5ui_set_int(p->trace, T5UI_P_PAD_RIGHT, t5ui_dp(16));
+    t5ui_set_int(p->trace, T5UI_P_PAD_BOTTOM, t5ui_dp(16));
+    t5ui_set_int(p->trace, T5UI_P_HIDDEN, true);
     sa_set_refresh(&s_nav, i2c_refresh, p, i2c_free);
 }
 
 /* ---- module scan ------------------------------------------------------------------------ */
 typedef struct {
-    lv_obj_t *out, *found;
+    t5ui_obj_t *out, *found;
 } scan_t;
 
 /* The external I2C buses; also the app's manifest ports, which opening them needs. */
 static const char *const s_scan_ports[] = { "grove", "ext", NULL };
 
-static void scan_port(lv_event_t *e)
+static void scan_port(t5ui_event_t *e)
 {
-    const char *port = lv_event_get_user_data(e);
+    const char *port = t5ui_event_user(e);
     scan_t *s = s_nav.lv[s_nav.depth - 1].arg;
     uint8_t found[32];
     int n = t5_profiles_scan(port, found, 32);
     char buf[512], tb[32];
     const char *pname = port_title(port, tb, sizeof tb);
     int off = 0;
-    lv_obj_clean(s->found);
+    t5ui_clean(s->found);
     if (n < 0) {
         snprintf(buf, sizeof buf, "Couldn't scan %s (%s). If an app is using the port, close it and try again.", pname,
                  t5_err_str((t5_err_t)n));
@@ -310,41 +344,39 @@ static void scan_port(lv_event_t *e)
         t5_profile_match_t m[6];
         int k = t5_profiles_suggest(port, found, n, m, 6);
         for (int i = 0; i < k; i++)
-            md_row_create(s->found, MD_ICON_EXTENSION, m[i].profile->name,
-                          m[i].complete ? "Matches every address" : "Matches some addresses");
+            row_create(s->found, T5UI_ICON_EXTENSION, m[i].profile->name,
+                       m[i].complete ? "Matches every address" : "Matches some addresses");
         if (!k && off < (int)sizeof buf - 64)
             snprintf(buf + off, sizeof buf - (size_t)off, ". None match a known module.");
     }
     sa_set_text(s->out, buf);
 }
 
-static void open_scan(lv_event_t *e)
+static void open_scan(t5ui_event_t *e)
 {
     (void)e;
     scan_t *s = calloc(1, sizeof *s);
     if (!s) return;
-    lv_obj_t *body = sa_push(&s_nav, "Module scan");
+    t5ui_obj_t *body = sa_push(&s_nav, "Module scan");
     sa_note(body, "Looks for I2C modules plugged into Grove or the expansion header and names the ones it knows.");
-    lv_obj_t *row = sa_button_row(body);
+    t5ui_obj_t *row = sa_button_row(body);
     char tb[32];
     for (size_t i = 0; s_scan_ports[i]; i++) {
         char label[48];
         snprintf(label, sizeof label, "Scan %s", port_title(s_scan_ports[i], tb, sizeof tb));
-        lv_obj_t *b = md_button_create(row, label, MD_BUTTON_OUTLINED);
-        lv_obj_add_event_cb(b, scan_port, LV_EVENT_CLICKED, (void *)s_scan_ports[i]);
+        t5ui_obj_t *b = t5ui_create(row, T5UI_MD_BUTTON_OUTLINED);
+        t5ui_set_str(b, T5UI_P_TEXT, label);
+        t5ui_on(b, T5UI_EV_CLICK, scan_port, (void *)s_scan_ports[i]);
     }
     s->out = sa_note(body, "");
-    lv_obj_set_style_text_opa(s->out, md_scheme()->on_surface.high, 0);
-    s->found = lv_obj_create(body);
-    lv_obj_remove_style_all(s->found);
-    lv_obj_set_size(s->found, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(s->found, LV_FLEX_FLOW_COLUMN);
+    t5ui_set_int(s->out, T5UI_P_TEXT_OPA, t5ui_theme_emphasis(T5UI_EMPHASIS_HIGH));
+    s->found = column(body);
     sa_set_refresh(&s_nav, NULL, s, free);
 }
 
 /* ---- root: the ports -------------------------------------------------------------------- */
 typedef struct {
-    lv_obj_t *rows[16];
+    t5ui_obj_t *rows[16];
     int n;
 } root_t;
 
@@ -373,25 +405,20 @@ static void root_refresh(sa_nav_t *nav, void *arg)
         else off = snprintf(buf, sizeof buf, "Free. ");
         for (int k = 0; k < pi.npins && off < (int)sizeof buf - 16; k++)
             off += snprintf(buf + off, sizeof buf - (size_t)off, "%sG%u", k ? ", " : "", pi.gpio[k]);
-        md_row_set_secondary(r->rows[i], buf);
+        t5ui_set_str(r->rows[i], T5UI_P_SECONDARY, buf);
     }
 }
 
 static void on_create(t5_app_t *app)
 {
     sa_nav_init(&s_nav, app);
-    lv_obj_t *body = sa_push(&s_nav, "Port Inspector");
+    t5ui_obj_t *body = sa_push(&s_nav, "Port Inspector");
     s_n_ents = -1;   /* re-read app names on each visit */
-    lv_obj_t *r = md_row_create(body, MD_ICON_SEARCH, "Find modules",
-                                "Look for I2C modules on Grove or the header");
-    md_row_set_clickable(r, open_scan, NULL);
-    r = md_row_create(body, MD_ICON_DEVELOPER_BOARD, "Pins", "Who uses each pin, and its level");
-    md_row_set_clickable(r, open_pins, NULL);
-    r = md_row_create(body, MD_ICON_BOLT, "Power rails", "Which outputs are on, and why");
-    md_row_set_clickable(r, open_rails, NULL);
-    r = md_row_create(body, MD_ICON_MEMORY, "System I2C bus", "Built-in chips, errors and live traffic");
-    md_row_set_clickable(r, open_i2c, NULL);
-    md_section_create(body, "Ports");
+    page_row(body, T5UI_ICON_SEARCH, "Find modules", "Look for I2C modules on Grove or the header", open_scan);
+    page_row(body, T5UI_ICON_DEVELOPER_BOARD, "Pins", "Who uses each pin, and its level", open_pins);
+    page_row(body, T5UI_ICON_BOLT, "Power rails", "Which outputs are on, and why", open_rails);
+    page_row(body, T5UI_ICON_MEMORY, "System I2C bus", "Built-in chips, errors and live traffic", open_i2c);
+    section(body, "Ports");
     root_t *rt = calloc(1, sizeof *rt);
     if (!rt) return;
     rt->n = t5_ports_count();
@@ -403,7 +430,7 @@ static void on_create(t5_app_t *app)
             break;
         }
         char tb[32];
-        rt->rows[i] = md_row_create(body, MD_ICON_CABLE, port_title(pi.name, tb, sizeof tb), " ");
+        rt->rows[i] = row_create(body, T5UI_ICON_CABLE, port_title(pi.name, tb, sizeof tb), " ");
     }
     sa_set_refresh(&s_nav, root_refresh, rt, free);
 }
@@ -426,5 +453,5 @@ const t5_builtin_app_t sysapp_ports = {
     .perms = T5_PERM_PORTS | T5_PERM_SYSTEM,
     .orientation = T5_ORIENT_ANY,
     .ports = s_scan_ports,
-    .icon = MD_ICON_CABLE,
+    .icon = T5UI_ICON_CABLE,
 };

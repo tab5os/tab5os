@@ -139,6 +139,18 @@ bool t5_ui_touch_peek(int32_t *x, int32_t *y);
  * the first (pinch gestures read the rest here). Returns how many. */
 int t5_ui_touch_points(int32_t *x, int32_t *y, int max);
 
+/* Every finger on the screen for the app in front (API level 2): position
+ * in the app's screen coordinates (rotation applied) and an id that stays
+ * the same while that finger is down. For multi-finger input such as a
+ * trackpad app; LVGL only sees the first finger. Returns how many (0..5),
+ * 0 when the caller isn't the resumed foreground app. Any task. */
+typedef struct {
+    int16_t x, y;
+    uint8_t id;
+} t5_ui_touch_t;
+#define T5_UI_TOUCH_MAX 5
+int t5_ui_touch_get(t5_ui_touch_t *out, int max);
+
 /* ---- surviving app faults (t5_core/fault.h) ------------------------------- */
 /* The UI task runs each loop iteration under a recovery point. When app
  * code it was running faults, or is stopped while hung, the iteration is

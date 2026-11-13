@@ -5,9 +5,12 @@
 #
 # Makes, from a clean build of the current tree:
 #   firmware/   bootloader, partition table, OS image, OTA data, recovery
-#               image, flash_all.sh (one esptool command, nothing else needed)
+#               image, C6 radio image, flash_all.sh (one esptool command,
+#               nothing else needed)
 #   tab5os-<v>.t5os         the OS as an update (signed with KEY if given)
-#   tab5os-c6-<v>.bin       the ESP32-C6 radio image, if c6/ has been built
+#   tab5os-c6-<c6v>.t5c6    the C6 radio firmware, version c6/VERSION (signed the
+#                           same); the OS fetches it from its release when the C6
+#                           runs another version (t5_ota_net/c6.h)
 #   apps/*.t5app            the example apps
 #   tab5os-sdk-<v>.tar.gz   the app SDK, self-contained (tools/sdk_release.sh)
 #   SHA256SUMS
@@ -31,12 +34,18 @@ FW="$ROOT/firmware/build"
 rm -rf "$OUT"
 mkdir -p "$OUT/firmware" "$OUT/apps"
 
+python3 "$ROOT/tools/t5/release_rules.py"
+
 echo "== firmware"
 git -C "$ROOT" submodule update --init third_party/micropython >/dev/null
 "$T5" build >/dev/null
 "$T5" size-check
 cp "$FW/bootloader/bootloader.bin" "$FW/partition_table/partition-table.bin" "$FW/ota_data_initial.bin" \
    "$FW/tab5os.bin" "$OUT/firmware/"
+
+echo "== C6 radio firmware"
+"$T5" c6-build >/dev/null
+cp "$ROOT/c6/build/tab5os_c6.bin" "$OUT/firmware/"
 
 echo "== recovery"
 "$T5" recovery-build | tail -1
@@ -45,10 +54,12 @@ cp "$ROOT/recovery/build/tab5recovery.bin" "$OUT/firmware/"
 # Offsets: the build's flasher_args.json, and the recovery partition from partitions.csv.
 FLASH_ARGS="$(python3 "$ROOT/tools/t5/t5const.py" flash-args "$FW")"
 FLASH_ARGS="$FLASH_ARGS $(python3 "$ROOT/tools/t5/t5const.py" partition recovery offset) tab5recovery.bin"
+FLASH_ARGS="$FLASH_ARGS $(python3 "$ROOT/tools/t5/t5const.py" partition c6fw offset) tab5os_c6.bin"
 cat > "$OUT/firmware/flash_all.sh" <<FLASH
 #!/bin/sh
-# Flash a Tab5 from scratch: bootloader, partition table, OS (slot ota_0) and
-# the recovery image. Settings and files in /data are kept. Needs esptool
+# Flash a Tab5 from scratch: bootloader, partition table, OS (slot ota_0),
+# the recovery image and the C6 radio firmware (the OS moves the C6 onto it
+# after its first minute). Settings and files in /data are kept. Needs esptool
 # (pip install esptool). Set PORT to pick the serial port; esptool finds it otherwise.
 set -e
 cd "\$(dirname "\$0")"
@@ -61,9 +72,8 @@ PY="${IDF_PYTHON_ENV_PATH:+$IDF_PYTHON_ENV_PATH/bin/python}"
 PY="${PY:-python3}"
 "$PY" "$ROOT/tools/ota/t5ota.py" pack "$FW/tab5os.bin" -o "$OUT/tab5os-$VER.t5os" ${KEY:+--sign "$KEY"}
 
-if [ -f "$ROOT/c6/build/tab5os_c6.bin" ]; then
-    cp "$ROOT/c6/build/tab5os_c6.bin" "$OUT/tab5os-c6-$VER.bin"
-fi
+C6VER="$(tr -d '[:space:]' < "$ROOT/c6/VERSION")"
+"$PY" "$ROOT/tools/ota/t5ota.py" pack-c6 "$ROOT/c6/build/tab5os_c6.bin" -o "$OUT/tab5os-c6-$C6VER.t5c6" ${KEY:+--sign "$KEY"}
 
 echo "== example apps"
 "$T5" examples >/dev/null

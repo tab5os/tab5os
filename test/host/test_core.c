@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include <string.h>
 #include "unity.h"
+#include "t5_core/excl_sys.h"
+#include "t5_core/io_hold.h"
 #include "t5_mocks.h"
 
 void setUp(void) { mock_reset_all(); }
@@ -75,6 +77,35 @@ static void test_event_names(void)
     TEST_ASSERT_EQUAL_STRING("unknown", t5_event_name((t5_event_id_t)12345));
 }
 
+static int s_takes, s_gives;
+static t5_err_t s_take_result;
+static t5_err_t prov_take(void) { s_takes++; return s_take_result; }
+static void prov_give(void) { s_gives++; }
+
+static void test_excl_claims(void)
+{
+    t5_excl_t *h = NULL, *h2 = NULL;
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_SUPPORTED, t5_excl_claim(T5_EXCL_BT, &h));   /* no provider */
+    const t5_excl_provider_t p = { prov_take, prov_give };
+    t5_excl_set_provider(T5_EXCL_BT, &p);
+    s_take_result = T5_ERR_BUSY;
+    TEST_ASSERT_EQUAL(T5_ERR_BUSY, t5_excl_claim(T5_EXCL_BT, &h));          /* the service refused */
+    TEST_ASSERT_FALSE(t5_excl_claimed(T5_EXCL_BT));
+    s_take_result = T5_OK;
+    TEST_ASSERT_EQUAL(T5_OK, t5_excl_claim(T5_EXCL_BT, &h));
+    TEST_ASSERT_TRUE(t5_excl_holds(h, T5_EXCL_BT));
+    TEST_ASSERT_FALSE(t5_excl_holds(h, T5_EXCL_WIFI));
+    TEST_ASSERT_TRUE(t5_io_hold_get(T5_IO_EXCL_BT, NULL, 0));
+    TEST_ASSERT_EQUAL(T5_ERR_BUSY, t5_excl_claim(T5_EXCL_BT, &h2));
+    TEST_ASSERT_EQUAL(T5_OK, t5_excl_release(h));
+    TEST_ASSERT_EQUAL(1, s_gives);
+    TEST_ASSERT_FALSE(t5_io_hold_get(T5_IO_EXCL_BT, NULL, 0));
+    TEST_ASSERT_EQUAL(T5_OK, t5_excl_claim(T5_EXCL_BT, &h2));                /* free again */
+    TEST_ASSERT_EQUAL(T5_OK, t5_excl_release(h2));
+    TEST_ASSERT_EQUAL(2, s_gives);
+    TEST_ASSERT_EQUAL(3, s_takes);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -83,5 +114,6 @@ int main(void)
     RUN_TEST(test_event_payload_limit);
     RUN_TEST(test_event_payload_is_a_padded_copy_with_its_length);
     RUN_TEST(test_event_names);
+    RUN_TEST(test_excl_claims);
     return UNITY_END();
 }

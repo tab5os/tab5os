@@ -15,6 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "t5_core/log.h"
+#include "t5_core/res.h"   /* T5_CORE_CAPS: capability grants */
 #include "t5_pkg/pkg.h"
 #include "t5_pkg/zip.h"
 #include "t5_storage/paths.h"
@@ -689,8 +690,8 @@ t5_err_t t5_pkg_grants_load(const char *id, uint32_t *granted, uint32_t *denied)
     int n = sscanf(text, "t5grants 1\ngranted=%x\ndenied=%x", &g, &d);
     free(text);
     if (n != 2) return T5_ERR_FAIL;
-    *granted = g & T5_PERM_ALL;
-    *denied = d & T5_PERM_ALL & ~*granted;
+    *granted = g & (T5_PERM_ALL | T5_CORE_CAPS);
+    *denied = d & (T5_PERM_ALL | T5_CORE_CAPS) & ~*granted;
     return T5_OK;
 }
 
@@ -703,8 +704,8 @@ t5_err_t t5_pkg_grants_save(const char *id, uint32_t granted, uint32_t denied)
         return T5_ERR_INVALID_ARG;
     }
     if (!mkdir_p(dir)) return T5_ERR_IO;
-    granted &= T5_PERM_ALL;
-    denied &= T5_PERM_ALL & ~granted;
+    granted &= T5_PERM_ALL | T5_CORE_CAPS;
+    denied &= (T5_PERM_ALL | T5_CORE_CAPS) & ~granted;
     char text[64];
     int n = snprintf(text, sizeof text, "t5grants 1\ngranted=%x\ndenied=%x\n", (unsigned)granted, (unsigned)denied);
     return write_atomic(p, text, (size_t)n);

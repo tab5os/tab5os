@@ -85,6 +85,11 @@ t5_err_t t5_net_c6_reset(void);
 /* Ask the network for the time now (SNTP); T5_ERR_STATE without Wi-Fi.
  * The answer arrives asynchronously, as a time.set event. */
 t5_err_t t5_net_sync_time(void);
+/* Which firmware the C6 runs: our radio firmware's build ("t5-c6-0.2.0", as
+ * in its image), or esp_hosted's version ("3.1.0") for firmware that
+ * doesn't name its build. Asks the C6 (up to about 3 s). Also reads c6fw
+ * again for the status's c6_image. T5_ERR_STATE: the C6 is off. */
+t5_err_t t5_net_c6_running(char *out, size_t n);
 /* Update the C6 from the c6fw partition if its version differs (or force).
  * Runs on the service task; T5_EV_NET_C6_UPDATE reports the result. */
 t5_err_t t5_net_c6_update(bool force);

@@ -1,16 +1,16 @@
 /* SPDX-License-Identifier: Apache-2.0
  * The accent colour the person picked (Settings > Display), kept across
- * reboots. UI task (md calls).
+ * reboots. UI task.
  */
 #pragma once
-#include "md/md_tokens.h"
+#include "t5_gui/t5ui.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Restyle everything in accent and save it. */
-void t5_shell_accent_set(md_accent_t accent);
+void t5_shell_accent_set(t5ui_accent_t accent);
 /* Apply the saved accent, if there is one (at boot). */
 void t5_shell_accent_restore(void);
 

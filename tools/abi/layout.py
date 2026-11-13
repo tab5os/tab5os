@@ -498,10 +498,18 @@ def api_status():
     return m.group(1) if m else None
 
 
+# Items whose value is meant to change between levels: an app compiles in
+# the level it was built for, and an OS accepts any level up to its own, so
+# raising it breaks nothing (docs/abi-stability.md, "Adding to a released ABI").
+GROWS = {"macro T5_API_LEVEL"}
+
+
 def diff(locked, now):
     """Print each locked item that is gone or different; return the count."""
     errs = 0
     for k, v in sorted(locked.items()):
+        if k in GROWS and k in now and int(now[k]) >= int(v):
+            continue
         if k not in now:
             print(f"removed from the ABI: {k}\n  was: {v}", file=sys.stderr)
             errs += 1

@@ -79,6 +79,7 @@ lv_obj_t *md_appbar_create(lv_obj_t *parent, const char *title, const char *nav_
                            lv_event_cb_t nav_cb, void *user_data);
 lv_obj_t *md_appbar_add_action(lv_obj_t *bar, const char *icon, lv_event_cb_t cb, void *user_data);
 void md_appbar_set_title(lv_obj_t *bar, const char *title);
+lv_obj_t *md_appbar_title(lv_obj_t *bar);       /* its title label */
 
 /* Recycled list: only the visible rows (plus a few) exist; bind fills a row
  * for an index. Row height 48, 64 or 72 dp. */
@@ -93,6 +94,9 @@ typedef void (*md_list_click_cb_t)(uint32_t index, void *user_data);
 lv_obj_t *md_list_create(lv_obj_t *parent, uint32_t count, int row_dp, md_list_bind_cb_t bind,
                          md_list_click_cb_t click, void *user_data);
 void md_list_set_count(lv_obj_t *list, uint32_t count);
+uint32_t md_list_count(lv_obj_t *list);
+/* Change the row height (48, 64 or 72 dp): the rows are made again. */
+void md_list_set_row_dp(lv_obj_t *list, int row_dp);
 /* Called with the row's index on a long press (no click follows). */
 void md_list_set_long_press(lv_obj_t *list, md_list_click_cb_t cb);
 void md_list_refresh(lv_obj_t *list);
@@ -148,6 +152,8 @@ lv_obj_t *md_textfield_ta(lv_obj_t *field);
 const char *md_textfield_text(lv_obj_t *field);
 void md_textfield_set_text(lv_obj_t *field, const char *text);
 void md_textfield_set_helper(lv_obj_t *field, const char *text, bool error);
+void md_textfield_set_label(lv_obj_t *field, const char *label);
+const char *md_textfield_label(lv_obj_t *field);
 
 /* Selection controls, sized to the spec with 48 dp touch targets.
  * LV_EVENT_VALUE_CHANGED as for the plain LVGL widgets. */
@@ -173,7 +179,9 @@ lv_obj_t *md_row_create(lv_obj_t *parent, const char *icon, const char *primary,
 void md_row_set_clickable(lv_obj_t *row, lv_event_cb_t cb, void *user_data);
 void md_row_set_text(lv_obj_t *row, const char *primary);
 void md_row_set_secondary(lv_obj_t *row, const char *text);
-void md_row_set_icon(lv_obj_t *row, const char *icon);
+void md_row_set_icon(lv_obj_t *row, const char *icon);   /* adds one to a row made without */
+lv_obj_t *md_row_label(lv_obj_t *row, bool secondary);
+lv_obj_t *md_row_icon(lv_obj_t *row);           /* NULL if it has none */
 lv_obj_t *md_row_switch(lv_obj_t *row, bool on);               /* trailing switch */
 lv_obj_t *md_row_trailing_text(lv_obj_t *row, const char *text);
 lv_obj_t *md_section_create(lv_obj_t *parent, const char *title);   /* overline header */

@@ -37,8 +37,8 @@ static bool valid(t5_shell_activity_t *a)
 
 static void copy_icon(char *dst, const char *icon)
 {
-    /* One glyph: an MD_ICON_* string is 3 bytes of UTF-8. */
-    snprintf(dst, T5_APP_ICON_LEN, "%s", icon && *icon ? icon : MD_ICON_SCHEDULE);
+    /* One glyph: an T5UI_ICON_* string is 3 bytes of UTF-8. */
+    snprintf(dst, T5_APP_ICON_LEN, "%s", icon && *icon ? icon : T5UI_ICON_SCHEDULE);
 }
 
 static void release(void *h)

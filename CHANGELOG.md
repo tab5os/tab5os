@@ -1,13 +1,47 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (pre-release), Nov 12, 2026
 
+Apps can act as a USB or Bluetooth keyboard, mouse or MIDI device, reach the USB-A bus, the Wi-Fi radio and the Bluetooth controller below the OS, and draw their UI with t5ui, a UI API that doesn't expose LVGL. Releases are now signed and the Tab5 finds them over Wi-Fi.
+
+**Before you install**
+
+- It runs only on Tab5 units with ESP32-P4 silicon v1.x. `t5 chip`, or `esptool chip-id`, tells you which you have. Newer v3.x silicon isn't supported.
+- **App API level 2.** Level 1 is unchanged, so apps built with an earlier SDK keep running without a rebuild. Apps that use the new calls declare `api = 2` and need this release: 0.1.3 and earlier refuse to install them. Build them with the 0.2.0 SDK. Level 2 is a candidate for now: its calls may still change before it's frozen, as level 1's did between 0.1.0 and 0.1.1.
+- This is the first signed release. 0.1.3 and earlier trust no key, so install this one once in developer mode (Settings, then `tab5os-0.2.0.t5os` from the SD card in Settings > Updates, or `t5 ota`), or flash over USB-C with `firmware/flash_all.sh`. Later updates install with developer mode off. Settings and files in `/data` are kept either way. See [installing and updating](docs/flashing.md).
+- The first minute after the update, the Tab5 also updates its Wi-Fi chip (the ESP32-C6) to the firmware that comes with this release, C6 firmware 0.2.0, downloading it from the release. It takes about 20 seconds, and Wi-Fi and Bluetooth drop for a few seconds when the C6 restarts. Without Wi-Fi, copy `tab5os-c6-0.2.0.t5c6` to the SD card's top folder first. See [the Wi-Fi chip's firmware](docs/flashing.md#the-wi-fi-chips-firmware).
+
+**What changed**
+
+- **USB-C device mode for apps.** An app can make the Tab5 a USB keyboard, mouse, gamepad, media remote or MIDI device for a computer (`t5/usbdev.h`), with HID reports built by the shared `t5/hid.h` helpers and keyboard layouts. The console and sound are off while it does, as with USB storage. See [the design](docs/io-access-design.md).
+- **Bluetooth HID.** The Tab5 pairs with a computer, phone or tablet as a keyboard, trackpad or gamepad (HID over GATT), with pairing codes and remembered bonds per app.
+- **Raw USB-A access**: open a device, read its descriptors, claim interfaces and do control, bulk and interrupt transfers (`t5/usb.h`).
+- **Wi-Fi monitor mode and raw frames** (`t5/wifi.h`), through new C6 firmware: frames from the air with channel and signal strength, channel hopping, raw transmit.
+- **Exclusive control** (`t5/excl.h`): an app can take the whole USB-C port (a USB device of its own design), the USB-A bus, the Wi-Fi radio or the Bluetooth controller (raw HCI) until it closes.
+- These ask once on first use, like the camera, and the status bar and Quick Settings show which app holds a port or radio, with a Stop button.
+- **Python**: `t5.hid`, `t5.usbdev`, `t5.ble.hid`, `t5.wifi.monitor`, raw `t5.usb` and `t5.exclusive`.
+- **A new example, Keyboard & Trackpad**: the Tab5 as a computer's keyboard, trackpad and media remote, over USB-C or Bluetooth. It's the first app built only on t5ui.
+- **t5ui, an app UI API that doesn't expose LVGL** (`t5/t5ui.h`): objects, typed properties, styles, animations, events and commands with fixed numbers, Material widgets, and drawing. LVGL 9 is the backend today, so a future LVGL won't break apps written with t5ui. See [t5ui](docs/t5ui.md).
+- **The OS draws its own UI with t5ui**: the shell, every system app, the file picker, the permission and app-not-responding dialogs, and Python's `t5.ui`. It looks the same as before.
+- **Updates now keep the Wi-Fi chip's firmware current.** The C6 firmware has its own version (`c6/VERSION`), raised only when it changes. Each release publishes the C6 firmware it was built with, signed (`tab5os-c6-<C6 version>.t5c6`), and `flash_all.sh` writes it too. After an update has passed its first minute, the OS moves the C6 onto that version if it runs another one: from the SD card if the file is there, else downloaded from the release. The release checks (`t5 release-check`, in `ci` and the release workflow) refuse a release whose C6 image changed without a new C6 version, or whose esp_hosted moved without a recorded update test. See [Releasing](docs/releasing.md). Our C6 firmware now tells the OS which build it is (esp_hosted only reports its own version), which also makes `net update`'s check after an update right. Console: `ota c6`, `ota c6 retry`, `ota c6 file|url`.
+- **Sleep stays asleep with Wi-Fi off.** A stray wake signal from the C6, caught while Sleep powered it off, could wake the Tab5 again every few seconds.
 - **Signed updates over Wi-Fi.** Releases are now signed with the Tab5 OS release key, and the OS trusts it (`firmware/ota_keys/release.pem`). The Tab5 checks the GitHub releases about once a day while Wi-Fi is connected, says when a newer one is out, and Settings > Updates has a new Over Wi-Fi section with Install and Check now. A signed update installs with developer mode off, from Wi-Fi or the SD card. Nothing installs without a tap. From Settings without developer mode, an update older than the running system is refused. Coming from 0.1.3 or earlier, which trust no key, install this release once in developer mode or with `flash_all.sh`. See [installing and updating](docs/flashing.md#updating).
 - **A built-in video player.** Files, the Camera's gallery and a new Videos app play Motion JPEG in AVI, with PCM sound, full screen, with play, pause and a seek bar. The P4 has no H.264 decoder, so H.264 isn't played. To convert a video: `ffmpeg -i in.mp4 -vf scale=1280:-2 -c:v mjpeg -q:v 4 -c:a pcm_s16le out.avi`. See [the video player](docs/wiki/Media-and-USB.md#video-player).
 - **The Camera records video the player can play**: Motion JPEG in AVI (`.avi`), 720p at 30 fps. The quality drops a little if the card can't keep up. Apps still choose H.264 by recording to any other file name.
 - **A smoother camera preview**, 15 fps where it was 11. The preview, videos and photos are now drawn straight into the screen by the PPA in one pass, without going through the UI renderer (video planes).
 - **Zoom in the photo viewer**: pinch, or double-tap to zoom in on a spot and back out; drag to move around while zoomed in.
 - **A smaller OS image.** The Phase 0 bench commands (`elf bench`, `gpio watch|get`, `sleep light|result`) are left out of normal builds, and NimBLE logs only warnings and errors. The image is 132 KB smaller, about 3.5% of an update slot. Apps, the app API and the SDK are unchanged. To get the bench commands back, build with `CONFIG_T5_DIAG_BENCH=y` (see [bench procedures](docs/bench-procedures.md)).
+
+**Downloads**
+
+| File | What it is |
+| --- | --- |
+| `tab5os-0.2.0.zip` | Everything below, plus `flash_all.sh` and the install guide |
+| `tab5os-0.2.0.t5os` | The OS as an update package, signed |
+| `tab5os-c6-0.2.0.t5c6` | The Wi-Fi chip's firmware for this release, signed; the OS fetches it by itself |
+| `tab5os-sdk-0.2.0.tar.gz` | The app SDK |
+| `*.t5app` | The example apps, ready to install: BLE Explorer, Calculator, Keyboard & Trackpad, Logger, RS-485 Console, UI Gallery and UVC Monitor |
+| `SHA256SUMS` | Checksums |
 
 ## 0.1.3 (pre-release), Nov 10, 2026
 

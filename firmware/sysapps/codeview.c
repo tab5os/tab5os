@@ -5,13 +5,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "t5/shell.h"
-#include "t5/ui.h"
+#include "t5_gui/t5ui_sys.h"   /* t5ui_sys_native: the shell's keyboard takes the text area */
+#include "t5_shell/shell.h"
 #include "codeview.h"
 
 #define INDENT 4
 #define GUTTER 4                 /* line number columns */
-#define LINE_BUF 1024            /* markup for one drawn line */
+#define RUN_BUF 1024             /* one drawn run of text */
+#define BLINK_MS 530
 #define SENTINEL "  "            /* what the hidden text area holds between keys */
 
 /* Colours on the dark theme. */
@@ -25,7 +26,8 @@
 #define C_GUTTER 0x5c6370
 
 struct cv {
-    lv_obj_t *scroll, *content, *ta;
+    t5ui_obj_t *scroll, *content, *ta, *cursor;
+    t5ui_timer_t *blink;
     char **lines;
     int n, cap;
     int row, col, want_col;
@@ -34,7 +36,6 @@ struct cv {
     bool dirty, cursor_on, resetting;
     uint8_t *state;              /* triple-quote state at each line start: 0, '\'' or '"' */
     bool state_stale;
-    lv_timer_t *blink;
     void (*changed)(cv_t *, void *);
     void *changed_arg;
 };
@@ -122,47 +123,19 @@ static bool in_list(const char *const *list, const char *w, int n)
     return false;
 }
 
+/* Where colorize sends each run of text in a colour (0 = default); NULL
+ * when only the end state is wanted. */
 typedef struct {
-    char *buf;
-    size_t n, len;
+    void (*run)(void *ctx, const char *s, size_t n, uint32_t color);
+    void *ctx;
 } out_t;
 
-static void put(out_t *o, const char *s, size_t n)
-{
-    if (o->len + n + 1 >= o->n) n = o->n - o->len - 1;
-    memcpy(o->buf + o->len, s, n);
-    o->len += n;
-    o->buf[o->len] = 0;
-}
-
-/* One run of text in a colour (0 = default). '#' can't appear inside a
- * recolour span, so it is written as "##" between spans. */
 static void seg(out_t *o, const char *s, size_t n, uint32_t color)
 {
-    size_t i = 0;
-    while (i < n) {
-        size_t j = i;
-        while (j < n && s[j] != '#') j++;
-        if (j > i) {
-            if (color) {
-                char hdr[10];
-                snprintf(hdr, sizeof hdr, "#%06x ", (unsigned)color);
-                put(o, hdr, 8);
-                put(o, s + i, j - i);
-                put(o, "#", 1);
-            } else {
-                put(o, s + i, j - i);
-            }
-        }
-        if (j < n) {
-            put(o, "##", 2);
-            j++;
-        }
-        i = j;
-    }
+    if (o && o->run && n) o->run(o->ctx, s, n, color);
 }
 
-/* Markup for one line; returns the triple-quote state at its end. */
+/* The runs of one line; returns the triple-quote state at its end. */
 static uint8_t colorize(const char *s, uint8_t st, out_t *o)
 {
     size_t n = strlen(s), i = 0;
@@ -245,12 +218,9 @@ static void refresh_state(cv_t *cv)
 {
     if (!cv->state_stale) return;
     uint8_t st = 0;
-    char scratch[16];
     for (int i = 0; i < cv->n; i++) {
         cv->state[i] = st;
-        /* Only the end state matters here: colourise into a tiny buffer. */
-        out_t o = { scratch, sizeof scratch, 0 };
-        st = colorize(cv->lines[i], st, &o);
+        st = colorize(cv->lines[i], st, NULL);   /* only the end state matters here */
     }
     cv->state_stale = false;
 }
@@ -259,8 +229,12 @@ static void refresh_state(cv_t *cv)
 static void update_size(cv_t *cv)
 {
     int32_t w = (GUTTER + 2 + cv->maxlen + 4) * cv->cw;
-    int32_t h = cv->n * cv->lh + T5_DP(48);
-    lv_obj_set_size(cv->content, LV_MAX(w, lv_obj_get_content_width(cv->scroll)), h);
+    int32_t h = cv->n * cv->lh + t5ui_dp(48);
+    t5ui_rect_t sc;
+    t5ui_content_coords(cv->scroll, &sc);
+    int32_t sw = sc.x2 - sc.x1 + 1;
+    t5ui_set_int(cv->content, T5UI_P_WIDTH, w > sw ? w : sw);
+    t5ui_set_int(cv->content, T5UI_P_HEIGHT, h);
 }
 
 static int32_t text_x0(const cv_t *cv)
@@ -268,10 +242,21 @@ static int32_t text_x0(const cv_t *cv)
     return (GUTTER + 2) * cv->cw;
 }
 
+/* The text area and the drawn cursor go to the cursor's place. */
 static void place_ta(cv_t *cv)
 {
     int dc = disp_col(cv->lines[cv->row], cv->col);
-    lv_obj_set_pos(cv->ta, text_x0(cv) + dc * cv->cw, cv->row * cv->lh);
+    int32_t x = text_x0(cv) + dc * cv->cw, y = cv->row * cv->lh;
+    t5ui_set_int(cv->ta, T5UI_P_X, x);
+    t5ui_set_int(cv->ta, T5UI_P_Y, y);
+    t5ui_set_int(cv->cursor, T5UI_P_X, x - 1);
+    t5ui_set_int(cv->cursor, T5UI_P_Y, y + 2);
+}
+
+static void show_cursor(cv_t *cv, bool on)
+{
+    cv->cursor_on = on;
+    t5ui_set_int(cv->cursor, T5UI_P_HIDDEN, !on);
 }
 
 static void notify(cv_t *cv)
@@ -281,7 +266,7 @@ static void notify(cv_t *cv)
 
 static void cursor_moved(cv_t *cv, bool edited)
 {
-    cv->cursor_on = true;
+    show_cursor(cv, true);
     if (edited) {
         cv->dirty = true;
         cv->state_stale = true;
@@ -289,9 +274,9 @@ static void cursor_moved(cv_t *cv, bool edited)
         update_size(cv);
     }
     place_ta(cv);
-    lv_obj_update_layout(cv->scroll);
-    lv_obj_scroll_to_view_recursive(cv->ta, LV_ANIM_OFF);
-    lv_obj_invalidate(cv->content);
+    t5ui_layout_now(cv->scroll);
+    t5ui_scroll_into_view(cv->ta, false);
+    t5ui_invalidate(cv->content);
     notify(cv);
 }
 
@@ -474,88 +459,88 @@ static void move_h(cv_t *cv, int d)
 static void reset_ta(cv_t *cv)
 {
     cv->resetting = true;
-    lv_textarea_set_text(cv->ta, SENTINEL);
-    lv_textarea_set_cursor_pos(cv->ta, LV_TEXTAREA_CURSOR_LAST);
+    t5ui_set_str(cv->ta, T5UI_P_TEXT, SENTINEL);
+    t5ui_set_int(cv->ta, T5UI_P_CURSOR, (int32_t)strlen(SENTINEL));   /* the end */
     cv->resetting = false;
 }
 
-static void ta_key(lv_event_t *e)
+static void ta_key(t5ui_event_t *e)
 {
-    cv_t *cv = lv_event_get_user_data(e);
-    uint32_t k = lv_event_get_key(e);
+    cv_t *cv = t5ui_event_user(e);
+    uint32_t k = t5ui_event_key(e);
     switch (k) {
-    case LV_KEY_UP: move_v(cv, -1); break;
-    case LV_KEY_DOWN: move_v(cv, 1); break;
-    case LV_KEY_LEFT: move_h(cv, -1); break;
-    case LV_KEY_RIGHT: move_h(cv, 1); break;
-    case LV_KEY_HOME: {
+    case T5UI_KEY_UP: move_v(cv, -1); break;
+    case T5UI_KEY_DOWN: move_v(cv, 1); break;
+    case T5UI_KEY_LEFT: move_h(cv, -1); break;
+    case T5UI_KEY_RIGHT: move_h(cv, 1); break;
+    case T5UI_KEY_HOME: {
         int ind = indent_of(cv->lines[cv->row]);
         cv->col = cv->col == ind ? 0 : ind;
         cv->want_col = -1;
         cursor_moved(cv, false);
         break;
     }
-    case LV_KEY_END:
+    case T5UI_KEY_END:
         cv->col = line_len(cv, cv->row);
         cv->want_col = -1;
         cursor_moved(cv, false);
         break;
-    case LV_KEY_ENTER: insert_text(cv, "\n"); break;
-    case LV_KEY_BACKSPACE: backspace(cv); break;
-    case LV_KEY_DEL: delete_fwd(cv); break;
-    case LV_KEY_NEXT: insert_text(cv, "\t"); break;
-    case LV_KEY_PREV: dedent(cv); break;
-    case LV_KEY_ESC: t5_shell_keyboard_hide(); break;
+    case T5UI_KEY_ENTER: insert_text(cv, "\n"); break;
+    case T5UI_KEY_BACKSPACE: backspace(cv); break;
+    case T5UI_KEY_DEL: delete_fwd(cv); break;
+    case T5UI_KEY_NEXT: insert_text(cv, "\t"); break;
+    case T5UI_KEY_PREV: dedent(cv); break;
+    case T5UI_KEY_ESC: t5_shell_keyboard_hide(); break;
     default:
         if (k >= 0x20 && k < 0x7f) {
             char s[2] = { (char)k, 0 };
             insert_text(cv, s);
         } else {
-            return;     /* let LVGL have it */
+            return;     /* let the text area have it */
         }
     }
-    lv_event_stop_processing(e);
+    t5ui_event_stop(e);
 }
 
-/* The on-screen keyboard types with lv_textarea_add_text: take the text
- * and cancel the insert. */
-static void ta_insert(lv_event_t *e)
+/* The on-screen keyboard types by inserting into the text area: take the
+ * text and cancel the insert. */
+static void ta_insert(t5ui_event_t *e)
 {
-    cv_t *cv = lv_event_get_user_data(e);
+    cv_t *cv = t5ui_event_user(e);
     if (cv->resetting) return;
-    const char *txt = lv_event_get_param(e);
-    /* Its backspace comes through here too, as LV_KEY_DEL. */
-    if (txt && (unsigned char)txt[0] == LV_KEY_DEL && !txt[1]) backspace(cv);
+    const char *txt = t5ui_event_text(e);
+    /* Its backspace comes through here too, as T5UI_KEY_DEL. */
+    if (txt && (unsigned char)txt[0] == T5UI_KEY_DEL && !txt[1]) backspace(cv);
     else if (txt && txt[0]) insert_text(cv, txt);
-    lv_textarea_set_insert_replace(cv->ta, "");
+    t5ui_event_set_text(e, "");
 }
 
 /* Its backspace deletes from the sentinel: notice and put it back. */
-static void ta_changed(lv_event_t *e)
+static void ta_changed(t5ui_event_t *e)
 {
-    cv_t *cv = lv_event_get_user_data(e);
+    cv_t *cv = t5ui_event_user(e);
     if (cv->resetting) return;
-    size_t len = strlen(lv_textarea_get_text(cv->ta));
+    size_t len = strlen(t5ui_get_str(cv->ta, T5UI_P_TEXT, ""));
     if (len < strlen(SENTINEL)) backspace(cv);
     reset_ta(cv);
 }
 
-static void ta_ready(lv_event_t *e)
+static void ta_ready(t5ui_event_t *e)
 {
-    insert_text(lv_event_get_user_data(e), "\n");
+    insert_text(t5ui_event_user(e), "\n");
 }
 
-static void content_pressed(lv_event_t *e)
+static void content_pressed(t5ui_event_t *e)
 {
-    cv_t *cv = lv_event_get_user_data(e);
-    lv_point_t p;
-    lv_indev_get_point(lv_indev_active(), &p);
-    lv_area_t a;
-    lv_obj_get_coords(cv->content, &a);
-    int r = (int)((p.y - a.y1) / cv->lh);
+    cv_t *cv = t5ui_event_user(e);
+    int32_t px, py;
+    if (!t5ui_event_point(e, &px, &py)) return;
+    t5ui_rect_t a;
+    t5ui_coords(cv->content, &a);
+    int r = (int)((py - a.y1) / cv->lh);
     if (r < 0) r = 0;
     if (r >= cv->n) r = cv->n - 1;
-    int dc = (int)((p.x - a.x1 - text_x0(cv) + cv->cw / 2) / cv->cw);
+    int dc = (int)((px - a.x1 - text_x0(cv) + cv->cw / 2) / cv->cw);
     if (dc < 0) dc = 0;
     cv->row = r;
     cv->col = byte_col(cv->lines[r], dc);
@@ -565,79 +550,92 @@ static void content_pressed(lv_event_t *e)
 }
 
 /* ---- drawing ----------------------------------------------------------------------------------------- */
-static void draw(lv_event_t *e)
+/* A line's runs, drawn as they come; runs of one colour are drawn together. */
+typedef struct {
+    t5ui_paint_t *paint;
+    const cv_t *cv;
+    int32_t y, x2;               /* the line's top, the content's right edge */
+    int col;                     /* display column the pending run starts at */
+    const char *start;           /* the pending run */
+    size_t n;
+    uint32_t color;
+    t5ui_color_t text;           /* the default colour */
+} line_draw_t;
+
+static void flush_run(line_draw_t *d)
 {
-    cv_t *cv = lv_event_get_user_data(e);
-    lv_layer_t *layer = lv_event_get_layer(e);
+    if (!d->n) return;
+    static char buf[RUN_BUF];
+    size_t n = d->n < sizeof buf - 1 ? d->n : sizeof buf - 1;
+    memcpy(buf, d->start, n);
+    buf[n] = 0;
+    int32_t x = text_x0(d->cv) + d->col * d->cv->cw;
+    t5ui_rect_t r = { x, d->y, d->x2, d->y + d->cv->lh - 1 };
+    t5ui_draw_text(d->paint, &r, buf, T5UI_TEXT_MONO, d->color ? d->color : d->text, T5UI_TEXT_LEFT);
+    d->col += disp_col(d->start, (int)d->n);
+    d->n = 0;
+}
+
+static void draw_run(void *ctx, const char *s, size_t n, uint32_t color)
+{
+    line_draw_t *d = ctx;
+    if (d->n && color == d->color && d->start + d->n == s) {
+        d->n += n;
+        return;
+    }
+    flush_run(d);
+    d->start = s;
+    d->n = n;
+    d->color = color;
+}
+
+/* Under the content's children (the cursor): the visible lines. */
+static void draw(t5ui_event_t *e)
+{
+    cv_t *cv = t5ui_event_user(e);
+    t5ui_paint_t *paint = t5ui_event_paint(e);
+    if (!paint) return;
     refresh_state(cv);
-    lv_area_t ca, sa;
-    lv_obj_get_coords(cv->content, &ca);
-    lv_obj_get_coords(cv->scroll, &sa);
+    t5ui_rect_t ca, sa;
+    t5ui_coords(cv->content, &ca);
+    t5ui_coords(cv->scroll, &sa);
     int first = (int)((sa.y1 - ca.y1) / cv->lh);
     int last = (int)((sa.y2 - ca.y1) / cv->lh) + 1;
     if (first < 0) first = 0;
     if (last >= cv->n) last = cv->n - 1;
-    const md_scheme_t *sc = md_scheme();
-    lv_draw_label_dsc_t d;
-    lv_draw_label_dsc_init(&d);
-    d.font = md_font_mono();
-    d.color = md_color(sc->c.on_surface);
-    d.flag |= LV_TEXT_FLAG_RECOLOR;
-    d.text_local = 1;
-    lv_draw_label_dsc_t g;
-    lv_draw_label_dsc_init(&g);
-    g.font = d.font;
-    g.color = lv_color_hex(C_GUTTER);
-    g.align = LV_TEXT_ALIGN_RIGHT;
-    g.text_local = 1;
-    static char buf[LINE_BUF];
+    /* Paint coordinates are the content's own. */
+    line_draw_t d = { .paint = paint, .cv = cv, .x2 = ca.x2 - ca.x1,
+                      .text = t5ui_theme_color(T5UI_COLOR_ON_SURFACE) };
+    out_t o = { draw_run, &d };
     for (int r = first; r <= last; r++) {
-        int32_t y = ca.y1 + r * cv->lh;
+        int32_t y = r * cv->lh;
         char num[12];
         snprintf(num, sizeof num, "%d", r + 1);
-        g.text = num;
-        lv_area_t ga = { ca.x1, y, ca.x1 + GUTTER * cv->cw - 1, y + cv->lh - 1 };
-        lv_draw_label(layer, &g, &ga);
-        out_t o = { buf, sizeof buf, 0 };
-        buf[0] = 0;
+        t5ui_rect_t ga = { 0, y, GUTTER * cv->cw - 1, y + cv->lh - 1 };
+        t5ui_draw_text(paint, &ga, num, T5UI_TEXT_MONO, C_GUTTER, T5UI_TEXT_RIGHT);
+        d.y = y;
+        d.col = 0;
+        d.n = 0;
         colorize(cv->lines[r], cv->state[r], &o);
-        if (!buf[0]) continue;
-        d.text = buf;
-        lv_area_t ta = { ca.x1 + text_x0(cv), y, ca.x2, y + cv->lh - 1 };
-        lv_draw_label(layer, &d, &ta);
-    }
-    /* The cursor. */
-    if (cv->cursor_on && cv->row >= first && cv->row <= last) {
-        lv_draw_rect_dsc_t rd;
-        lv_draw_rect_dsc_init(&rd);
-        rd.bg_color = md_color(sc->c.secondary);
-        rd.bg_opa = LV_OPA_COVER;
-        int32_t x = ca.x1 + text_x0(cv) + disp_col(cv->lines[cv->row], cv->col) * cv->cw;
-        int32_t y = ca.y1 + cv->row * cv->lh;
-        lv_area_t cr = { x - 1, y + 2, x + 1, y + cv->lh - 3 };
-        lv_draw_rect(layer, &rd, &cr);
+        flush_run(&d);
     }
 }
 
-static void blink(lv_timer_t *t)
+/* The cursor blinks while the text area has the keyboard, and stays on
+ * otherwise. */
+static void blink(t5ui_timer_t *t, void *user)
 {
-    cv_t *cv = lv_timer_get_user_data(t);
-    bool focused = lv_obj_has_state(cv->ta, LV_STATE_FOCUSED);
+    (void)t;
+    cv_t *cv = user;
+    bool focused = t5ui_get_int(cv->ta, T5UI_P_STATE, 0) & T5UI_STATE_FOCUSED;
     bool on = focused ? !cv->cursor_on : true;
-    if (on == cv->cursor_on) return;
-    cv->cursor_on = on;
-    lv_area_t ca;
-    lv_obj_get_coords(cv->content, &ca);
-    int32_t x = ca.x1 + text_x0(cv) + disp_col(cv->lines[cv->row], cv->col) * cv->cw;
-    int32_t y = ca.y1 + cv->row * cv->lh;
-    lv_area_t cr = { x - 2, y, x + 2, y + cv->lh };
-    lv_obj_invalidate_area(cv->content, &cr);
+    if (on != cv->cursor_on) show_cursor(cv, on);
 }
 
-static void deleted(lv_event_t *e)
+static void deleted(t5ui_event_t *e)
 {
-    cv_t *cv = lv_event_get_user_data(e);
-    if (cv->blink) lv_timer_delete(cv->blink);
+    cv_t *cv = t5ui_event_user(e);
+    t5ui_timer_delete(cv->blink);   /* harmless if the app's exit already took it */
     free_lines(cv);
     free(cv->lines);
     free(cv->state);
@@ -645,52 +643,62 @@ static void deleted(lv_event_t *e)
 }
 
 /* ---- API ------------------------------------------------------------------------------------------- */
-lv_obj_t *cv_create(lv_obj_t *parent)
+t5ui_obj_t *cv_create(t5ui_obj_t *parent)
 {
     cv_t *cv = calloc(1, sizeof *cv);
     if (!cv) return NULL;
-    lv_obj_t *s = lv_obj_create(parent);
-    lv_obj_remove_style_all(s);
-    lv_obj_set_size(s, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s, md_color(md_scheme()->c.background), 0);
-    lv_obj_set_style_pad_all(s, T5_DP(4), 0);
-    lv_obj_set_scroll_dir(s, LV_DIR_ALL);
-    lv_obj_set_user_data(s, cv);
-    lv_obj_t *c = lv_obj_create(s);
-    lv_obj_remove_style_all(c);
-    lv_obj_set_clickable(c, true);
-    lv_obj_set_scrollable(c, false);
+    t5ui_obj_t *s = t5ui_create(parent, T5UI_BOX);
+    t5ui_set_int(s, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(s, T5UI_P_HEIGHT, T5UI_PCT(100));
+    t5ui_set_int(s, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+    t5ui_set_color(s, T5UI_P_BG_COLOR, t5ui_theme_color(T5UI_COLOR_BACKGROUND));
+    t5ui_set_int(s, T5UI_P_PAD_ALL, t5ui_dp(4));
+    t5ui_set_int(s, T5UI_P_SCROLL_DIR, T5UI_DIR_ALL);
+    t5ui_set_user(s, cv);
+    t5ui_obj_t *c = t5ui_create(s, T5UI_BOX);
+    t5ui_set_int(c, T5UI_P_CLICKABLE, true);
+    t5ui_set_int(c, T5UI_P_SCROLLABLE, false);
     cv->scroll = s;
     cv->content = c;
-    const lv_font_t *f = md_font_mono();
-    cv->cw = lv_font_get_glyph_width(f, 'M', 0);
-    cv->lh = lv_font_get_line_height(f) + T5_DP(2);
-    cv->ta = lv_textarea_create(c);
-    lv_textarea_set_one_line(cv->ta, true);
-    lv_obj_remove_style_all(cv->ta);
-    lv_obj_set_size(cv->ta, 1, cv->lh);   /* px */
-    /* Invisible in every state (the theme outlines a focused text area). */
-    lv_obj_set_style_opa(cv->ta, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_ANY);
-    lv_obj_set_style_opa(cv->ta, LV_OPA_TRANSP, LV_PART_CURSOR | LV_STATE_ANY);
-    lv_obj_set_style_outline_width(cv->ta, 0, LV_PART_MAIN | LV_STATE_ANY);
-    lv_obj_add_event_cb(cv->ta, ta_key, LV_EVENT_KEY | LV_EVENT_PREPROCESS, cv);
-    lv_obj_add_event_cb(cv->ta, ta_insert, LV_EVENT_INSERT, cv);
-    lv_obj_add_event_cb(cv->ta, ta_changed, LV_EVENT_VALUE_CHANGED, cv);
-    lv_obj_add_event_cb(cv->ta, ta_ready, LV_EVENT_READY, cv);
-    lv_obj_add_event_cb(c, draw, LV_EVENT_DRAW_MAIN, cv);
-    lv_obj_add_event_cb(c, content_pressed, LV_EVENT_SHORT_CLICKED, cv);
-    lv_obj_add_event_cb(s, deleted, LV_EVENT_DELETE, cv);
-    cv->blink = lv_timer_create(blink, 530, cv);
+    int32_t w, h;
+    t5ui_text_size("M", T5UI_TEXT_MONO, 0, &w, &h);
+    cv->cw = w;
+    cv->lh = h + t5ui_dp(2);
+    cv->ta = t5ui_create(c, T5UI_TEXTAREA);
+    t5ui_set_int(cv->ta, T5UI_P_ONE_LINE, true);
+    t5ui_style_clear(cv->ta);
+    t5ui_set_int(cv->ta, T5UI_P_WIDTH, 1);   /* px */
+    t5ui_set_int(cv->ta, T5UI_P_HEIGHT, cv->lh);
+    /* Invisible (the theme's look is gone, the cursor part too): the view
+     * draws the text and its own cursor. */
+    t5ui_set_int(cv->ta, T5UI_P_OPA, T5UI_OPA_TRANSP);
+    t5ui_set_int_at(cv->ta, T5UI_P_OPA, T5UI_AT(T5UI_PART_CURSOR, T5UI_STATE_DEFAULT), T5UI_OPA_TRANSP);
+    t5ui_set_int(cv->ta, T5UI_P_OUTLINE_WIDTH, 0);
+    t5ui_on(cv->ta, T5UI_EV_KEY, ta_key, cv);
+    t5ui_on(cv->ta, T5UI_EV_INSERT, ta_insert, cv);
+    t5ui_on(cv->ta, T5UI_EV_VALUE, ta_changed, cv);
+    t5ui_on(cv->ta, T5UI_EV_READY, ta_ready, cv);
+    /* The cursor: a bar over the text, shown and hidden to blink. */
+    cv->cursor = t5ui_create(c, T5UI_BOX);
+    t5ui_set_int(cv->cursor, T5UI_P_WIDTH, 3);   /* px */
+    t5ui_set_int(cv->cursor, T5UI_P_HEIGHT, cv->lh - 4);
+    t5ui_set_int(cv->cursor, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+    t5ui_set_color(cv->cursor, T5UI_P_BG_COLOR, t5ui_theme_color(T5UI_COLOR_SECONDARY));
+    t5ui_set_int(cv->cursor, T5UI_P_CLICKABLE, false);
+    t5ui_set_int(cv->cursor, T5UI_P_HIDDEN, true);
+    t5ui_on(c, T5UI_EV_DRAW_BEHIND, draw, cv);
+    t5ui_on(c, T5UI_EV_SHORT_CLICK, content_pressed, cv);
+    t5ui_on(s, T5UI_EV_DELETE, deleted, cv);
+    cv->blink = t5ui_timer(BLINK_MS, blink, cv);
     cv->want_col = -1;
     cv_set_text(cv, "", 0);
     reset_ta(cv);
     return s;
 }
 
-cv_t *cv_get(lv_obj_t *view)
+cv_t *cv_get(t5ui_obj_t *view)
 {
-    return view ? lv_obj_get_user_data(view) : NULL;
+    return view ? t5ui_user(view) : NULL;
 }
 
 bool cv_set_text(cv_t *cv, const char *text, size_t len)
@@ -724,8 +732,8 @@ bool cv_set_text(cv_t *cv, const char *text, size_t len)
     update_size(cv);
     cv->dirty = false;
     place_ta(cv);
-    lv_obj_scroll_to(cv->scroll, 0, 0, LV_ANIM_OFF);
-    lv_obj_invalidate(cv->content);
+    t5ui_cmd(cv->scroll, T5UI_CMD_SCROLL_TO, 0, 0, false, NULL);
+    t5ui_invalidate(cv->content);
     return true;
 }
 
@@ -768,14 +776,9 @@ void cv_set_changed_cb(cv_t *cv, void (*cb)(cv_t *, void *), void *arg)
 
 void cv_focus(cv_t *cv)
 {
-    lv_group_t *g = lv_group_get_default();
-    if (g) {
-        if (lv_obj_get_group(cv->ta) != g) lv_group_add_obj(g, cv->ta);
-        lv_group_focus_obj(cv->ta);
-        lv_group_set_editing(g, true);     /* Tab and Shift-Tab come to us */
-    }
-    lv_obj_add_state(cv->ta, LV_STATE_FOCUSED);
-    t5_shell_keyboard_show(cv->ta);
+    t5ui_cmd(cv->ta, T5UI_CMD_FOCUS, 1, 0, 0, NULL);   /* 1: Tab and Shift-Tab come to us */
+    t5ui_set_int(cv->ta, T5UI_P_STATE, t5ui_get_int(cv->ta, T5UI_P_STATE, 0) | T5UI_STATE_FOCUSED);
+    t5_shell_keyboard_show(t5ui_sys_native(cv->ta));
     reset_ta(cv);
 }
 

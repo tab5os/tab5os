@@ -1,0 +1,10 @@
+# esp_hosted upgrades tried as updates (docs/releasing.md).
+#
+# After an OS update, the new P4 has to reach the previous release's C6
+# firmware over esp_hosted, or it can't update the C6 (the update travels
+# over that same link) and has no Wi-Fi until it does. So when a release
+# moves esp_hosted, install it as an update over the previous release on a
+# Tab5, check that the C6 is updated and Wi-Fi comes back, and record it
+# here. tools/t5/release_rules.py refuses the release without the line.
+#
+# <old> -> <new>: <release updated from>, <device>, <date>, <what was checked>

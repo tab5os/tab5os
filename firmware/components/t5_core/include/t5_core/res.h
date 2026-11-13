@@ -59,6 +59,7 @@ void t5_res_remove_app(void *app, void *handle);
 typedef struct {
     uint32_t magic;          /* T5_APP_CTX_MAGIC */
     const char *id;          /* "com.example.app" */
+    const char *name;        /* what the person sees ("Air Log"), "" until known */
 } t5_app_ctx_hdr_t;
 
 #define T5_APP_CTX_MAGIC 0x54354150u   /* "T5AP" */
@@ -68,11 +69,39 @@ typedef struct {
  * installed everything is allowed. Bits match T5_PERM_* in t5_pkg. */
 #define T5_CORE_PERM_CAMERA (1u << 0)
 #define T5_CORE_PERM_MIC (1u << 1)
+#define T5_CORE_PERM_NET (1u << 2)
+#define T5_CORE_PERM_BLE (1u << 3)
 #define T5_CORE_PERM_USB (1u << 5)
+/* Capabilities: a first-use question inside a manifest group, for what the
+ * group alone shouldn't grant (docs/io-access-design.md). Checked with
+ * t5_core_perm_check like the bits above; the app must declare the group.
+ * Stored with the app's grants above the manifest bits, never in a
+ * manifest. */
+#define T5_CORE_CAP_USB_DEVICE (1u << 16)    /* usb: USB-C device mode */
+#define T5_CORE_CAP_USB_TAKEOVER (1u << 17)  /* usb: take a USB-A interface from the OS */
+#define T5_CORE_CAP_BLE_HID (1u << 18)       /* ble: act as a Bluetooth keyboard/mouse */
+#define T5_CORE_CAP_WIFI_MONITOR (1u << 19)  /* net: see all Wi-Fi traffic */
+#define T5_CORE_CAP_WIFI_TX (1u << 20)       /* net: send raw Wi-Fi frames */
+#define T5_CORE_CAP_EXCL_USBC (1u << 21)     /* usb: exclusive USB-C */
+#define T5_CORE_CAP_EXCL_USBA (1u << 22)     /* usb: exclusive USB-A bus */
+#define T5_CORE_CAP_EXCL_WIFI (1u << 23)     /* net: exclusive Wi-Fi radio */
+#define T5_CORE_CAP_EXCL_BT (1u << 24)       /* ble: exclusive Bluetooth controller */
+#define T5_CORE_CAPS 0x01ff0000u
+/* The manifest group a capability belongs to (T5_PERM_* value), 0 if none. */
+uint32_t t5_core_cap_group(uint32_t cap);
+
 typedef int (*t5_perm_check_fn_t)(uint32_t perm);
 void t5_core_set_perm_check(t5_perm_check_fn_t fn);
 /* T5_OK, T5_ERR_DENIED, or T5_ERR_TIMEOUT if the person didn't answer. */
 int t5_core_perm_check(uint32_t perm);
+
+/* Is the calling task's app the foreground app, resumed (not suspended for
+ * Sleep or screen off)? For services that only serve the app the person is
+ * using (HID reports). The app runtime installs the check; with none
+ * installed, or for system callers, true. */
+typedef bool (*t5_fg_check_fn_t)(void);
+void t5_core_set_fg_check(t5_fg_check_fn_t fn);
+bool t5_core_app_foreground(void);
 
 /* May the calling app read (write: change) path? For services that open
  * files for an app (camera photos, recordings). The app runtime installs

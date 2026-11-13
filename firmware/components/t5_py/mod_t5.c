@@ -399,14 +399,18 @@ static const mp_rom_map_elem_t imu_globals_table[] = {
 static MP_DEFINE_CONST_DICT(imu_globals, imu_globals_table);
 static const mp_obj_module_t mod_imu = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&imu_globals };
 
+extern const mp_obj_fun_builtin_fixed_t py_usb_open_obj, py_usb_devices_obj, py_exclusive_obj;
+
 static const mp_rom_map_elem_t usb_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_usb) },
     T5_GEN_USB_GLOBALS
+    { MP_ROM_QSTR(MP_QSTR_open), MP_ROM_PTR(&py_usb_open_obj) },
+    { MP_ROM_QSTR(MP_QSTR_devices), MP_ROM_PTR(&py_usb_devices_obj) },
 };
 static MP_DEFINE_CONST_DICT(usb_globals, usb_globals_table);
 static const mp_obj_module_t mod_usb = { .base = { &mp_type_module }, .globals = (mp_obj_dict_t *)&usb_globals };
 
-extern const mp_obj_module_t py_mod_port, py_mod_ui, py_mod_net;
+extern const mp_obj_module_t py_mod_port, py_mod_ui, py_mod_net, py_mod_hid, py_mod_usbdev, py_mod_ble, py_mod_wifi;
 
 static const mp_rom_map_elem_t t5_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_t5) },
@@ -423,6 +427,11 @@ static const mp_rom_map_elem_t t5_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_port), MP_ROM_PTR(&py_mod_port) },
     { MP_ROM_QSTR(MP_QSTR_ui), MP_ROM_PTR(&py_mod_ui) },
     { MP_ROM_QSTR(MP_QSTR_net), MP_ROM_PTR(&py_mod_net) },
+    { MP_ROM_QSTR(MP_QSTR_hid), MP_ROM_PTR(&py_mod_hid) },
+    { MP_ROM_QSTR(MP_QSTR_usbdev), MP_ROM_PTR(&py_mod_usbdev) },
+    { MP_ROM_QSTR(MP_QSTR_ble), MP_ROM_PTR(&py_mod_ble) },
+    { MP_ROM_QSTR(MP_QSTR_wifi), MP_ROM_PTR(&py_mod_wifi) },
+    { MP_ROM_QSTR(MP_QSTR_exclusive), MP_ROM_PTR(&py_exclusive_obj) },
 };
 static MP_DEFINE_CONST_DICT(t5_globals, t5_globals_table);
 
@@ -439,6 +448,8 @@ const char t5_py_help_text[] =
     "  t5.audio  tone(), play(), out()\n"
     "  t5.app    running(), exit(), data_dir(), state_save(), on_suspend()\n"
     "  t5.imu    accel()\n"
+    "  t5.hid, t5.usbdev, t5.ble.hid(): act as a USB or Bluetooth keyboard/mouse/MIDI device\n"
+    "  t5.wifi.monitor(), t5.usb.open(), t5.exclusive(): raw Wi-Fi, USB-A and Bluetooth\n"
     "Files: open() works in the app's own folders, and in shared folders\n"
     "with shared_read, shared_write or all_files. help('modules') lists\n"
     "every module.\n";

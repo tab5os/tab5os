@@ -6,9 +6,9 @@
  * Photos go through the hardware JPEG decoder. The view is a video plane
  * (t5_ui/plane.h) the size of the screen: each change of zoom or position
  * posts the part of the photo to show and its scale, and the display
- * pipeline scales it straight into the framebuffer (one PPA pass). LVGL
+ * pipeline scales it straight into the framebuffer (one PPA pass). The UI
  * only draws the back button over it, so pinching and panning stay smooth
- * (an LVGL-scaled full-screen image redraws in software, ~10x slower).
+ * (a UI-scaled full-screen image redraws in software, ~10x slower).
  *
  * The PPA scales in steps of 1/16. Zoomed in, that is fine-grained enough;
  * zoomed far out on a big photo the steps are coarse, so there the scale is
@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "t5/camera.h"
+#include "t5_gui/t5ui_icons.h"
+#include "t5_gui/t5ui_sys.h"
 #include "t5_ui/plane.h"
 #include "sysapps_priv.h"
 
@@ -26,7 +28,8 @@
 #define ZOOM_ANIM_MS 180
 
 typedef struct {
-    lv_obj_t *root, *view, *back;
+    t5ui_obj_t *root, *view, *back;
+    t5ui_obj_t *anim;             /* hidden: carries the zoom animation's progress (TRANSLATE_X, 0..1024) */
     void (*on_close)(void);
     /* the photo, decoded: pic_w x pic_h (rounded up to 16), iw x ih of it real */
     uint16_t *px;
@@ -43,13 +46,16 @@ typedef struct {
     size_t mid_bytes[2];
     uint32_t mid_seq[2];
     int mid_next;
-    lv_timer_t *timer;
+    t5ui_timer_t *timer;
     /* gestures */
     bool pinching;
+    int32_t last_x, last_y;       /* the pointer at the last press or pressing: the pan's step */
     float pinch_d0, pinch_z0, pinch_px, pinch_py;
     /* the double-tap zoom animation: z0 -> z1 keeping the photo point
      * (ax, ay) under the screen point (sx, sy) */
     float az0, az1, ax, ay, sx, sy;
+    bool zooming;
+    int32_t zoom_v;               /* the animation's progress last applied */
 } photo_t;
 
 static photo_t *s_p;
@@ -220,9 +226,17 @@ static void render(photo_t *p)
     t5_plane_post(p->plane, &src);
 }
 
-static void timer_cb(lv_timer_t *t)
+static void zoom_step(photo_t *p, int32_t v);
+
+static void timer_cb(t5ui_timer_t *t, void *user)
 {
-    photo_t *p = lv_timer_get_user_data(t);
+    (void)t;
+    photo_t *p = user;
+    /* The double-tap zoom: its progress, eased, as the animation has it now. */
+    if (p->zooming) {
+        int32_t v = t5ui_get_int(p->anim, T5UI_P_TRANSLATE_X, p->zoom_v);
+        if (v != p->zoom_v) zoom_step(p, v);
+    }
     if (p->render_pending) render(p);
 }
 
@@ -248,22 +262,25 @@ static void photo_point(const photo_t *p, float vx, float vy, float *px, float *
 /* ---- the view and its size ------------------------------------------------------------ */
 static void make_view(photo_t *p)
 {
-    int32_t vw = lv_obj_get_width(p->root), vh = lv_obj_get_height(p->root);
+    t5ui_rect_t rc;
+    t5ui_coords(p->root, &rc);
+    int32_t vw = rc.x2 - rc.x1 + 1, vh = rc.y2 - rc.y1 + 1;
     if (vw < 16 || vh < 16) return;
     float rel = p->fit > 0 ? p->z / p->fit : 1.0f;    /* keep the zoom across a rotation */
     t5_plane_t *pl = t5_plane_new(vw, vh);
     if (!pl) return;
-    lv_obj_t *view = t5_ui_plane_create(p->root, pl);
+    /* The plane's view is platform code's: an object of its own, taken in here. */
+    t5ui_obj_t *view = t5ui_sys_obj(t5_ui_plane_create(t5ui_sys_native(p->root), pl));
     if (!view) {
         t5_plane_release(pl);
         return;
     }
-    if (p->view) lv_obj_delete(p->view);  /* closed: it reads neither intermediate now */
+    if (p->view) t5ui_delete(p->view);    /* closed: it reads neither intermediate now */
     t5_plane_release(p->plane);
     p->plane = pl;
     p->view = view;
     p->mid_seq[0] = p->mid_seq[1] = 0;
-    lv_obj_move_background(view);     /* under the back button */
+    t5ui_move_to(view, 0);            /* under the back button */
     p->vw = vw;
     p->vh = vh;
     float fx = (float)vw / (float)p->iw, fy = (float)vh / (float)p->ih;
@@ -278,18 +295,35 @@ static void make_view(photo_t *p)
     render(p);
 }
 
-static void resized(lv_event_t *e)
+static void resized(t5ui_event_t *e)
 {
-    photo_t *p = lv_event_get_user_data(e);
-    if (lv_obj_get_width(p->root) != p->vw || lv_obj_get_height(p->root) != p->vh) make_view(p);
+    photo_t *p = t5ui_event_user(e);
+    t5ui_rect_t rc;
+    t5ui_coords(p->root, &rc);
+    if (rc.x2 - rc.x1 + 1 != p->vw || rc.y2 - rc.y1 + 1 != p->vh) make_view(p);
 }
 
 /* ---- gestures --------------------------------------------------------------------------- */
-static void zoom_anim(void *var, int32_t v)
+/* One step of the double-tap zoom, v of 1024 along. */
+static void zoom_step(photo_t *p, int32_t v)
 {
-    photo_t *p = var;
+    p->zoom_v = v;
     float t = (float)v / 1024.0f;
     zoom_about(p, p->az0 + (p->az1 - p->az0) * t, p->ax, p->ay, p->sx, p->sy);
+}
+
+static void zoom_stop(photo_t *p)
+{
+    p->zooming = false;
+    t5ui_animate_stop(p->anim, T5UI_P_TRANSLATE_X);
+}
+
+static void zoom_end(t5ui_event_t *e)
+{
+    photo_t *p = t5ui_event_user(e);
+    if (!p->zooming || t5ui_event_index(e) != T5UI_P_TRANSLATE_X) return;
+    p->zooming = false;
+    zoom_step(p, 1024);
 }
 
 static void double_tap(photo_t *p, int32_t x, int32_t y)
@@ -307,54 +341,58 @@ static void double_tap(photo_t *p, int32_t x, int32_t y)
         p->ax = (float)p->iw / 2.0f;
         p->ay = (float)p->ih / 2.0f;
     }
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, p);
-    lv_anim_set_exec_cb(&a, zoom_anim);
-    lv_anim_set_values(&a, 0, 1024);
-    lv_anim_set_duration(&a, ZOOM_ANIM_MS);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_start(&a);
+    /* The animation eases a number from 0 to 1024; the timer applies it
+     * (zoom_step) as it goes, and zoom_end the last step. */
+    p->zoom_v = -1;
+    p->zooming = t5ui_animate(p->anim, T5UI_P_TRANSLATE_X, 0, 1024, ZOOM_ANIM_MS, 0, T5UI_EASE_OUT) == T5_OK;
+    if (p->zooming) zoom_step(p, 0);
 }
 
 static void to_view(const photo_t *p, int32_t sx, int32_t sy, float *vx, float *vy)
 {
-    lv_area_t c;
-    lv_obj_get_coords(p->root, &c);
+    t5ui_rect_t c;
+    t5ui_coords(p->root, &c);
     *vx = (float)(sx - c.x1);
     *vy = (float)(sy - c.y1);
 }
 
-static void gesture(lv_event_t *e)
+static void gesture(t5ui_event_t *e)
 {
-    photo_t *p = lv_event_get_user_data(e);
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_indev_t *indev = lv_indev_active();
-    if (code == LV_EVENT_PRESSED) {
+    photo_t *p = t5ui_event_user(e);
+    t5ui_ev_t code = t5ui_event_kind(e);
+    int32_t px = 0, py = 0;
+    bool have_pt = t5ui_event_point(e, &px, &py);
+    if (code == T5UI_EV_PRESS) {
         p->pinching = false;
-        lv_anim_delete(p, zoom_anim);
+        p->last_x = px;
+        p->last_y = py;
+        zoom_stop(p);
         return;
     }
-    if (code == LV_EVENT_RELEASED) {
+    if (code == T5UI_EV_RELEASE) {
         p->pinching = false;
         return;
     }
-    if (code == LV_EVENT_DOUBLE_CLICKED && indev) {
-        lv_point_t pt;
-        lv_indev_get_point(indev, &pt);
+    if (code == T5UI_EV_DOUBLE_CLICK && have_pt) {
         float vx, vy;
-        to_view(p, pt.x, pt.y, &vx, &vy);
+        to_view(p, px, py, &vx, &vy);
         double_tap(p, (int32_t)vx, (int32_t)vy);
         return;
     }
-    if (code != LV_EVENT_PRESSING) return;
-    int32_t xs[2], ys[2];
-    int n = t5_ui_touch_points(xs, ys, 2);
+    if (code != T5UI_EV_PRESSING) return;
+    /* The pointer's move since the last press or pressing: the pan's step. */
+    int32_t vx_step = have_pt ? px - p->last_x : 0, vy_step = have_pt ? py - p->last_y : 0;
+    if (have_pt) {
+        p->last_x = px;
+        p->last_y = py;
+    }
+    t5ui_touch_t tp[2];
+    int n = t5ui_touches(tp, 2);
     if (n >= 2) {
-        float dx = (float)(xs[1] - xs[0]), dy = (float)(ys[1] - ys[0]);
+        float dx = (float)(tp[1].x - tp[0].x), dy = (float)(tp[1].y - tp[0].y);
         float d = sqrtf(dx * dx + dy * dy);
         float mx, my;
-        to_view(p, (xs[0] + xs[1]) / 2, (ys[0] + ys[1]) / 2, &mx, &my);
+        to_view(p, (tp[0].x + tp[1].x) / 2, (tp[0].y + tp[1].y) / 2, &mx, &my);
         if (d < 1.0f) return;
         if (!p->pinching) {
             p->pinching = true;
@@ -368,24 +406,22 @@ static void gesture(lv_event_t *e)
     }
     /* One finger: pan, once zoomed in (not right after a pinch, when the
      * other finger lifts first and the jump would show). */
-    if (p->pinching || !indev || p->z <= p->fit * 1.001f) return;
-    lv_point_t v;
-    lv_indev_get_vect(indev, &v);
-    if (!v.x && !v.y) return;
+    if (p->pinching || !have_pt || p->z <= p->fit * 1.001f) return;
+    if (!vx_step && !vy_step) return;
     float r = scale_of(p->z);
-    p->cx -= (float)v.x / r;
-    p->cy -= (float)v.y / r;
+    p->cx -= (float)vx_step / r;
+    p->cy -= (float)vy_step / r;
     clamp_centre(p);
     render(p);
 }
 
-static void close_clicked(lv_event_t *e)
+static void close_clicked(t5ui_event_t *e)
 {
     (void)e;
     sa_photo_close();
 }
 
-bool sa_photo_open(lv_obj_t *screen, const char *path, void (*on_close)(void))
+bool sa_photo_open(t5ui_obj_t *screen, const char *path, void (*on_close)(void))
 {
     sa_photo_close();
     if (!sa_photo_can_open(path)) return false;
@@ -398,46 +434,54 @@ bool sa_photo_open(lv_obj_t *screen, const char *path, void (*on_close)(void))
         return false;
     }
     p->on_close = on_close;
-    p->root = lv_obj_create(screen);
-    lv_obj_remove_style_all(p->root);
-    lv_obj_set_ignore_layout(p->root, true);
-    lv_obj_set_size(p->root, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(p->root, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(p->root, LV_OPA_COVER, 0);
-    lv_obj_set_scrollable(p->root, false);
-    lv_obj_set_clickable(p->root, true);              /* nothing underneath gets the taps */
-    lv_obj_add_event_cb(p->root, gesture, LV_EVENT_PRESSED, p);
-    lv_obj_add_event_cb(p->root, gesture, LV_EVENT_PRESSING, p);
-    lv_obj_add_event_cb(p->root, gesture, LV_EVENT_RELEASED, p);
-    lv_obj_add_event_cb(p->root, gesture, LV_EVENT_DOUBLE_CLICKED, p);
+    p->root = t5ui_create(screen, T5UI_BOX);
+    t5ui_set_int(p->root, T5UI_P_FLOATING, true);
+    t5ui_set_int(p->root, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(p->root, T5UI_P_HEIGHT, T5UI_PCT(100));
+    t5ui_set_color(p->root, T5UI_P_BG_COLOR, 0x000000);
+    t5ui_set_int(p->root, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+    t5ui_set_int(p->root, T5UI_P_SCROLLABLE, false);
+    t5ui_set_int(p->root, T5UI_P_CLICKABLE, true);    /* nothing underneath gets the taps */
+    t5ui_on(p->root, T5UI_EV_PRESS, gesture, p);
+    t5ui_on(p->root, T5UI_EV_PRESSING, gesture, p);
+    t5ui_on(p->root, T5UI_EV_RELEASE, gesture, p);
+    t5ui_on(p->root, T5UI_EV_DOUBLE_CLICK, gesture, p);
+    p->anim = t5ui_create(p->root, T5UI_BOX);
+    t5ui_set_int(p->anim, T5UI_P_HIDDEN, true);
+    t5ui_set_int(p->anim, T5UI_P_FLOATING, true);
+    t5ui_on(p->anim, T5UI_EV_ANIM_END, zoom_end, p);
 
     /* Back, top left, in the Camera's round-button style: the viewer is a
      * page the user returns from, not a dialog to dismiss. A dark disc so it
      * reads over bright photos. */
-    lv_obj_t *b = lv_button_create(p->root);
-    lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, T5_DP(44), T5_DP(44));
-    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(b, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_50, 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_80, LV_STATE_PRESSED);
-    lv_obj_t *l = md_icon_create(b, MD_ICON_ARROW_BACK, MD_ICON_DP);
-    lv_obj_set_style_text_color(l, lv_color_white(), 0);
-    lv_obj_center(l);
-    lv_obj_add_event_cb(b, close_clicked, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(b, LV_ALIGN_TOP_LEFT, T5_DP(12), T5_DP(12));
+    t5ui_obj_t *b = t5ui_create(p->root, T5UI_BUTTON);
+    t5ui_style_clear(b);
+    t5ui_set_int(b, T5UI_P_WIDTH, t5ui_dp(44));
+    t5ui_set_int(b, T5UI_P_HEIGHT, t5ui_dp(44));
+    t5ui_set_int(b, T5UI_P_RADIUS, T5UI_RADIUS_CIRCLE);
+    t5ui_set_color(b, T5UI_P_BG_COLOR, 0x000000);
+    t5ui_set_int(b, T5UI_P_BG_OPA, 127);                                         /* 50% */
+    t5ui_set_int_at(b, T5UI_P_BG_OPA, T5UI_AT(T5UI_PART_MAIN, T5UI_STATE_PRESSED), 204);   /* 80% */
+    t5ui_obj_t *l = t5ui_create(b, T5UI_MD_ICON);
+    t5ui_set_str(l, T5UI_P_ICON, T5UI_ICON_ARROW_BACK);
+    t5ui_set_color(l, T5UI_P_TEXT_COLOR, 0xffffff);
+    t5ui_set_int(l, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
+    t5ui_on(b, T5UI_EV_CLICK, close_clicked, NULL);
+    t5ui_set_int(b, T5UI_P_ALIGN, T5UI_ALIGN_TOP_LEFT);
+    t5ui_set_int(b, T5UI_P_X, t5ui_dp(12));
+    t5ui_set_int(b, T5UI_P_Y, t5ui_dp(12));
     p->back = b;
 
     s_p = p;
-    lv_obj_update_layout(p->root);
+    t5ui_layout_now(p->root);
     make_view(p);
     if (!p->view) {
         sa_photo_close();
         sa_report(T5_ERR_NO_MEM, "open this photo");
         return false;
     }
-    lv_obj_add_event_cb(p->root, resized, LV_EVENT_SIZE_CHANGED, p);
-    p->timer = lv_timer_create(timer_cb, 10, p);
+    t5ui_on(p->root, T5UI_EV_RESIZE, resized, p);
+    p->timer = t5ui_timer(10, timer_cb, p);
     return true;
 }
 
@@ -446,9 +490,9 @@ void sa_photo_close(void)
     photo_t *p = s_p;
     if (!p) return;
     s_p = NULL;
-    lv_anim_delete(p, zoom_anim);
-    if (p->timer) lv_timer_delete(p->timer);
-    lv_obj_delete(p->root);           /* the view lets go of the plane, and of our buffers */
+    zoom_stop(p);
+    if (p->timer) t5ui_timer_delete(p->timer);
+    t5ui_delete(p->root);           /* the view lets go of the plane, and of our buffers */
     t5_plane_release(p->plane);
     free(p->px);
     free(p->mid[0]);

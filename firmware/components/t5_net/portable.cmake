@@ -4,4 +4,5 @@ set(T5_NET_PORTABLE_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/netcfg.c
     ${CMAKE_CURRENT_LIST_DIR}/c6img.c
     ${CMAKE_CURRENT_LIST_DIR}/ble_util.c
+    ${CMAKE_CURRENT_LIST_DIR}/wifimon_pcap.c
     ${CMAKE_CURRENT_LIST_DIR}/netproto.c)

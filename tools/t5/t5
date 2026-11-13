@@ -28,7 +28,9 @@ usage: t5 [--port PORT] [--docker] <command>
   sim [ARGS]       build and run it (--help for ARGS)
   sim-shots [DIR]  render its screenshots into DIR (sim/build/shots) and check them against sim/golden
   lint             UI density lint (raw pixel values), coding standard lint, simulator LVGL config,
-                   ABI symbol file check, docs/api-reference.md up to date
+                   ABI symbol file check, docs/api-reference.md up to date, release rules
+  release-check [--since TAG]  the C6 firmware's version and esp_hosted against the previous
+                   release (tools/t5/release_rules.py, docs/releasing.md)
   analyze          firmware and recovery with GCC's static analyzer on the strict components
                    (firmware/build-analyze/, recovery/build-analyze/)
   apps             build the SDK test apps (test/apps/build/*.t5app) against firmware/build
@@ -188,7 +190,10 @@ case "$cmd" in
         ref="$(mktemp -d)/api-reference.md"
         python3 "$ROOT/tools/abi/apidoc.py" "$ref" >/dev/null
         diff -u "$ROOT/docs/api-reference.md" "$ref" ||
-            { echo "docs/api-reference.md is stale: python3 tools/abi/apidoc.py docs/api-reference.md" >&2; exit 1; } ;;
+            { echo "docs/api-reference.md is stale: python3 tools/abi/apidoc.py docs/api-reference.md" >&2; exit 1; }
+        python3 "$ROOT/tools/t5/release_rules.py" ;;
+    release-check)
+        python3 "$ROOT/tools/t5/release_rules.py" "$@" ;;
     apps)
         command -v riscv32-esp-elf-gcc >/dev/null || { echo "run '. tools/env.sh' first" >&2; exit 1; }
         cmake -S "$ROOT/test/apps" -B "$ROOT/test/apps/build" -G Ninja >/dev/null

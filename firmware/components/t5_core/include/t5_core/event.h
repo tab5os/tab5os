@@ -67,6 +67,8 @@ typedef enum {
     T5_EV_BLE_SCAN_DONE,
     T5_EV_BLE_CONNECTED,
     T5_EV_BLE_DISCONNECTED,
+    T5_EV_BLE_PAIRING,              /* a device asks to pair: show the code (payload: t5_ev_ble_pair_t) */
+    T5_EV_BLE_PAIRED,               /* ...and the outcome (t5_ev_ble_pair_t, err set) */
 
     /* UI (payload: t5_ev_ui_t) */
     T5_EV_UI_ROTATE = 900,          /* the screen orientation changed */
@@ -81,6 +83,8 @@ typedef enum {
     T5_EV_APP_CRASHED,              /* found at boot: the app was running when the device crashed */
     T5_EV_APP_INSTALLED,
     T5_EV_APP_REMOVED,
+    T5_EV_APP_SUSPENDED,            /* the foreground app was suspended (Sleep, screen off) */
+    T5_EV_APP_RESUMED,              /* ...and resumed */
 
     /* Ports (payload: t5_ev_port_t) */
     T5_EV_PORT_CLAIMED = 1100,
@@ -116,6 +120,14 @@ typedef struct {
     uint8_t charge;       /* t5_charge_state_t */
     uint8_t usb;          /* USB power present */
 } t5_ev_battery_t;
+
+typedef struct {
+    uint16_t conn;        /* answer with t5_ble_sys_pair_reply(conn, ...) */
+    uint8_t action;       /* 1: confirm that both show passkey; 2: type passkey on the other device */
+    uint8_t addr[6];      /* the other device, LSB first */
+    uint32_t passkey;     /* 6 digits */
+    int32_t err;          /* T5_EV_BLE_PAIRED: T5_OK when bonded */
+} t5_ev_ble_pair_t;
 
 typedef struct {
     int32_t err;          /* t5_err_t, or a reason code for disconnects */

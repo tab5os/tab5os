@@ -171,6 +171,18 @@ void md_textfield_set_helper(lv_obj_t *field, const char *text, bool error)
     lv_obj_set_style_border_color(f->ta, md_color(error ? sc->c.error : sc->c.primary), LV_STATE_FOCUSED);
 }
 
+void md_textfield_set_label(lv_obj_t *field, const char *label)
+{
+    field_t *f = field ? lv_obj_get_user_data(field) : NULL;
+    if (f) lv_label_set_text(f->label, label ? label : "");
+}
+
+const char *md_textfield_label(lv_obj_t *field)
+{
+    field_t *f = field ? lv_obj_get_user_data(field) : NULL;
+    return f ? lv_label_get_text(f->label) : "";
+}
+
 /* ---- selection controls ------------------------------------------------------------ */
 lv_obj_t *md_switch_create(lv_obj_t *parent, bool on)
 {
@@ -400,7 +412,27 @@ void md_row_set_secondary(lv_obj_t *row, const char *text)
 void md_row_set_icon(lv_obj_t *row, const char *icon)
 {
     row_t *r = row ? lv_obj_get_user_data(row) : NULL;
-    if (r && r->icon && icon) lv_label_set_text(r->icon, icon);
+    if (!r || !icon) return;
+    if (!r->icon) {
+        r->icon = md_icon_create(row, icon, MD_ICON_DP);
+        lv_obj_set_style_text_opa(r->icon, md_scheme()->on_surface.medium, 0);
+        lv_obj_set_style_min_width(r->icon, T5_DP(40), 0);
+        lv_obj_move_to_index(r->icon, 0);
+        return;
+    }
+    lv_label_set_text(r->icon, icon);
+}
+
+lv_obj_t *md_row_label(lv_obj_t *row, bool secondary)
+{
+    row_t *r = row ? lv_obj_get_user_data(row) : NULL;
+    return r ? (secondary ? r->secondary : r->primary) : NULL;
+}
+
+lv_obj_t *md_row_icon(lv_obj_t *row)
+{
+    row_t *r = row ? lv_obj_get_user_data(row) : NULL;
+    return r ? r->icon : NULL;
 }
 
 lv_obj_t *md_row_switch(lv_obj_t *row, bool on)

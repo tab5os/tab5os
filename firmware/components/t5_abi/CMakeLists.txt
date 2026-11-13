@@ -10,7 +10,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "." "${T5_ROOT}/sdk/include"
     PRIV_REQUIRES t5_core t5_app t5_pkg md t5_ui t5_power t5_storage t5_time t5_battery t5_imu t5_net t5_audio
-                  t5_camera t5_usb t5_shell t5_ports lvgl__lvgl freertos lwip
+                  t5_camera t5_hid t5_gui t5_usb t5_shell t5_ports lvgl__lvgl freertos lwip
 )
 
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)

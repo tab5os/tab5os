@@ -3,9 +3,9 @@
 #include <string.h>
 #include "sysapps_priv.h"
 
-static void back(lv_event_t *e)
+static void back(t5ui_event_t *e)
 {
-    sa_nav_t *nav = lv_event_get_user_data(e);
+    sa_nav_t *nav = t5ui_event_user(e);
     if (nav->depth > 1) {
         sa_pop(nav);
     } else if (nav->root_back) {
@@ -16,9 +16,10 @@ static void back(lv_event_t *e)
     }
 }
 
-static void tick(lv_timer_t *t)
+static void tick(t5ui_timer_t *t, void *user)
 {
-    sa_nav_t *nav = lv_timer_get_user_data(t);
+    (void)t;
+    sa_nav_t *nav = user;
     if (nav->depth > 0) {
         sa_level_t *l = &nav->lv[nav->depth - 1];
         if (l->refresh) l->refresh(nav, l->arg);
@@ -29,9 +30,9 @@ void sa_nav_init(sa_nav_t *nav, t5_app_t *app)
 {
     memset(nav, 0, sizeof *nav);
     nav->app = app;
-    nav->root = t5_app_screen(app);
-    lv_obj_set_scrollable(nav->root, false);
-    nav->timer = lv_timer_create(tick, 1000, nav);
+    nav->root = t5ui_root(app);
+    t5ui_set_int(nav->root, T5UI_P_SCROLLABLE, false);
+    nav->timer = t5ui_timer(1000, tick, nav);
 }
 
 static void free_level(sa_level_t *l)
@@ -42,19 +43,21 @@ static void free_level(sa_level_t *l)
 
 void sa_nav_destroy(sa_nav_t *nav)
 {
-    if (nav->timer) lv_timer_delete(nav->timer);
+    if (nav->timer) t5ui_timer_delete(nav->timer);
     nav->timer = NULL;
     for (int i = 0; i < nav->depth; i++) free_level(&nav->lv[i]);
     nav->depth = 0;
 }
 
-lv_obj_t *sa_push(sa_nav_t *nav, const char *title)
+t5ui_obj_t *sa_push(sa_nav_t *nav, const char *title)
 {
     if (nav->depth >= SA_MAX_DEPTH) sa_pop(nav);
-    if (nav->depth > 0) lv_obj_set_hidden(nav->lv[nav->depth - 1].page, true);
+    if (nav->depth > 0) t5ui_set_int(nav->lv[nav->depth - 1].page, T5UI_P_HIDDEN, true);
     sa_level_t *l = &nav->lv[nav->depth++];
-    l->page = md_page_create(nav->root, title, back, nav, &l->bar);
-    l->body = md_page_body(l->page);
+    l->page = t5ui_create(nav->root, T5UI_MD_PAGE);
+    t5ui_set_str(l->page, T5UI_P_TITLE, title);
+    t5ui_on(l->page, T5UI_EV_BACK, back, nav);
+    l->body = t5ui_get_obj(l->page, T5UI_P_CONTENT);
     return l->body;
 }
 
@@ -65,12 +68,12 @@ void sa_pop(sa_nav_t *nav)
     /* The level's free function first, while its widgets still exist: the
      * Editor's saves the file from its code view and resets its run icon.
      * Deleting the page first made that a use after free (a crash on Back). */
-    lv_obj_t *page = l->page;
+    t5ui_obj_t *page = l->page;
     free_level(l);
-    lv_obj_delete(page);
+    t5ui_delete(page);
     if (nav->depth > 0) {
         sa_level_t *top = &nav->lv[nav->depth - 1];
-        lv_obj_set_hidden(top->page, false);
+        t5ui_set_int(top->page, T5UI_P_HIDDEN, false);
         if (top->refresh) top->refresh(nav, top->arg);
     }
 }
@@ -90,12 +93,12 @@ void sa_set_refresh(sa_nav_t *nav, sa_refresh_fn_t fn, void *arg, sa_free_fn_t f
     if (fn) fn(nav, arg);
 }
 
-lv_obj_t *sa_bar(sa_nav_t *nav)
+t5ui_obj_t *sa_bar(sa_nav_t *nav)
 {
-    return nav->depth ? nav->lv[nav->depth - 1].bar : NULL;
+    return nav->depth ? nav->lv[nav->depth - 1].page : NULL;
 }
 
-lv_obj_t *sa_body(sa_nav_t *nav)
+t5ui_obj_t *sa_body(sa_nav_t *nav)
 {
     return nav->depth ? nav->lv[nav->depth - 1].body : NULL;
 }
@@ -105,7 +108,7 @@ void sa_report(t5_err_t e, const char *what)
     if (e == T5_OK) return;
     char msg[96];
     snprintf(msg, sizeof msg, "Couldn't %s (%s)", what, t5_err_str(e));
-    md_snackbar_show(msg, NULL, NULL, NULL);
+    t5ui_snackbar(msg, NULL, NULL, NULL);
 }
 
 void sa_fmt_bytes(char *out, size_t n, uint64_t b)
@@ -124,32 +127,39 @@ void sa_fmt_duration(char *out, size_t n, uint32_t s)
     else snprintf(out, n, "%u s", (unsigned)s);
 }
 
-void sa_set_text(lv_obj_t *l, const char *t)
+void sa_set_text(t5ui_obj_t *obj, const char *t)
 {
-    if (l && strcmp(lv_label_get_text(l), t)) lv_label_set_text(l, t);
+    if (obj && strcmp(t5ui_get_str(obj, T5UI_P_TEXT, ""), t)) t5ui_set_str(obj, T5UI_P_TEXT, t);
 }
 
-lv_obj_t *sa_note(lv_obj_t *parent, const char *text)
+t5ui_obj_t *sa_note(t5ui_obj_t *parent, const char *text)
 {
-    lv_obj_t *l = md_label_create(parent, text, MD_TYPE_BODY2);
-    lv_obj_set_width(l, LV_PCT(100));
-    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_style_pad_hor(l, T5_DP(16), 0);
-    lv_obj_set_style_pad_ver(l, T5_DP(8), 0);
-    lv_obj_set_style_text_opa(l, md_scheme()->on_surface.medium, 0);
+    t5ui_obj_t *l = t5ui_create(parent, T5UI_MD_TEXT);
+    t5ui_set_int(l, T5UI_P_TEXT_STYLE, T5UI_TEXT_BODY2);
+    t5ui_set_str(l, T5UI_P_TEXT, text);
+    t5ui_set_int(l, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(l, T5UI_P_LONG_MODE, T5UI_LONG_WRAP);
+    t5ui_set_int(l, T5UI_P_PAD_LEFT, t5ui_dp(16));
+    t5ui_set_int(l, T5UI_P_PAD_RIGHT, t5ui_dp(16));
+    t5ui_set_int(l, T5UI_P_PAD_TOP, t5ui_dp(8));
+    t5ui_set_int(l, T5UI_P_PAD_BOTTOM, t5ui_dp(8));
+    t5ui_set_int(l, T5UI_P_TEXT_OPA, t5ui_theme_emphasis(T5UI_EMPHASIS_MEDIUM));
     return l;
 }
 
-lv_obj_t *sa_button_row(lv_obj_t *parent)
+t5ui_obj_t *sa_button_row(t5ui_obj_t *parent)
 {
-    lv_obj_t *r = lv_obj_create(parent);
-    lv_obj_remove_style_all(r);
-    lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_hor(r, T5_DP(16), 0);
-    lv_obj_set_style_pad_ver(r, T5_DP(8), 0);
-    lv_obj_set_style_pad_gap(r, T5_DP(8), 0);
-    lv_obj_set_scrollable(r, false);
+    t5ui_obj_t *r = t5ui_create(parent, T5UI_BOX);
+    t5ui_set_int(r, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(r, T5UI_P_FLOW, T5UI_ROW_WRAP);
+    t5ui_set_int(r, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
+    t5ui_set_int(r, T5UI_P_PLACE_TRACK, T5UI_PLACE_CENTER);
+    t5ui_set_int(r, T5UI_P_PAD_LEFT, t5ui_dp(16));
+    t5ui_set_int(r, T5UI_P_PAD_RIGHT, t5ui_dp(16));
+    t5ui_set_int(r, T5UI_P_PAD_TOP, t5ui_dp(8));
+    t5ui_set_int(r, T5UI_P_PAD_BOTTOM, t5ui_dp(8));
+    t5ui_set_int(r, T5UI_P_PAD_ROW, t5ui_dp(8));
+    t5ui_set_int(r, T5UI_P_PAD_COLUMN, t5ui_dp(8));
+    t5ui_set_int(r, T5UI_P_SCROLLABLE, false);
     return r;
 }

@@ -48,7 +48,7 @@ target_include_directories(t5_host PUBLIC ${T5_HOST_INCS} PRIVATE ${T5_HOST_PRIV
 target_link_libraries(t5_host PUBLIC unity m)
 
 enable_testing()
-foreach(t test_pins test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch test_power test_battery test_net test_ota test_ports test_pkg test_ui test_app test_media)
+foreach(t test_pins test_core test_i2c test_xpin test_time test_imu test_storage test_display_touch test_power test_battery test_net test_ota test_ports test_pkg test_ui test_app test_media test_hid test_t5ui)
     add_executable(${t} ${t}.c)
     target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
     target_link_libraries(${t} PRIVATE t5_host)
@@ -71,6 +71,9 @@ target_include_directories(test_pkg PRIVATE ${FW}/t5_pkg)
 target_include_directories(test_ports PRIVATE ${FW}/t5_ports)
 target_include_directories(test_power PRIVATE ${FW}/t5_power ${FW}/../main)
 target_include_directories(test_ui PRIVATE ${FW}/t5_shell)
+# t5ui's core runs against a fake backend in the test.
+target_sources(test_t5ui PRIVATE ${FW}/t5_gui/t5ui_core.c)
+target_include_directories(test_t5ui PRIVATE ${FW}/t5_gui)
 # test_ota runs tools/ota/t5ota.py (the .t5os header both sides agree on),
 # test_pkg tools/t5/t5pack.py (the manifest rules).
 target_compile_definitions(test_ota PRIVATE T5_REPO_ROOT="${CMAKE_CURRENT_LIST_DIR}/../..")

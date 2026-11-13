@@ -12,7 +12,7 @@
  *   cam open [photo|rgb]|close|stats|photo <path>|rec <path> <s>|snap [w h]  (rec: .avi is MJPEG, else H.264)
  *   usb                            devices and counters
  *   usb host on|off | eject | midi <s> | serial <baud> <text>
- *   usbc console | storage [timeout s]
+ *   usbc console | storage [timeout s] | device [s | status]
  */
 #include "esp_attr.h"
 #include <math.h>
@@ -40,6 +40,10 @@
 #include "t5_ui/t5_ui.h"
 #include "t5_usb/usb.h"
 #include "t5_usb/usb_diag.h"
+#include "t5_usb/usbdev.h"
+#include "t5_core/excl.h"
+#include "t5_hid/hid.h"
+#include "t5_core/log.h"
 #include "diag_priv.h"
 
 static int cmd_shot(int argc, char **argv)
@@ -358,6 +362,8 @@ static int audio_duck(void)
     return drop < 9 || drop > 15;
 }
 
+void t5_audio_dry_print(void);   /* t5_audio/audio.c: what each kept underrun found */
+
 static int cmd_audio(int argc, char **argv)
 {
     if (argc == 1) {
@@ -394,6 +400,10 @@ static int cmd_audio(int argc, char **argv)
     if (!strcmp(c, "echo") && argc == 3 && diag_parse_u32(argv[2], 1, 60, &a)) return audio_echo(a);
     if (!strcmp(c, "file") && argc == 3) return audio_file(argv[2]);
     if (!strcmp(c, "duck") && argc == 2) return audio_duck();
+    if (!strcmp(c, "dry") && argc == 2) {
+        t5_audio_dry_print();
+        return 0;
+    }
     if (!strcmp(c, "wav") && argc >= 5 && diag_parse_u32(argv[3], 1, 60, &a) && diag_parse_u32(argv[4], 20, 20000, &b)) {
         uint32_t rate = 44100, ch = 2;
         if (argc >= 6 && !diag_parse_u32(argv[5], 8000, 48000, &rate)) return 1;
@@ -403,7 +413,7 @@ static int cmd_audio(int argc, char **argv)
     if (!strcmp(c, "rec") && argc >= 3 && diag_parse_u32(argv[2], 1, 600, &a))
         return audio_rec(a, argc >= 4 && !strcmp(argv[3], "aec"));
     printf("usage: audio [vol <n> | mute on|off | sounds on|off | sound <name> | tone <hz> <ms> |\n"
-           "              play <s> [hz] | rec <s> [aec] | echo <s> | duck |\n"
+           "              play <s> [hz] | rec <s> [aec] | echo <s> | duck | dry |\n"
            "              wav <path> <s> <hz> [rate] [ch] | file <path>]\n");
     return 1;
 }
@@ -595,8 +605,167 @@ static int cmd_usb(int argc, char **argv)
     return 1;
 }
 
+/* usbc device: a USB-C device-mode self-test that leaves the computer's
+ * input alone. A vendor-defined HID interface echoes each 8-byte output
+ * report back as an input report, a mouse interface is there (it never
+ * moves), and MIDI echoes every message. The console is gone meanwhile, so
+ * it runs on its own task and the result waits for `usbc device status`. */
+static const uint8_t ECHO_DESC[] = {
+    0x06, 0x00, 0xff, 0x09, 0x01, 0xa1, 0x01,
+    0x09, 0x02, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x08, 0x81, 0x02,
+    0x09, 0x03, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x08, 0x91, 0x02,
+    0xc0,
+};
+static struct {
+    volatile bool running;
+    int32_t open_err;
+    uint32_t secs, mounted, hid_echo, midi_echo, send_err, events, hid_err, midi_err;
+    int32_t last_err;
+} s_udt;
+
+static void usbdev_test_task(void *arg)
+{
+    (void)arg;
+    static uint8_t mouse_desc[T5_HID_DESC_MAX];
+    int ml = t5_hid_descriptor(T5_HID_PART_MOUSE | T5_HID_PART_CONSUMER, mouse_desc, sizeof mouse_desc);
+    t5_usbdev_cfg_t cfg = {
+        .size = sizeof cfg,
+        .product = "Tab5 self-test",
+        .hid_count = 2,
+        .hid = { { .report_desc = ECHO_DESC, .desc_len = sizeof ECHO_DESC, .poll_ms = 2 },
+                 { .report_desc = mouse_desc, .desc_len = (uint16_t)(ml > 0 ? ml : 0) } },
+        .midi = true,
+    };
+    t5_usbdev_t *d = NULL;
+    s_udt.open_err = t5_usbdev_open(&cfg, &d);
+    int64_t until = t5_time_us() + (int64_t)s_udt.secs * 1000000;
+    while (d && t5_time_us() < until) {
+        t5_usbdev_ev_t ev;
+        uint8_t buf[64];
+        int n = t5_usbdev_next(d, &ev, buf, sizeof buf, 100);
+        if (n < 0 && n != T5_ERR_TIMEOUT) break;          /* stopped from Quick Settings */
+        if (n < 0) continue;
+        s_udt.events++;
+        if (ev.type == T5_USBDEV_MOUNTED) s_udt.mounted++;
+        if (ev.type == T5_USBDEV_HID_OUTPUT && ev.hid == 0) {
+            t5_err_t se = t5_usbdev_hid_send(d, 0, 0, buf, 8, 200);
+            if (se == T5_OK) s_udt.hid_echo++;
+            else {
+                s_udt.send_err++;
+                s_udt.hid_err++;
+                s_udt.last_err = se;
+            }
+        }
+        if (ev.type == T5_USBDEV_MIDI_IN) {
+            t5_err_t se = t5_usbdev_midi_send(d, buf, (size_t)n);
+            if (se == T5_OK) s_udt.midi_echo++;
+            else {
+                s_udt.send_err++;
+                s_udt.midi_err++;
+                s_udt.last_err = se;
+            }
+        }
+    }
+    if (d) T5_IGNORE(t5_usbdev_close(d));
+    T5_LOGI("t5.diag", "usbc device test: open %s, mounted %u, hid echo %u, midi echo %u, send errors %u",
+            t5_err_str(s_udt.open_err), (unsigned)s_udt.mounted, (unsigned)s_udt.hid_echo, (unsigned)s_udt.midi_echo,
+            (unsigned)s_udt.send_err);
+    s_udt.running = false;
+    vTaskDelete(NULL);
+}
+
+/* usbc raw S: exclusive USB-C self-test. A vendor-class device (303A:4FF0)
+ * whose bulk OUT endpoint 0x01 echoes back on IN 0x81, and whose vendor
+ * request 0x01 (IN) answers "tab5". The console is gone meanwhile. */
+static const uint8_t RAW_DEV[18] = { 18, 1, 0x00, 0x02, 0xff, 0, 0, 64, 0x3a, 0x30, 0xf0, 0x4f, 0x00, 0x01, 1, 2, 3, 1 };
+static const uint8_t RAW_CFG[] = {
+    9, 2, 32, 0, 1, 1, 0, 0x80, 50,                 /* configuration: 1 interface */
+    9, 4, 0, 0, 2, 0xff, 0, 0, 0,                   /* interface 0: vendor, 2 endpoints */
+    7, 5, 0x01, 2, 64, 0, 0,                        /* bulk OUT 1 */
+    7, 5, 0x81, 2, 64, 0, 0,                        /* bulk IN 1 */
+};
+static struct {
+    volatile bool running;
+    int32_t err;
+    uint32_t ctrl, echoed;
+} s_raw;
+
+static void raw_test_task(void *arg)
+{
+    uint32_t secs = (uint32_t)(uintptr_t)arg;
+    t5_excl_t *h = NULL;
+    s_raw.err = t5_excl_claim(T5_EXCL_USBC, &h);
+    static const char *const strs[] = { "Tab5 OS", "Tab5 raw self-test", "0001" };
+    const t5_usbc_raw_desc_t d = { .size = sizeof d, .device = RAW_DEV, .config = RAW_CFG, .strings = strs,
+                                   .string_count = 3 };
+    if (s_raw.err == T5_OK) s_raw.err = t5_usbc_raw_start(h, &d);
+    int64_t until = t5_time_us() + (int64_t)secs * 1000000;
+    uint8_t buf[512];
+    while (s_raw.err == T5_OK && t5_time_us() < until) {
+        t5_usbc_raw_ev_t ev;
+        int n = t5_usbc_raw_next(h, &ev, buf, sizeof buf, 10);
+        if (n >= 0 && ev.type == T5_USBC_RAW_SETUP && ev.needs_reply) {
+            if (ev.b_request == 1 && (ev.bm_request_type & 0x80)) T5_IGNORE(t5_usbc_raw_ctrl_reply(h, "tab5", 4));
+            else T5_IGNORE(t5_usbc_raw_ctrl_stall(h));
+            s_raw.ctrl++;
+        }
+        int r = t5_usbc_raw_xfer(h, 0x01, buf, 64, 10);       /* echo what arrives */
+        if (r > 0 && t5_usbc_raw_xfer(h, 0x81, buf, (size_t)r, 500) == r) s_raw.echoed++;
+    }
+    if (h) T5_IGNORE(t5_excl_release(h));
+    T5_LOGI("t5.diag", "usbc raw test: %s, %u control, %u echoed", t5_err_str(s_raw.err), (unsigned)s_raw.ctrl,
+            (unsigned)s_raw.echoed);
+    s_raw.running = false;
+    vTaskDelete(NULL);
+}
+
 static int cmd_usbc(int argc, char **argv)
 {
+    if (argc >= 3 && !strcmp(argv[1], "raw") && !strcmp(argv[2], "status")) {
+        printf("usbc raw test: %s, %s, %u control, %u echoed\n", s_raw.running ? "running" : "done",
+               t5_err_str(s_raw.err), (unsigned)s_raw.ctrl, (unsigned)s_raw.echoed);
+        return 0;
+    }
+    if (argc >= 2 && !strcmp(argv[1], "raw")) {
+        uint32_t t = 20;
+        if (argc >= 3 && !diag_parse_u32(argv[2], 3, 600, &t)) return 1;
+        if (s_raw.running) return 1;
+        memset(&s_raw, 0, sizeof s_raw);
+        s_raw.running = true;
+        printf("exclusive USB-C self-test for %u s; the console comes back afterwards\n", (unsigned)t);
+        fflush(stdout);
+        if (xTaskCreatePinnedToCore(raw_test_task, "usbc.rawtest", 4096, (void *)(uintptr_t)t, 5, NULL, 1) != pdPASS) {
+            s_raw.running = false;
+            return 1;
+        }
+        return 0;
+    }
+    if (argc >= 3 && !strcmp(argv[1], "device") && !strcmp(argv[2], "status")) {
+        printf("usbc device test: %s, open %s, mounted %u, events %u, hid echo %u, midi echo %u, send errors %u"
+               " (hid %u, midi %u, last %s)\n",
+               s_udt.running ? "running" : "done", t5_err_str(s_udt.open_err), (unsigned)s_udt.mounted,
+               (unsigned)s_udt.events, (unsigned)s_udt.hid_echo, (unsigned)s_udt.midi_echo, (unsigned)s_udt.send_err,
+               (unsigned)s_udt.hid_err, (unsigned)s_udt.midi_err, t5_err_str(s_udt.last_err));
+        return 0;
+    }
+    if (argc >= 2 && !strcmp(argv[1], "device")) {
+        uint32_t t = 20;
+        if (argc >= 3 && !diag_parse_u32(argv[2], 3, 600, &t)) return 1;
+        if (s_udt.running) {
+            printf("already running\n");
+            return 1;
+        }
+        memset(&s_udt, 0, sizeof s_udt);
+        s_udt.secs = t;
+        s_udt.running = true;
+        printf("USB-C device-mode self-test for %u s; the console comes back afterwards\n", (unsigned)t);
+        fflush(stdout);
+        if (xTaskCreatePinnedToCore(usbdev_test_task, "usbdev.test", 4096, NULL, 5, NULL, 1) != pdPASS) {
+            s_udt.running = false;
+            return 1;
+        }
+        return 0;
+    }
     if (argc >= 2 && !strcmp(argv[1], "console")) return t5_usbc_set_mode(T5_USBC_CONSOLE, 0) != T5_OK;
     if (argc >= 2 && !strcmp(argv[1], "storage")) {
         uint32_t t = 0;
@@ -612,8 +781,48 @@ static int cmd_usbc(int argc, char **argv)
         printf("hand-back trace 0x%08x\n", (unsigned)t5_usbc_trace());
         return 0;
     }
-    printf("usage: usbc console | storage [timeout s]   (no timeout: until the computer ejects it)\n");
+    printf("usage: usbc console | storage [timeout s] | device [s | status]\n");
     return 1;
+}
+
+/* later MS COMMAND...: run a console command after MS, on a task of its
+ * own. For tests that lose the console meanwhile (USB-C device mode):
+ * queue what should happen while it's gone. */
+typedef struct {
+    uint32_t ms;
+    char line[160];
+} later_t;
+
+static void later_task(void *arg)
+{
+    later_t *l = arg;
+    vTaskDelay(pdMS_TO_TICKS(l->ms));
+    int ret = 0;
+    esp_err_t e = esp_console_run(l->line, &ret);
+    T5_LOGI("t5.diag", "later: \"%s\" -> %s %d", l->line, esp_err_to_name(e), ret);
+    free(l);
+    vTaskDelete(NULL);
+}
+
+static int cmd_later(int argc, char **argv)
+{
+    uint32_t ms = 0;
+    if (argc < 3 || !diag_parse_u32(argv[1], 0, 600000, &ms)) {
+        printf("usage: later <ms> <command...>\n");
+        return 1;
+    }
+    later_t *l = calloc(1, sizeof *l);
+    if (!l) return 1;
+    l->ms = ms;
+    for (int i = 2; i < argc; i++) {
+        size_t n = strlen(l->line);
+        snprintf(l->line + n, sizeof l->line - n, "%s%s", i > 2 ? " " : "", argv[i]);
+    }
+    if (xTaskCreatePinnedToCore(later_task, "later", 6144, l, 4, NULL, 1) != pdPASS) {
+        free(l);
+        return 1;
+    }
+    return 0;
 }
 
 void diag_register_media(void)
@@ -629,7 +838,9 @@ void diag_register_media(void)
         { .command = "cam", .help = "Camera: open, stats, photo, record, snapshot",
           .hint = "[open|close|stats|photo|rec|snap]", .func = cmd_cam },
         { .command = "usb", .help = "USB-A devices and classes", .hint = "[host|eject|midi|serial]", .func = cmd_usb },
-        { .command = "usbc", .help = "USB-C role (console or mass storage)", .hint = "console|storage [s]",
+        { .command = "later", .help = "Run a console command after a delay (on its own task)",
+          .hint = "<ms> <command...>", .func = cmd_later },
+        { .command = "usbc", .help = "USB-C role (console, mass storage, device-mode self-test)", .hint = "console|storage [s]|device [s|status]",
           .func = cmd_usbc },
     };
     for (size_t i = 0; i < sizeof cmds / sizeof cmds[0]; i++) ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

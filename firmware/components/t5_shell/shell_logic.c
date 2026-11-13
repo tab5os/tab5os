@@ -2,7 +2,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
-#include "md/md_icons.h"
+#include "t5_gui/t5ui_icons.h"
 #include "shell_logic.h"
 #include "t5_battery/policy.h"
 
@@ -50,11 +50,11 @@ bool shell_app_removable(const shell_app_t *a)
 
 const char *shell_battery_icon(const shell_status_t *st)
 {
-    if (st->charging || (st->usb_power && st->battery_pct >= 99)) return MD_ICON_BATTERY_CHARGING_FULL;
-    if (st->low_power) return MD_ICON_BATTERY_SAVER;
-    if (st->battery_pct >= 0 && st->battery_pct <= T5_DIS_WARN_PCT) return MD_ICON_BATTERY_ALERT;
-    if (st->battery_pct >= 95) return MD_ICON_BATTERY_FULL;
-    return MD_ICON_BATTERY_STD;
+    if (st->charging || (st->usb_power && st->battery_pct >= 99)) return T5UI_ICON_BATTERY_CHARGING_FULL;
+    if (st->low_power) return T5UI_ICON_BATTERY_SAVER;
+    if (st->battery_pct >= 0 && st->battery_pct <= T5_DIS_WARN_PCT) return T5UI_ICON_BATTERY_ALERT;
+    if (st->battery_pct >= 95) return T5UI_ICON_BATTERY_FULL;
+    return T5UI_ICON_BATTERY_STD;
 }
 
 void shell_fmt_clock(const struct tm *tm, char *out, size_t n)

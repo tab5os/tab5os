@@ -8,6 +8,8 @@
  *    power-cycles the C6) boots the previous image.
  *  - Host wake (plan 3.4, bench check 12): esp_hosted's host power-save
  *    feature drives IO2, wired to P4 G14, configured in sdkconfig.defaults.
+ *  - Wi-Fi monitor mode and raw frames for apps (monitor.c), which
+ *    esp_hosted doesn't forward.
  */
 #include "eh_cp_event.h"
 #include "esp_event.h"
@@ -17,10 +19,14 @@
 
 static const char *TAG = "t5_c6";
 
+void t5_monitor_init(void);
+void t5_monitor_register(void);
+
 static void on_cp_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)base; (void)data;
     if (id != EH_CP_EVT_PRIVATE_RPC_READY) return;
+    t5_monitor_register();                  /* the P4 (re)connected: see monitor.c */
     esp_ota_img_states_t st;
     const esp_partition_t *run = esp_ota_get_running_partition();
     if (run && esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
@@ -42,4 +48,5 @@ void app_main(void)
     ret = esp_event_loop_create_default();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(ret);
     ESP_ERROR_CHECK(esp_event_handler_register(EH_CP_EVENT, ESP_EVENT_ANY_ID, on_cp_event, NULL));
+    t5_monitor_init();
 }

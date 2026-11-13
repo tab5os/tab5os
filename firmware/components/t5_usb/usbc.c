@@ -31,6 +31,7 @@
 #include "tusb.h"
 #include "t5_usb/usb_diag.h"
 #include "usb_priv.h"
+#include "usbdev_priv.h"
 
 static const char *TAG = "t5.usbc";
 
@@ -74,50 +75,6 @@ static void phy_to_otg(bool otg)
     phy_log("after");
 }
 
-static t5_err_t storage_on(void)
-{
-    T5_RETURN_ON_ERR(t5_storage_sd_lend(&s_card));
-    t5_err_t he = t5_audio_hold_pins(true);
-    if (he != T5_OK) {
-        /* Audio still drives PHY 1's pads: swapping now would fight it. */
-        T5_LOGE(TAG, "audio didn't let go of the I2S pins: %s", t5_err_str(he));
-        T5_IGNORE(t5_audio_hold_pins(false));
-        t5_storage_sd_reclaim(s_card);
-        s_card = NULL;
-        return T5_ERR_BUSY;
-    }
-    /* App-side mounting on: it is how an eject is reported (msc_event). */
-    const tinyusb_msc_driver_config_t dc = { .callback = msc_event, .callback_arg = NULL };
-    tinyusb_msc_storage_config_t sc = { .medium = { .card = s_card }, .mount_point = TINYUSB_MSC_STORAGE_MOUNT_USB };
-    sc.fat_fs.do_not_format = true;
-    tinyusb_config_t tc = TINYUSB_DEFAULT_CONFIG();
-    tc.port = TINYUSB_PORT_FULL_SPEED_0;
-    esp_err_t e = tinyusb_msc_install_driver(&dc);
-    if (e == ESP_OK) e = tinyusb_msc_new_storage_sdmmc(&sc, &s_store);
-    /* Swap the PHYs before TinyUSB sets its PHY up, so its pad and pull-up
-     * settings land on the USB-C pins (PHY 0). */
-    if (e == ESP_OK) phy_to_otg(true);
-    if (e == ESP_OK) e = tinyusb_driver_install(&tc);
-    if (e == ESP_OK) {
-        usb_wrap_ll_phy_select(&USB_WRAP, 0);      /* in case the PHY driver reset the mapping */
-        usb_wrap_ll_phy_enable_pad(&USB_WRAP, true);
-        phy_log("tinyusb up");
-        s_awake = t5_wakelock_acquire_system(T5_LOCK_CPU, "usbc.storage");
-    }
-    if (e != ESP_OK) {
-        T5_LOGE(TAG, "mass storage start failed: %s", esp_err_to_name(e));
-        if (s_store) tinyusb_msc_delete_storage(s_store);
-        s_store = NULL;
-        tinyusb_msc_uninstall_driver();
-        phy_to_otg(false);
-        T5_IGNORE(t5_audio_hold_pins(false));    /* releasing doesn't wait */
-        t5_storage_sd_reclaim(s_card);
-        s_card = NULL;
-        return T5_ERR_IO;
-    }
-    return T5_OK;
-}
-
 RTC_NOINIT_ATTR static uint32_t s_trace;
 
 uint32_t t5_usbc_trace(void)
@@ -125,7 +82,37 @@ uint32_t t5_usbc_trace(void)
     return s_trace;
 }
 
-static void storage_off(void)
+/* Take USB-C for TinyUSB: audio off PHY 1's pads, swap the PHYs, start
+ * TinyUSB on the full-speed controller with tc, and keep the device awake
+ * (in Sleep USB stops answering and the computer drops the device). */
+static t5_err_t port_up(const tinyusb_config_t *tc, const char *lock_name)
+{
+    t5_err_t he = t5_audio_hold_pins(true);
+    if (he != T5_OK) {
+        /* Audio still drives PHY 1's pads: swapping now would fight it. */
+        T5_LOGE(TAG, "audio didn't let go of the I2S pins: %s", t5_err_str(he));
+        T5_IGNORE(t5_audio_hold_pins(false));
+        return T5_ERR_BUSY;
+    }
+    /* Swap the PHYs before TinyUSB sets its PHY up, so its pad and pull-up
+     * settings land on the USB-C pins (PHY 0). */
+    phy_to_otg(true);
+    esp_err_t e = tinyusb_driver_install(tc);
+    if (e != ESP_OK) {
+        T5_LOGE(TAG, "TinyUSB didn't start: %s", esp_err_to_name(e));
+        phy_to_otg(false);
+        T5_IGNORE(t5_audio_hold_pins(false));    /* releasing doesn't wait */
+        return T5_ERR_IO;
+    }
+    usb_wrap_ll_phy_select(&USB_WRAP, 0);        /* in case the PHY driver reset the mapping */
+    usb_wrap_ll_phy_enable_pad(&USB_WRAP, true);
+    phy_log("tinyusb up");
+    s_awake = t5_wakelock_acquire_system(T5_LOCK_CPU, lock_name);
+    return T5_OK;
+}
+
+/* Back to the console. The trace says how far a hand-back got. */
+static void port_down(void)
 {
     if (s_awake) t5_wakelock_release(s_awake);
     s_awake = NULL;
@@ -135,6 +122,59 @@ static void storage_off(void)
     phy_to_otg(false);
     T5_IGNORE(t5_audio_hold_pins(false));        /* releasing doesn't wait */
     s_trace = 0x7B000003;
+}
+
+/* Mass storage keeps the IDs it always had: Espressif's VID, PID 0x4002
+ * (the esp_tinyusb default for MSC alone). Without its own device
+ * descriptor the default PID would count the HID and MIDI classes that
+ * device mode compiled in. */
+static const tusb_desc_device_t STORAGE_DEV = {
+    .bLength = sizeof(tusb_desc_device_t),
+    .bDescriptorType = TUSB_DESC_DEVICE,
+    .bcdUSB = 0x0200,
+    .bDeviceClass = 0,
+    .bDeviceSubClass = 0,
+    .bDeviceProtocol = 0,
+    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor = TINYUSB_ESPRESSIF_VID,
+    .idProduct = 0x4002,
+    .bcdDevice = CONFIG_TINYUSB_DESC_BCD_DEVICE,
+    .iManufacturer = 1,
+    .iProduct = 2,
+    .iSerialNumber = 3,
+    .bNumConfigurations = 1,
+};
+
+static t5_err_t storage_on(void)
+{
+    T5_RETURN_ON_ERR(t5_storage_sd_lend(&s_card));
+    /* App-side mounting on: it is how an eject is reported (msc_event). */
+    const tinyusb_msc_driver_config_t dc = { .callback = msc_event, .callback_arg = NULL };
+    tinyusb_msc_storage_config_t sc = { .medium = { .card = s_card }, .mount_point = TINYUSB_MSC_STORAGE_MOUNT_USB };
+    sc.fat_fs.do_not_format = true;
+    tinyusb_config_t tc = TINYUSB_DEFAULT_CONFIG();
+    tc.port = TINYUSB_PORT_FULL_SPEED_0;
+    tc.descriptor.device = &STORAGE_DEV;
+    esp_err_t e = tinyusb_msc_install_driver(&dc);
+    if (e == ESP_OK) e = tinyusb_msc_new_storage_sdmmc(&sc, &s_store);
+    t5_err_t te = e == ESP_OK ? port_up(&tc, "usbc.storage") : T5_ERR_IO;
+    if (te != T5_OK) {
+        if (e != ESP_OK) T5_LOGE(TAG, "mass storage start failed: %s", esp_err_to_name(e));
+        if (s_store) tinyusb_msc_delete_storage(s_store);
+        s_store = NULL;
+        tinyusb_msc_uninstall_driver();
+        t5_storage_sd_reclaim(s_card);
+        s_card = NULL;
+        return te;
+    }
+    return T5_OK;
+}
+
+
+
+static void storage_off(void)
+{
+    port_down();
     if (s_store) tinyusb_msc_delete_storage(s_store);
     s_trace = 0x7B000004;
     s_store = NULL;
@@ -191,12 +231,54 @@ bool t5_usbc_ejected(void)
     return s_ejected;
 }
 
-t5_err_t t5_usbc_set_mode(t5_usbc_mode_t mode, uint32_t timeout_s)
+static void post_mode(void)
+{
+    t5_ev_usb_t ev = { .mounted = s_mode != T5_USBC_CONSOLE };
+    t5_event_post(T5_EV_USBC_MODE, &ev, sizeof ev);
+}
+
+t5_err_t usbc_device_begin(const tinyusb_config_t *tc)
 {
     if (!s_mx) return T5_ERR_STATE;
     t5_mutex_lock(s_mx);
+    t5_err_t e = T5_ERR_BUSY;
+    if (s_mode == T5_USBC_CONSOLE) {
+        T5_LOGW(TAG, "USB-C: device mode for an app (the console goes away until it ends)");
+        t5_delay_ms(100);                      /* let the log line out */
+        e = port_up(tc, "usbc.device");
+        if (e == T5_OK) {
+            s_mode = T5_USBC_DEVICE;
+            post_mode();
+        }
+    }
+    t5_mutex_unlock(s_mx);
+    return e;
+}
+
+void usbc_device_end(void)
+{
+    t5_mutex_lock(s_mx);
+    if (s_mode == T5_USBC_DEVICE) {
+        port_down();
+        s_mode = T5_USBC_CONSOLE;
+        T5_LOGI(TAG, "USB-C: console");
+        post_mode();
+    }
+    t5_mutex_unlock(s_mx);
+}
+
+t5_err_t t5_usbc_set_mode(t5_usbc_mode_t mode, uint32_t timeout_s)
+{
+    if (!s_mx) return T5_ERR_STATE;
+    if (mode == T5_USBC_DEVICE) return T5_ERR_INVALID_ARG;   /* apps open it: t5_usb/usbdev.h */
+    if (mode == T5_USBC_CONSOLE && t5_usbc_mode() == T5_USBC_DEVICE) {
+        usbdev_revoke();                       /* the person stopped it: the app's handle goes dead */
+        return T5_OK;
+    }
+    t5_mutex_lock(s_mx);
     t5_err_t e = T5_OK;
-    if (mode != s_mode) {
+    if (mode != s_mode && s_mode == T5_USBC_DEVICE) e = T5_ERR_BUSY;
+    else if (mode != s_mode) {
         if (mode == T5_USBC_STORAGE) {
             s_ejected = false;
             T5_LOGW(TAG, "USB-C: mass storage (the console goes away %s)",
@@ -209,8 +291,7 @@ t5_err_t t5_usbc_set_mode(t5_usbc_mode_t mode, uint32_t timeout_s)
         }
         if (e == T5_OK) {
             s_mode = mode;
-            t5_ev_usb_t ev = { .mounted = mode == T5_USBC_STORAGE };
-            t5_event_post(T5_EV_USBC_MODE, &ev, sizeof ev);
+            post_mode();
         }
     }
     if (s_timer) esp_timer_stop(s_timer);
@@ -229,6 +310,8 @@ t5_usbc_mode_t t5_usbc_mode(void)
 void usbc_init(void)
 {
     s_mx = t5_mutex_create();
+    usbdev_init();
+    usbc_raw_init();
     const esp_timer_create_args_t a = { .callback = timeout_cb, .name = "usbc", .dispatch_method = ESP_TIMER_TASK };
     esp_timer_create(&a, &s_timer);
 }

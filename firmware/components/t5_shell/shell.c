@@ -3,7 +3,8 @@
  * recents list, and the thread-safe entry points of t5_shell/shell.h.
  *
  * Layering: the status bar, the app and gesture bars (bars.c), quick
- * settings, menus and the keyboard live on lv_layer_top(), created in
+ * settings, menus and the keyboard live on the top layer
+ * (t5ui_sys_layer(T5UI_LAYER_TOP)), created in
  * system context so an exiting app never takes them with it. Every screen
  * is padded at the top by the status bar's height, and an app's screen at
  * the bottom by the gesture bar's strip, unless the app asked for full
@@ -20,28 +21,81 @@
 static bool s_ready;
 static char s_cur[T5_APP_ID_LEN];          /* "" = home */
 static bool s_fullscreen;
-static lv_obj_t *s_app_screen;
+static t5ui_obj_t *s_app_screen;
 /* What the bars take from the app's screen, in dp (any task reads it). */
 static volatile int32_t s_inset_top, s_inset_bottom;
 static shell_recents_t s_recents;
-static lv_timer_t *s_tick;
+static t5ui_timer_t *s_tick;
 
 bool shell_in_app(void)
 {
     return s_cur[0] != 0;
 }
 
-void shell_set_text(lv_obj_t *label, const char *text)
+void shell_set_text(t5ui_obj_t *label, const char *text)
 {
-    if (strcmp(lv_label_get_text(label), text)) lv_label_set_text(label, text);
+    const char *now = t5ui_get_str(label, T5UI_P_TEXT, NULL);
+    if (!now || strcmp(now, text)) t5ui_set_str(label, T5UI_P_TEXT, text);
 }
 
-void shell_anim_y(void *obj, int32_t y)
+t5ui_obj_t *shell_box(t5ui_obj_t *parent)
 {
-    lv_obj_set_y(obj, y);
+    return t5ui_create(parent, T5UI_BOX);
 }
 
-void shell_show_time(lv_obj_t *clock, lv_obj_t *date)
+t5ui_obj_t *shell_text(t5ui_obj_t *parent, const char *text, t5ui_text_t style)
+{
+    t5ui_obj_t *l = t5ui_create(parent, T5UI_MD_TEXT);
+    t5ui_set_int(l, T5UI_P_TEXT_STYLE, style);
+    t5ui_set_str(l, T5UI_P_TEXT, text ? text : "");
+    return l;
+}
+
+t5ui_obj_t *shell_icon(t5ui_obj_t *parent, const char *glyph, int32_t size_dp)
+{
+    t5ui_obj_t *i = t5ui_create(parent, T5UI_MD_ICON);
+    t5ui_set_int(i, T5UI_P_ICON_SIZE, size_dp);
+    t5ui_set_str(i, T5UI_P_ICON, glyph);
+    return i;
+}
+
+void shell_flex(t5ui_obj_t *o, t5ui_flow_t flow, t5ui_place_t main, t5ui_place_t cross, t5ui_place_t track)
+{
+    t5ui_set_int(o, T5UI_P_FLOW, flow);
+    t5ui_set_int(o, T5UI_P_PLACE_MAIN, main);
+    t5ui_set_int(o, T5UI_P_PLACE_CROSS, cross);
+    t5ui_set_int(o, T5UI_P_PLACE_TRACK, track);
+}
+
+void shell_pad_hor(t5ui_obj_t *o, int32_t px)
+{
+    t5ui_set_int(o, T5UI_P_PAD_LEFT, px);
+    t5ui_set_int(o, T5UI_P_PAD_RIGHT, px);
+}
+
+void shell_pad_ver(t5ui_obj_t *o, int32_t px)
+{
+    t5ui_set_int(o, T5UI_P_PAD_TOP, px);
+    t5ui_set_int(o, T5UI_P_PAD_BOTTOM, px);
+}
+
+void shell_size(t5ui_obj_t *o, int32_t w, int32_t h)
+{
+    t5ui_set_int(o, T5UI_P_WIDTH, w);
+    t5ui_set_int(o, T5UI_P_HEIGHT, h);
+}
+
+void shell_elevate(t5ui_obj_t *o, int32_t dp)
+{
+    if (!t5ui_theme_dark()) {
+        t5ui_set_int(o, T5UI_P_ELEVATION, dp);   /* the surface and its shadow */
+        return;
+    }
+    t5ui_set_color(o, T5UI_P_BG_COLOR, t5ui_theme_surface(dp));
+    t5ui_set_int(o, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+}
+
+void shell_show_time(t5ui_obj_t *clock, t5ui_obj_t *date)
 {
     struct tm tm;
     char buf[48];
@@ -101,7 +155,7 @@ static void recents_picked(int item, void *ud)
     free(m);
 }
 
-void shell_show_recents(lv_obj_t *anchor)
+void shell_show_recents(t5ui_obj_t *anchor)
 {
     recents_menu_t *m = calloc(1, sizeof *m);
     if (!m) return;
@@ -118,7 +172,7 @@ void shell_show_recents(lv_obj_t *anchor)
     }
     m->items[m->n] = "Home";
     void *saved = shell_sys_enter();
-    md_menu_show(anchor, m->items, m->n + 1, recents_picked, m);
+    t5ui_menu(anchor, m->items, m->n + 1, recents_picked, m);
     shell_sys_leave(saved);
 }
 
@@ -136,7 +190,7 @@ static void remove_answer(int button, void *ud)
         shell_sys_remove(m->id);
         char msg[96];
         snprintf(msg, sizeof msg, "%s removed", m->name);
-        md_snackbar_show(msg, NULL, NULL, NULL);
+        t5ui_snackbar(msg, NULL, NULL, NULL);
     }
     free(m);
 }
@@ -153,13 +207,13 @@ static void app_menu_picked(int item, void *ud)
         snprintf(title, sizeof title, "Remove %s?", m->name);
         shell_sys_data_dir(m->id, dir, sizeof dir);
         snprintf(text, sizeof text, "The app is removed. Its data in %s is kept.", dir);
-        md_dialog_show(title, text, "Remove", "Cancel", remove_answer, m);
+        t5ui_dialog(title, text, "Remove", "Cancel", remove_answer, m);
         return;
     }
     free(m);
 }
 
-void shell_app_menu(lv_obj_t *anchor, const char *id, const char *name)
+void shell_app_menu(t5ui_obj_t *anchor, const char *id, const char *name)
 {
     app_menu_t *m = calloc(1, sizeof *m);
     if (!m) return;
@@ -168,21 +222,22 @@ void shell_app_menu(lv_obj_t *anchor, const char *id, const char *name)
     shell_app_t a;
     m->removable = app_find(id, &a) && shell_app_removable(&a);
     static const char *items[] = { "Open", "App info", "Remove" };
-    md_menu_show(anchor, items, m->removable ? 3 : 2, app_menu_picked, m);
+    t5ui_menu(anchor, items, m->removable ? 3 : 2, app_menu_picked, m);
 }
 
 /* ---- chrome ------------------------------------------------------------------------ */
-static void tick(lv_timer_t *t)
+static void tick(t5ui_timer_t *t, void *user)
 {
     (void)t;
+    (void)user;
     statusbar_update();
     launcher_tick();
     standby_tick();
 }
 
-static void app_screen_deleted(lv_event_t *e)
+static void app_screen_deleted(t5ui_event_t *e)
 {
-    if (lv_event_get_target_obj(e) != s_app_screen) return;
+    if (t5ui_event_target(e) != s_app_screen) return;
     s_app_screen = NULL;
 }
 
@@ -198,8 +253,8 @@ static void apply_inset(void)
     int32_t top = s_fullscreen ? 0 : SHELL_STATUS_H_DP;
     int32_t bottom = bars ? SHELL_GESTURE_H_DP : 0;
     if (app) {
-        lv_obj_set_style_pad_top(s_app_screen, T5_DP(top), 0);
-        lv_obj_set_style_pad_bottom(s_app_screen, T5_DP(bottom), 0);
+        t5ui_set_int(s_app_screen, T5UI_P_PAD_TOP, t5ui_dp(top));
+        t5ui_set_int(s_app_screen, T5UI_P_PAD_BOTTOM, t5ui_dp(bottom));
     }
     statusbar_set_hidden(s_fullscreen);
     bars_handle_show(bars);
@@ -216,20 +271,20 @@ void shell_chrome_init(void)
     void *saved = shell_sys_enter();
     statusbar_create();
     gesture_attach_all();
-    s_tick = lv_timer_create(tick, 1000, NULL);
+    s_tick = t5ui_timer(1000, tick, NULL);
     shell_sys_leave(saved);
     s_ready = true;
     statusbar_update();
 }
 
-lv_obj_t *shell_home_screen(void)
+t5ui_obj_t *shell_home_screen(void)
 {
-    lv_obj_t *home = launcher_get();
+    t5ui_obj_t *home = launcher_get();
     shell_chrome_init();
     return home;
 }
 
-void shell_prepare(lv_obj_t *scr, const char *id)
+void shell_prepare(t5ui_obj_t *scr, const char *id)
 {
     (void)id;
     shell_chrome_t c;
@@ -237,7 +292,7 @@ void shell_prepare(lv_obj_t *scr, const char *id)
     s_app_screen = scr;
     s_fullscreen = c.fullscreen;
     s_inset_top = s_inset_bottom = -1;      /* a new screen: always post its insets */
-    lv_obj_add_event_cb(scr, app_screen_deleted, LV_EVENT_DELETE, NULL);
+    t5ui_on(scr, T5UI_EV_DELETE, app_screen_deleted, NULL);
     apply_inset();
     if (s_fullscreen) bars_handle_peek();
 }
@@ -256,7 +311,8 @@ void shell_changed(const char *id)
         apply_inset();
         /* The app's screen is deleted straight after this, so there is no
          * cross-fade: fade the launcher in from black instead (150 ms). */
-        lv_obj_fade_in(launcher_get(), MD_DUR_DIALOG_IN_MS, 0);
+        t5ui_animate(launcher_get(), T5UI_P_OPA, T5UI_OPA_TRANSP, T5UI_OPA_COVER, SHELL_DUR_DIALOG_IN_MS, 0,
+                     T5UI_EASE_LINEAR);
     }
     statusbar_set_in_app(s_cur[0] != 0);
     statusbar_update();
@@ -307,7 +363,7 @@ t5_err_t t5_shell_get_insets(t5_shell_insets_t *out)
 static void toast_async(void *p)
 {
     void *saved = shell_sys_enter();
-    md_snackbar_show(p, NULL, NULL, NULL);
+    t5ui_snackbar(p, NULL, NULL, NULL);
     shell_sys_leave(saved);
     free(p);
 }
@@ -379,7 +435,7 @@ void shell_input_added(void)
 
 void t5_shell_keyboard_show(void *ta)
 {
-    keyboard_show(ta);
+    keyboard_show(t5ui_sys_obj(ta));   /* the caller's text area, t5ui's or a native one */
 }
 
 void t5_shell_keyboard_hide(void)
@@ -389,7 +445,7 @@ void t5_shell_keyboard_hide(void)
 
 void shell_reset(void)
 {
-    if (s_tick) lv_timer_delete(s_tick);
+    if (s_tick) t5ui_timer_delete(s_tick);
     s_tick = NULL;
     s_ready = false;
     s_cur[0] = 0;

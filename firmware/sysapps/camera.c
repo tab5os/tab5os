@@ -17,6 +17,8 @@
 #include "t5/shell.h"
 #include "t5/storage.h"
 #include "t5/sys.h"
+#include "t5_gui/t5ui_icons.h"
+#include "t5_gui/t5ui_sys.h"
 #include "sysapps_priv.h"
 
 #define MAX_FILES 200
@@ -24,8 +26,8 @@
 typedef struct {
     t5_app_t *app;
     t5_camera_t *cam;
-    lv_obj_t *scr, *view, *frame, *bar, *preview, *shutter, *rec, *status, *gallery_btn;
-    lv_timer_t *timer;
+    t5ui_obj_t *scr, *view, *frame, *bar, *preview, *shutter, *rec, *status, *gallery_btn;
+    t5ui_timer_t *timer;
     bool granted, mirror, destroying;
     bool video_mode;              /* opened for recording (1280x720), not photos (1600x900) */
     volatile bool busy;           /* a photo is being taken, or recording starting/stopping */
@@ -88,11 +90,11 @@ static void shot_done(void *p)
     if (t5_app_running(s.app)) {
         if (sh->err == T5_OK) {
             snprintf(s_last_photo, sizeof s_last_photo, "%s", sh->path);
-            md_snackbar_show("Photo saved", "View", view_last, NULL);
+            t5ui_snackbar("Photo saved", "View", view_last, NULL);
         } else {
             char msg[96];
             snprintf(msg, sizeof msg, "Couldn't take the photo (%s)", t5_err_str(sh->err));
-            md_snackbar_show(msg, NULL, NULL, NULL);
+            t5ui_snackbar(msg, NULL, NULL, NULL);
         }
     }
     free(sh);
@@ -102,15 +104,15 @@ static void shot_task(void *arg)
 {
     shot_t *sh = arg;
     sh->err = s.cam ? t5_camera_photo(s.cam, sh->path, 90) : T5_ERR_STATE;
-    t5_ui_async(shot_done, sh);
+    t5ui_async(shot_done, sh);
 }
 
-static void shutter_clicked(lv_event_t *e)
+static void shutter_clicked(t5ui_event_t *e)
 {
     (void)e;
     if (!s.cam || s.busy) return;
     if (t5_storage_sd_state() != T5_SD_MOUNTED) {
-        md_snackbar_show("Insert an SD card to take photos", NULL, NULL, NULL);
+        t5ui_snackbar("Insert an SD card to take photos", NULL, NULL, NULL);
         return;
     }
     make_dcim();
@@ -129,9 +131,9 @@ static void shutter_clicked(lv_event_t *e)
 static void rec_paint(void)
 {
     bool on = s.cam && t5_camera_recording(s.cam);
-    lv_obj_t *icon = lv_obj_get_child(s.rec, 0);
-    lv_label_set_text(icon, on ? MD_ICON_STOP : MD_ICON_FIBER_MANUAL_RECORD);
-    lv_obj_set_style_text_color(icon, on ? lv_color_white() : md_color(md_accent(MD_ACCENT_RED)->dark), 0);
+    t5ui_obj_t *icon = t5ui_child(s.rec, 0);
+    t5ui_set_str(icon, T5UI_P_ICON, on ? T5UI_ICON_STOP : T5UI_ICON_FIBER_MANUAL_RECORD);
+    t5ui_set_color(icon, T5UI_P_TEXT_COLOR, on ? 0xffffff : t5ui_accent_color(T5UI_ACCENT_RED, T5UI_TONE_DARK));
 }
 
 /* Starting and stopping run on a worker, like photos: the camera service
@@ -163,12 +165,12 @@ static void rec_done(void *p)
     if (t5_app_running(s.app)) {
         if (!j->start && j->err == T5_OK) {
             snprintf(s_last_video, sizeof s_last_video, "%s", s.rec_path);
-            md_snackbar_show("Video saved", "Play", play_last, NULL);
+            t5ui_snackbar("Video saved", "Play", play_last, NULL);
         } else if (!j->start) {
-            md_snackbar_show("Couldn't stop recording", NULL, NULL, NULL);
+            t5ui_snackbar("Couldn't stop recording", NULL, NULL, NULL);
         }
         else if (j->err == T5_OK) t5_audio_play_sound(T5_SOUND_START);
-        else md_snackbar_show("Couldn't start recording", NULL, NULL, NULL);
+        else t5ui_snackbar("Couldn't start recording", NULL, NULL, NULL);
         rec_paint();
     }
     free(j);
@@ -179,10 +181,10 @@ static void rec_task(void *arg)
     rec_job_t *j = arg;
     if (!s.cam) j->err = T5_ERR_STATE;
     else j->err = j->start ? t5_camera_record_start(s.cam, j->path, 0) : t5_camera_record_stop(s.cam);
-    t5_ui_async(rec_done, j);
+    t5ui_async(rec_done, j);
 }
 
-static void rec_clicked(lv_event_t *e)
+static void rec_clicked(t5ui_event_t *e)
 {
     (void)e;
     if (!s.cam || s.busy) return;
@@ -191,7 +193,7 @@ static void rec_clicked(lv_event_t *e)
     j->start = !t5_camera_recording(s.cam);
     if (j->start) {
         if (t5_storage_sd_state() != T5_SD_MOUNTED) {
-            md_snackbar_show("Insert an SD card to record", NULL, NULL, NULL);
+            t5ui_snackbar("Insert an SD card to record", NULL, NULL, NULL);
             free(j);
             return;
         }
@@ -214,16 +216,16 @@ static void rec_clicked(lv_event_t *e)
     }
 }
 
-static void mirror_clicked(lv_event_t *e)
+static void mirror_clicked(t5ui_event_t *e)
 {
     (void)e;
     s.mirror = !s.mirror;
     if (s.cam) t5_camera_set_mirror(s.cam, s.mirror);
 }
 
-static void tick(lv_timer_t *t)
+static void tick(t5ui_timer_t *t, void *user)
 {
-    (void)t;
+    (void)t; (void)user;
     t5_camera_stats_t st;
     t5_camera_stats(&st);
     char buf[96];
@@ -240,8 +242,9 @@ static void tick(lv_timer_t *t)
         snprintf(buf, sizeof buf, "%s", s.granted ? "Camera off" : "Allow the camera in Settings to use it");
     }
     sa_set_text(s.status, buf);
-    lv_obj_set_hidden(s.status, !buf[0]);
-    lv_obj_set_style_text_color(s.status, st.recording ? md_color(md_accent(MD_ACCENT_RED)->dark) : lv_color_white(), 0);
+    t5ui_set_int(s.status, T5UI_P_HIDDEN, !buf[0]);
+    t5ui_set_color(s.status, T5UI_P_TEXT_COLOR,
+                   st.recording ? t5ui_accent_color(T5UI_ACCENT_RED, T5UI_TONE_DARK) : 0xffffff);
 }
 
 static void cam_stop(void);
@@ -251,7 +254,7 @@ typedef struct {
     char names[MAX_FILES][40];
     uint32_t sizes[MAX_FILES];
     int n;
-    lv_obj_t *list;
+    t5ui_obj_t *list;
 } gallery_t;
 
 static int cmp_desc(const void *a, const void *b)
@@ -273,26 +276,28 @@ static bool pretty_stamp(const char *name, char *out, size_t n)
     return true;
 }
 
-static void gal_bind(md_list_row_t *r, uint32_t i, void *ud)
+static void gal_bind(t5ui_event_t *e)
 {
-    gallery_t *g = ud;
-    if ((int)i >= g->n) return;
+    gallery_t *g = t5ui_event_user(e);
+    t5ui_obj_t *r = t5ui_event_target(e);
+    int i = (int)t5ui_event_index(e);
+    if (i < 0 || i >= g->n) return;
     char when[40];
-    lv_label_set_text(r->primary, pretty_stamp(g->names[i], when, sizeof when) ? when : g->names[i]);
+    t5ui_set_str(r, T5UI_P_TEXT, pretty_stamp(g->names[i], when, sizeof when) ? when : g->names[i]);
     bool h264 = sa_ends_with(g->names[i], ".h264"), video = h264 || sa_video_can_open(g->names[i]);
-    lv_label_set_text(r->icon, video ? MD_ICON_VIDEOCAM : MD_ICON_IMAGE);
-    if (r->secondary) {
-        char b[24];
-        sa_fmt_bytes(b, sizeof b, g->sizes[i]);
-        lv_label_set_text_fmt(r->secondary,
-                              h264 ? "Video, %s. Plays on a computer (H.264)" : video ? "Video, %s" : "Photo, %s", b);
-    }
+    t5ui_set_str(r, T5UI_P_ICON, video ? T5UI_ICON_VIDEOCAM : T5UI_ICON_IMAGE);
+    char b[24];
+    sa_fmt_bytes(b, sizeof b, g->sizes[i]);
+    /* Two-line rows: a one-line row has no second line, and this does nothing. */
+    t5ui_set_strf(r, T5UI_P_SECONDARY,
+                  h264 ? "Video, %s. Plays on a computer (H.264)" : video ? "Video, %s" : "Photo, %s", b);
 }
 
-static void gal_click(uint32_t i, void *ud)
+static void gal_click(t5ui_event_t *e)
 {
-    gallery_t *g = ud;
-    if ((int)i >= g->n) return;
+    gallery_t *g = t5ui_event_user(e);
+    int i = (int)t5ui_event_index(e);
+    if (i < 0 || i >= g->n) return;
     char path[96];
     snprintf(path, sizeof path, T5_DCIM_DIR "/%s", g->names[i]);
     if (sa_photo_can_open(path)) sa_photo_open(s.scr, path, NULL);
@@ -303,12 +308,12 @@ static void cam_start(void);
 
 static void gallery_closed(void)
 {
-    lv_obj_set_hidden(s.view, false);
+    t5ui_set_int(s.view, T5UI_P_HIDDEN, false);
     t5_shell_set_fullscreen(true);
     cam_start();
 }
 
-static void open_gallery(lv_event_t *e)
+static void open_gallery(t5ui_event_t *e)
 {
     (void)e;
     gallery_t *g = calloc(1, sizeof *g);
@@ -330,15 +335,19 @@ static void open_gallery(lv_event_t *e)
     }
     cam_stop();
     t5_shell_set_fullscreen(false);
-    lv_obj_set_hidden(s.view, true);
-    lv_obj_t *body = sa_push(&s_nav, "Gallery");
-    lv_obj_set_scrollable(body, false);
-    g->list = md_list_create(body, (uint32_t)g->n, MD_LIST_ROW_2_DP, gal_bind, gal_click, g);
-    lv_obj_set_width(g->list, LV_PCT(100));
-    lv_obj_set_flex_grow(g->list, 1);
+    t5ui_set_int(s.view, T5UI_P_HIDDEN, true);
+    t5ui_obj_t *body = sa_push(&s_nav, "Gallery");
+    t5ui_set_int(body, T5UI_P_SCROLLABLE, false);
+    g->list = t5ui_create(body, T5UI_MD_LIST);
+    t5ui_on(g->list, T5UI_EV_BIND, gal_bind, g);
+    t5ui_on(g->list, T5UI_EV_ITEM, gal_click, g);
+    t5ui_set_int(g->list, T5UI_P_ROW_DP, 64);           /* two-line rows */
+    t5ui_set_int(g->list, T5UI_P_COUNT, g->n);
+    t5ui_set_int(g->list, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(g->list, T5UI_P_GROW, 1);
     if (!g->n) {
         /* An empty list would push the note to the bottom: drop the list. */
-        lv_obj_set_hidden(g->list, true);
+        t5ui_set_int(g->list, T5UI_P_HIDDEN, true);
         sa_note(body, t5_storage_sd_state() == T5_SD_MOUNTED
                           ? "No photos or videos yet. What you take is saved to the DCIM folder on the SD card."
                           : "Insert an SD card. Photos and videos are saved to it.");
@@ -354,12 +363,13 @@ static void cam_start(void)
     if (e != T5_OK) {
         char msg[64];
         snprintf(msg, sizeof msg, "Couldn't open the camera (%s)", t5_err_str(e));
-        md_snackbar_show(msg, NULL, NULL, NULL);
+        t5ui_snackbar(msg, NULL, NULL, NULL);
         return;
     }
     t5_camera_set_mirror(s.cam, s.mirror);
-    s.preview = t5_camera_preview_create(s.cam, s.frame);
-    if (s.preview) lv_obj_move_background(s.preview);   /* under the back and mirror buttons */
+    /* The preview is the camera service's own object, taken in here. */
+    s.preview = t5ui_sys_obj(t5_camera_preview_create(s.cam, t5ui_sys_native(s.frame)));
+    if (s.preview) t5ui_move_to(s.preview, 0);   /* under the back and mirror buttons */
     rec_paint();
 }
 
@@ -369,7 +379,7 @@ static void cam_stop(void)
     if (t5_camera_recording(s.cam)) t5_camera_record_stop(s.cam);
     t5_camera_close(s.cam);
     s.cam = NULL;
-    if (s.preview) lv_obj_delete(s.preview);
+    if (s.preview) t5ui_delete(s.preview);
     s.preview = NULL;
 }
 
@@ -381,40 +391,43 @@ static void perm_answer(t5_app_t *app, uint32_t perm, bool granted, void *user)
 }
 
 /* A dark translucent circle with a white icon (back, gallery, record, mirror). */
-static lv_obj_t *round_button(lv_obj_t *parent, const char *icon, int size_dp, lv_event_cb_t cb)
+static t5ui_obj_t *round_button(t5ui_obj_t *parent, const char *icon, int size_dp, t5ui_event_cb_t cb)
 {
-    lv_obj_t *b = lv_button_create(parent);
-    lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, T5_DP(size_dp), T5_DP(size_dp));
-    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(b, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(b, 38, 0);                    /* 15% */
-    lv_obj_set_style_bg_opa(b, 82, LV_STATE_PRESSED);     /* 32% */
-    lv_obj_t *l = md_icon_create(b, icon, MD_ICON_DP);
-    lv_obj_set_style_text_color(l, lv_color_white(), 0);
-    lv_obj_center(l);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    t5ui_obj_t *b = t5ui_create(parent, T5UI_BUTTON);
+    t5ui_style_clear(b);
+    t5ui_set_int(b, T5UI_P_WIDTH, t5ui_dp(size_dp));
+    t5ui_set_int(b, T5UI_P_HEIGHT, t5ui_dp(size_dp));
+    t5ui_set_int(b, T5UI_P_RADIUS, T5UI_RADIUS_CIRCLE);
+    t5ui_set_color(b, T5UI_P_BG_COLOR, 0xffffff);
+    t5ui_set_int(b, T5UI_P_BG_OPA, 38);                                          /* 15% */
+    t5ui_set_int_at(b, T5UI_P_BG_OPA, T5UI_AT(T5UI_PART_MAIN, T5UI_STATE_PRESSED), 82);    /* 32% */
+    t5ui_obj_t *l = t5ui_create(b, T5UI_MD_ICON);
+    t5ui_set_str(l, T5UI_P_ICON, icon);
+    t5ui_set_color(l, T5UI_P_TEXT_COLOR, 0xffffff);
+    t5ui_set_int(l, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
+    t5ui_on(b, T5UI_EV_CLICK, cb, NULL);
     return b;
 }
 
 /* The shutter: a white disc inside a white ring. */
-static lv_obj_t *shutter_button(lv_obj_t *parent)
+static t5ui_obj_t *shutter_button(t5ui_obj_t *parent)
 {
-    lv_obj_t *b = lv_button_create(parent);
-    lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, T5_DP(64), T5_DP(64));
-    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(b, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_70, LV_STATE_PRESSED);
-    lv_obj_set_style_outline_color(b, lv_color_white(), 0);
-    lv_obj_set_style_outline_width(b, T5_DP(3), 0);
-    lv_obj_set_style_outline_pad(b, T5_DP(5), 0);
-    lv_obj_add_event_cb(b, shutter_clicked, LV_EVENT_CLICKED, NULL);
+    t5ui_obj_t *b = t5ui_create(parent, T5UI_BUTTON);
+    t5ui_style_clear(b);
+    t5ui_set_int(b, T5UI_P_WIDTH, t5ui_dp(64));
+    t5ui_set_int(b, T5UI_P_HEIGHT, t5ui_dp(64));
+    t5ui_set_int(b, T5UI_P_RADIUS, T5UI_RADIUS_CIRCLE);
+    t5ui_set_color(b, T5UI_P_BG_COLOR, 0xffffff);
+    t5ui_set_int(b, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+    t5ui_set_int_at(b, T5UI_P_BG_OPA, T5UI_AT(T5UI_PART_MAIN, T5UI_STATE_PRESSED), 178);   /* 70% */
+    t5ui_set_color(b, T5UI_P_OUTLINE_COLOR, 0xffffff);
+    t5ui_set_int(b, T5UI_P_OUTLINE_WIDTH, t5ui_dp(3));
+    t5ui_set_int(b, T5UI_P_OUTLINE_PAD, t5ui_dp(5));
+    t5ui_on(b, T5UI_EV_CLICK, shutter_clicked, NULL);
     return b;
 }
 
-static void home_clicked(lv_event_t *e)
+static void home_clicked(t5ui_event_t *e)
 {
     (void)e;
     t5_app_exit(s.app);
@@ -424,18 +437,16 @@ static void home_clicked(lv_event_t *e)
  * Portrait: the preview, then the controls in a row underneath. */
 static void apply_layout(void)
 {
-    lv_display_t *d = lv_obj_get_display(s.scr);
-    bool land = lv_display_get_horizontal_resolution(d) >= lv_display_get_vertical_resolution(d);
-    lv_obj_set_flex_flow(s.view, land ? LV_FLEX_FLOW_ROW : LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_flow(s.bar, land ? LV_FLEX_FLOW_COLUMN_REVERSE : LV_FLEX_FLOW_ROW);
-    if (land) {
-        lv_obj_set_size(s.frame, 0, LV_PCT(100));
-        lv_obj_set_size(s.bar, T5_DP(112), LV_PCT(100));
-    } else {
-        lv_obj_set_size(s.frame, LV_PCT(100), 0);
-        lv_obj_set_size(s.bar, LV_PCT(100), T5_DP(144));
-    }
-    lv_obj_set_flex_grow(s.frame, 1);
+    int32_t w, h;
+    t5ui_screen_size(&w, &h);
+    bool land = w >= h;
+    t5ui_set_int(s.view, T5UI_P_FLOW, land ? T5UI_ROW : T5UI_COLUMN);
+    t5ui_set_int(s.bar, T5UI_P_FLOW, land ? T5UI_COLUMN_REVERSE : T5UI_ROW);
+    t5ui_set_int(s.frame, T5UI_P_WIDTH, land ? 0 : T5UI_PCT(100));
+    t5ui_set_int(s.frame, T5UI_P_HEIGHT, land ? T5UI_PCT(100) : 0);
+    t5ui_set_int(s.bar, T5UI_P_WIDTH, land ? t5ui_dp(112) : T5UI_PCT(100));
+    t5ui_set_int(s.bar, T5UI_P_HEIGHT, land ? T5UI_PCT(100) : t5ui_dp(144));
+    t5ui_set_int(s.frame, T5UI_P_GROW, 1);
 }
 
 /* The preview's buffer is sized for the screen it was made on: make it again. */
@@ -460,50 +471,60 @@ static void on_create(t5_app_t *app)
 {
     memset(&s, 0, sizeof s);
     s.app = app;
-    s.scr = t5_app_screen(app);
+    s.scr = t5ui_root(app);
     sa_nav_init(&s_nav, app);
     s_nav.root_back = gallery_closed;
-    lv_obj_set_style_bg_color(s.scr, lv_color_black(), 0);
+    t5ui_set_color(s.scr, T5UI_P_BG_COLOR, 0x000000);
     t5_shell_set_fullscreen(true);
-    s.view = lv_obj_create(s.scr);
-    lv_obj_remove_style_all(s.view);
-    lv_obj_set_size(s.view, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_scrollable(s.view, false);
+    s.view = t5ui_create(s.scr, T5UI_BOX);
+    t5ui_set_int(s.view, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(s.view, T5UI_P_HEIGHT, T5UI_PCT(100));
+    t5ui_set_int(s.view, T5UI_P_SCROLLABLE, false);
 
     /* The preview never sits under the controls: it is a video plane,
      * drawn straight into the framebuffer each frame, and whatever lies over
-     * it LVGL redraws each frame too (t5_ui/plane.h). Only the small back
+     * it is redrawn each frame too (t5_ui/plane.h). Only the small back
      * and mirror buttons and the status line float over it. */
-    s.frame = lv_obj_create(s.view);
-    lv_obj_remove_style_all(s.frame);
-    lv_obj_set_scrollable(s.frame, false);
-    lv_obj_t *back = round_button(s.frame, MD_ICON_ARROW_BACK, 44, home_clicked);
-    lv_obj_align(back, LV_ALIGN_TOP_LEFT, T5_DP(12), T5_DP(12));
-    lv_obj_t *mirror = round_button(s.frame, MD_ICON_SWAP_HORIZ, 44, mirror_clicked);
-    lv_obj_align(mirror, LV_ALIGN_TOP_RIGHT, -T5_DP(12), T5_DP(12));
-    s.status = md_label_create(s.frame, "", MD_TYPE_CAPTION);
-    lv_obj_set_style_text_color(s.status, lv_color_white(), 0);
-    lv_obj_set_style_bg_color(s.status, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s.status, LV_OPA_50, 0);
-    lv_obj_set_style_radius(s.status, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_hor(s.status, T5_DP(12), 0);
-    lv_obj_set_style_pad_ver(s.status, T5_DP(4), 0);
+    s.frame = t5ui_create(s.view, T5UI_BOX);
+    t5ui_set_int(s.frame, T5UI_P_SCROLLABLE, false);
+    t5ui_obj_t *back = round_button(s.frame, T5UI_ICON_ARROW_BACK, 44, home_clicked);
+    t5ui_set_int(back, T5UI_P_ALIGN, T5UI_ALIGN_TOP_LEFT);
+    t5ui_set_int(back, T5UI_P_X, t5ui_dp(12));
+    t5ui_set_int(back, T5UI_P_Y, t5ui_dp(12));
+    t5ui_obj_t *mirror = round_button(s.frame, T5UI_ICON_SWAP_HORIZ, 44, mirror_clicked);
+    t5ui_set_int(mirror, T5UI_P_ALIGN, T5UI_ALIGN_TOP_RIGHT);
+    t5ui_set_int(mirror, T5UI_P_X, -t5ui_dp(12));
+    t5ui_set_int(mirror, T5UI_P_Y, t5ui_dp(12));
+    s.status = t5ui_create(s.frame, T5UI_MD_TEXT);
+    t5ui_set_int(s.status, T5UI_P_TEXT_STYLE, T5UI_TEXT_CAPTION);
+    t5ui_set_str(s.status, T5UI_P_TEXT, "");
+    t5ui_set_color(s.status, T5UI_P_TEXT_COLOR, 0xffffff);
+    t5ui_set_color(s.status, T5UI_P_BG_COLOR, 0x000000);
+    t5ui_set_int(s.status, T5UI_P_BG_OPA, 127);                  /* 50% */
+    t5ui_set_int(s.status, T5UI_P_RADIUS, T5UI_RADIUS_CIRCLE);
+    t5ui_set_int(s.status, T5UI_P_PAD_LEFT, t5ui_dp(12));
+    t5ui_set_int(s.status, T5UI_P_PAD_RIGHT, t5ui_dp(12));
+    t5ui_set_int(s.status, T5UI_P_PAD_TOP, t5ui_dp(4));
+    t5ui_set_int(s.status, T5UI_P_PAD_BOTTOM, t5ui_dp(4));
     /* On the button row's centre line (12 dp + half of 44 dp, less half the
      * pill's 28 dp), clear of the picture's bottom edge however the preview
      * is letterboxed. */
-    lv_obj_align(s.status, LV_ALIGN_TOP_MID, 0, T5_DP(20));
-    lv_obj_set_hidden(s.status, true);
+    t5ui_set_int(s.status, T5UI_P_ALIGN, T5UI_ALIGN_TOP_MID);
+    t5ui_set_int(s.status, T5UI_P_X, 0);
+    t5ui_set_int(s.status, T5UI_P_Y, t5ui_dp(20));
+    t5ui_set_int(s.status, T5UI_P_HIDDEN, true);
 
-    s.bar = lv_obj_create(s.view);
-    lv_obj_remove_style_all(s.bar);
-    lv_obj_set_scrollable(s.bar, false);
-    lv_obj_set_flex_align(s.bar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    s.gallery_btn = round_button(s.bar, MD_ICON_PHOTO_LIBRARY, 52, open_gallery);
+    s.bar = t5ui_create(s.view, T5UI_BOX);
+    t5ui_set_int(s.bar, T5UI_P_SCROLLABLE, false);
+    t5ui_set_int(s.bar, T5UI_P_PLACE_MAIN, T5UI_PLACE_SPACE_EVENLY);
+    t5ui_set_int(s.bar, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
+    t5ui_set_int(s.bar, T5UI_P_PLACE_TRACK, T5UI_PLACE_CENTER);
+    s.gallery_btn = round_button(s.bar, T5UI_ICON_PHOTO_LIBRARY, 52, open_gallery);
     s.shutter = shutter_button(s.bar);
-    s.rec = round_button(s.bar, MD_ICON_FIBER_MANUAL_RECORD, 52, rec_clicked);
+    s.rec = round_button(s.bar, T5UI_ICON_FIBER_MANUAL_RECORD, 52, rec_clicked);
     apply_layout();
     rec_paint();
-    s.timer = lv_timer_create(tick, 500, NULL);
+    s.timer = t5ui_timer(500, tick, NULL);
 
     s.granted = t5_app_has_permission(app, T5_PERM_CAMERA);
     if (!s.granted) sa_report(t5_app_request_permission(app, T5_PERM_CAMERA, perm_answer, NULL), "ask for the camera");
@@ -532,7 +553,7 @@ static void on_destroy(t5_app_t *app)
     sa_photo_close();
     sa_video_close();
     cam_stop();
-    if (s.timer) lv_timer_delete(s.timer);
+    if (s.timer) t5ui_timer_delete(s.timer);
     s.timer = NULL;
     sa_nav_destroy(&s_nav);
 }
@@ -548,5 +569,5 @@ const t5_builtin_app_t sysapp_camera = {
     .desc = &s_desc,
     .perms = T5_PERM_CAMERA | T5_PERM_MIC | T5_PERM_STORAGE,
     .orientation = T5_ORIENT_ANY,
-    .icon = MD_ICON_CAMERA_ALT,
+    .icon = T5UI_ICON_CAMERA_ALT,
 };

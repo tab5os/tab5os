@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Phase 9: the boot-control record convention shared by the bootloader,
  * the OS and recovery; which slot an install writes; which images each
- * source may install; the .t5os header as tools/ota/t5ota.py writes it.
+ * source may install; the .t5os header as tools/ota/t5ota.py writes it;
+ * which C6 radio firmware an OS takes, and the .t5c6 the tool makes.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -196,7 +197,7 @@ static void put16(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)(v >> 8);
 }
 
-static void make_image(uint8_t *img, uint16_t chip)
+static void make_image_v(uint8_t *img, uint16_t chip, const char *version)
 {
     for (int i = 0; i < IMG_LEN; i++) img[i] = (uint8_t)(i * 7);
     img[0] = T5_IMG_MAGIC;
@@ -206,9 +207,14 @@ static void make_image(uint8_t *img, uint16_t chip)
     uint32_t m = T5_IMG_DESC_MAGIC;
     memcpy(img + T5_IMG_DESC_OFF, &m, 4);
     memset(img + T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF, 0, T5_IMG_DESC_VERSION_LEN);
-    strcpy((char *)img + T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF, "9.8.7-test");
+    strcpy((char *)img + T5_IMG_DESC_OFF + T5_IMG_DESC_VERSION_OFF, version);
     memset(img + T5_IMG_DESC_OFF + T5_IMG_DESC_PROJECT_OFF, 0, T5_IMG_DESC_PROJECT_LEN);
     strcpy((char *)img + T5_IMG_DESC_OFF + T5_IMG_DESC_PROJECT_OFF, T5_OTA_PROJECT);
+}
+
+static void make_image(uint8_t *img, uint16_t chip)
+{
+    make_image_v(img, chip, "9.8.7-test");
 }
 
 static int t5ota(const char *args)
@@ -264,6 +270,85 @@ static void test_ota_header_from_tool(void)
     rmdir(dir);
 }
 
+/* ---- the C6 radio's firmware ----------------------------------------------- */
+static void test_c6_rules(void)
+{
+    char v[48], url[192];
+    t5_ota_c6_version("0.2.0", v, sizeof v);
+    TEST_ASSERT_EQUAL_STRING("t5-c6-0.2.0", v);
+    /* An OS release carries the C6 firmware it was built with, whose version moves on its own. */
+    t5_ota_c6_url("0.2.3", "0.2.0", url, sizeof url);
+    TEST_ASSERT_EQUAL_STRING("https://github.com/tab5os/tab5os/releases/download/v0.2.3/tab5os-c6-0.2.0.t5c6", url);
+    t5_ota_c6_file("0.2.0", url, sizeof url);
+    TEST_ASSERT_EQUAL_STRING("tab5os-c6-0.2.0.t5c6", url);
+
+    static uint8_t img[IMG_LEN];
+    make_image_v(img, T5_IMG_CHIP_ESP32C6, "t5-c6-0.2.0");
+    TEST_ASSERT_NULL(t5_ota_c6_head_refusal(img, IMG_LEN, "t5-c6-0.2.0"));
+    TEST_ASSERT_NULL(t5_ota_c6_head_refusal(img, IMG_LEN, NULL));
+    /* Another version, a prefix of the version, too short, the P4's image, not an image. */
+    TEST_ASSERT_NOT_NULL(t5_ota_c6_head_refusal(img, IMG_LEN, "t5-c6-0.2.1"));
+    TEST_ASSERT_NOT_NULL(t5_ota_c6_head_refusal(img, IMG_LEN, "t5-c6-0.2"));
+    TEST_ASSERT_NOT_NULL(t5_ota_c6_head_refusal(img, T5_OTA_C6_HEAD_LEN - 1, NULL));
+    make_image_v(img, T5_IMG_CHIP_ESP32P4, "t5-c6-0.2.0");
+    TEST_ASSERT_NOT_NULL(t5_ota_c6_head_refusal(img, IMG_LEN, NULL));
+    make_image_v(img, T5_IMG_CHIP_ESP32C6, "t5-c6-0.2.0");
+    img[0] = 0xFF;
+    TEST_ASSERT_NOT_NULL(t5_ota_c6_head_refusal(img, IMG_LEN, NULL));
+}
+
+static void test_c6_package_from_tool(void)
+{
+    char dir[] = "/tmp/t5c6_XXXXXX";
+    TEST_ASSERT_NOT_NULL(mkdtemp(dir));
+    char img_path[64], out_path[64], args[256];
+    snprintf(img_path, sizeof img_path, "%s/c6.bin", dir);
+    snprintf(out_path, sizeof out_path, "%s/out.t5c6", dir);
+    static uint8_t img[IMG_LEN];
+    make_image_v(img, T5_IMG_CHIP_ESP32C6, "t5-c6-0.2.0");
+    FILE *f = fopen(img_path, "wb");
+    TEST_ASSERT_NOT_NULL(f);
+    TEST_ASSERT_EQUAL(IMG_LEN, fwrite(img, 1, IMG_LEN, f));
+    fclose(f);
+
+    snprintf(args, sizeof args, "pack-c6 '%s' -o '%s'", img_path, out_path);
+    TEST_ASSERT_EQUAL(0, t5ota(args));
+    static uint8_t file[T5_OTA_HDR_SIZE + IMG_LEN + 1];
+    f = fopen(out_path, "rb");
+    TEST_ASSERT_NOT_NULL(f);
+    TEST_ASSERT_EQUAL(T5_OTA_HDR_SIZE + IMG_LEN, fread(file, 1, sizeof file, f));
+    fclose(f);
+    t5_ota_hdr_t h;
+    memcpy(&h, file, sizeof h);
+    TEST_ASSERT_EQUAL_MEMORY(T5_OTA_C6_MAGIC, h.magic, 4);
+    TEST_ASSERT_EQUAL(T5_OTA_HDR_VERSION, h.version);
+    TEST_ASSERT_EQUAL(IMG_LEN, h.image_len);
+    TEST_ASSERT_EQUAL_STRING("t5-c6-0.2.0", h.os_version);
+    TEST_ASSERT_EQUAL_MEMORY(img, file + T5_OTA_HDR_SIZE, IMG_LEN);
+    /* What the device checks on the image passes. */
+    TEST_ASSERT_NULL(t5_ota_c6_head_refusal(file + T5_OTA_HDR_SIZE, IMG_LEN, "t5-c6-0.2.0"));
+    /* Unsigned, the same rule as for the OS. */
+    TEST_ASSERT_NOT_NULL(t5_ota_refusal(&h, false, T5_OTA_FROM_SETTINGS, false));
+    snprintf(args, sizeof args, "inspect '%s'", out_path);
+    TEST_ASSERT_EQUAL(0, t5ota(args));
+
+    /* The P4's image, or a C6 image that isn't ours, isn't packed. */
+    make_image_v(img, T5_IMG_CHIP_ESP32P4, "t5-c6-0.2.0");
+    f = fopen(img_path, "wb");
+    TEST_ASSERT_EQUAL(IMG_LEN, fwrite(img, 1, IMG_LEN, f));
+    fclose(f);
+    snprintf(args, sizeof args, "pack-c6 '%s' -o '%s'", img_path, out_path);
+    TEST_ASSERT_NOT_EQUAL(0, t5ota(args));
+    make_image_v(img, T5_IMG_CHIP_ESP32C6, "1.4.1");
+    f = fopen(img_path, "wb");
+    TEST_ASSERT_EQUAL(IMG_LEN, fwrite(img, 1, IMG_LEN, f));
+    fclose(f);
+    TEST_ASSERT_NOT_EQUAL(0, t5ota(args));
+    remove(img_path);
+    remove(out_path);
+    rmdir(dir);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -275,5 +360,7 @@ int main(void)
     RUN_TEST(test_version_rule);
     RUN_TEST(test_pick_release);
     RUN_TEST(test_ota_header_from_tool);
+    RUN_TEST(test_c6_rules);
+    RUN_TEST(test_c6_package_from_tool);
     return UNITY_END();
 }

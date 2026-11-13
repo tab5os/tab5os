@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0
- * t5.ui (plan 8.3): a light wrapper over the MD2 widgets.
+ * t5.ui (plan 8.3): a light wrapper over the MD2 widgets, drawn through t5ui.
  *
  *   s = t5.ui.screen("Air Log")          # app bar with a back arrow
  *   temp = s.label("--", role="h4")
@@ -7,11 +7,11 @@
  *   row = s.row()
  *   row.switch(True, fn=lambda w: print(w.value()))
  *
- * Every LVGL call is made from the VM task under the UI lock. Taps and value
+ * Every t5ui call is made from the VM task under the UI lock. Taps and value
  * changes arrive on the UI task and are queued for the VM task with
  * micropython.schedule semantics, so callbacks run between bytecodes.
  *
- * LVGL never holds a pointer into the Python heap: widgets are found through
+ * The UI never holds a pointer into the Python heap: widgets are found through
  * a table indexed by a slot number tagged with the VM's generation, and the
  * generation changes (under the UI lock) before the heap goes away. A late
  * event finds nothing.
@@ -21,13 +21,12 @@
  */
 #include <string.h>
 #include "esp_timer.h"
-#include "lvgl.h"
-#include "md/md.h"
-#include "md/md_tokens.h"
 #include "py/mphal.h"
 #include "py/objstr.h"
 #include "py/runtime.h"
 #include "t5_app/app.h"
+#include "t5_gui/t5ui.h"
+#include "t5_gui/t5ui_sys.h"
 #include "t5_shell/shell.h"
 #include "t5_ui/t5_ui.h"
 #include "bind_gen.h"
@@ -38,9 +37,9 @@ enum { K_BOX, K_LABEL, K_BUTTON, K_SWITCH, K_SLIDER, K_CHECK, K_FIELD, K_ITEM, K
 
 typedef struct {
     mp_obj_base_t base;
-    lv_obj_t *obj;              /* NULL once LVGL deleted it */
-    lv_obj_t *inner;            /* children go here (boxes), the text area (fields), the label (buttons) */
-    lv_chart_series_t *ser;
+    t5ui_obj_t *obj;            /* NULL once the UI deleted it */
+    t5ui_obj_t *inner;          /* children go here (boxes), the text area (fields), the label (buttons) */
+    int16_t ser;                /* charts: the series' index, or -1 */
     mp_obj_t on_click, on_change;
     uint16_t slot;
     uint8_t kind;
@@ -104,21 +103,21 @@ bool py_ui_wants_events(void)
 }
 
 /* ---- events (UI task) --------------------------------------------------------------------- */
-static void ev_cb(lv_event_t *e)
+static void ev_cb(t5ui_event_t *e)
 {
-    py_widget_t *w = untag(lv_event_get_user_data(e));
+    py_widget_t *w = untag(t5ui_event_user(e));
     if (!w) return;
-    switch (lv_event_get_code(e)) {
-    case LV_EVENT_DELETE:
-        if (lv_event_get_target_obj(e) != w->obj) return;   /* an inner part */
+    switch (t5ui_event_kind(e)) {
+    case T5UI_EV_DELETE:
+        if (t5ui_event_target(e) != w->obj) return;   /* an inner part */
         w->obj = NULL;
         w->inner = NULL;
         WTAB[w->slot] = NULL;
         break;
-    case LV_EVENT_CLICKED:
+    case T5UI_EV_CLICK:
         if (w->on_click != mp_const_none) py_schedule(w->on_click, MP_OBJ_FROM_PTR(w));
         break;
-    case LV_EVENT_VALUE_CHANGED:
+    case T5UI_EV_VALUE:
         if (w->on_change != mp_const_none) py_schedule(w->on_change, MP_OBJ_FROM_PTR(w));
         break;
     default: break;
@@ -139,13 +138,13 @@ static void back_late(void *arg)
     }
 }
 
-static void back_cb(lv_event_t *e)
+static void back_cb(t5ui_event_t *e)
 {
     t5_py_t *vm = py_vm;
-    if (py_untag((uintptr_t)lv_event_get_user_data(e)) < 0) return;
+    if (py_untag((uintptr_t)t5ui_event_user(e)) < 0) return;
     if (vm->cfg.repl) {
         /* At the prompt: back just takes the script's UI away. */
-        if (vm->ui_root) lv_obj_delete_async(vm->ui_root);
+        if (vm->ui_root) t5ui_cmd(vm->ui_root, T5UI_CMD_DELETE_LATER, 0, 0, 0, NULL);
         vm->ui_root = NULL;
         vm->ui_used = false;
         return;
@@ -190,7 +189,7 @@ static void reserve(void)
 }
 
 /* Under the lock: put w in a free slot and hook its events. */
-static void attach(py_widget_t *w, lv_obj_t *obj, lv_obj_t *events_on)
+static void attach(py_widget_t *w, t5ui_obj_t *obj, t5ui_obj_t *events_on)
 {
     uint32_t i = 0;
     while (i < s_wcap && WTAB[i]) i++;
@@ -198,17 +197,17 @@ static void attach(py_widget_t *w, lv_obj_t *obj, lv_obj_t *events_on)
     w->obj = obj;
     WTAB[i] = w;
     void *t = tag(i);
-    lv_obj_add_event_cb(obj, ev_cb, LV_EVENT_DELETE, t);
-    lv_obj_t *src = events_on ? events_on : obj;
-    lv_obj_add_event_cb(src, ev_cb, LV_EVENT_CLICKED, t);
-    lv_obj_add_event_cb(src, ev_cb, LV_EVENT_VALUE_CHANGED, t);
+    t5ui_on(obj, T5UI_EV_DELETE, ev_cb, t);
+    t5ui_obj_t *src = events_on ? events_on : obj;
+    t5ui_on(src, T5UI_EV_CLICK, ev_cb, t);
+    t5ui_on(src, T5UI_EV_VALUE, ev_cb, t);
 }
 
 static py_widget_t *new_widget(uint8_t kind, mp_obj_t fn)
 {
     py_widget_t *w = mp_obj_malloc(py_widget_t, &py_type_widget);
     w->obj = w->inner = NULL;
-    w->ser = NULL;
+    w->ser = -1;
     w->kind = kind;
     w->on_click = mp_const_none;
     w->on_change = mp_const_none;
@@ -220,18 +219,17 @@ static py_widget_t *new_widget(uint8_t kind, mp_obj_t fn)
     return w;
 }
 
-static md_rgb_t color_arg(mp_obj_t c)
+static t5ui_color_t color_arg(mp_obj_t c)
 {
-    if (mp_obj_is_int(c)) return (md_rgb_t)mp_obj_get_int(c) & 0xffffff;
+    if (mp_obj_is_int(c)) return (t5ui_color_t)mp_obj_get_int(c) & 0xffffff;
     const char *s = mp_obj_str_get_str(c);
-    const md_scheme_t *sc = md_scheme();
-    if (!strcmp(s, "primary")) return sc->c.primary;
-    if (!strcmp(s, "secondary")) return sc->c.secondary;
-    if (!strcmp(s, "error")) return sc->c.error;
-    if (!strcmp(s, "surface")) return sc->c.surface;
-    if (!strcmp(s, "background")) return sc->c.background;
-    if (!strcmp(s, "on_surface")) return sc->c.on_surface;
-    if (!strcmp(s, "on_primary")) return sc->c.on_primary;
+    if (!strcmp(s, "primary")) return t5ui_theme_color(T5UI_COLOR_PRIMARY);
+    if (!strcmp(s, "secondary")) return t5ui_theme_color(T5UI_COLOR_SECONDARY);
+    if (!strcmp(s, "error")) return t5ui_theme_color(T5UI_COLOR_ERROR);
+    if (!strcmp(s, "surface")) return t5ui_theme_color(T5UI_COLOR_SURFACE);
+    if (!strcmp(s, "background")) return t5ui_theme_color(T5UI_COLOR_BACKGROUND);
+    if (!strcmp(s, "on_surface")) return t5ui_theme_color(T5UI_COLOR_ON_SURFACE);
+    if (!strcmp(s, "on_primary")) return t5ui_theme_color(T5UI_COLOR_ON_PRIMARY);
     mp_raise_ValueError(MP_ERROR_TEXT("colour is 0xRRGGBB or a scheme name"));
 }
 
@@ -242,14 +240,17 @@ static const char *text_arg(mp_obj_t o)
     return mp_obj_str_get_str(o);
 }
 
-/* md's role names; "h4" is short for "headline4". */
-static md_type_role_t role_arg(mp_obj_t r)
+/* The Material type roles, in t5ui_text_t order; "h4" is short for "headline4". */
+static const char *const s_roles[] = { "headline4", "headline5", "headline6", "subtitle1", "body1",
+                                       "body2",     "button",    "caption",   "overline" };
+
+static t5ui_text_t role_arg(mp_obj_t r)
 {
     const char *s = mp_obj_str_get_str(r);
-    for (int i = 0; i < MD_TYPE_COUNT; i++) {
-        const char *n = md_type((md_type_role_t)i)->name;
+    for (int i = 0; i < (int)MP_ARRAY_SIZE(s_roles); i++) {
+        const char *n = s_roles[i];
         if (!strcmp(s, n) || (s[0] == 'h' && !strncmp(n, "headline", 8) && !strcmp(s + 1, n + 8))) {
-            return (md_type_role_t)i;
+            return (t5ui_text_t)i;
         }
     }
     mp_raise_ValueError(MP_ERROR_TEXT("role is h4, h5, h6, subtitle1, body1, body2, button, caption or overline"));
@@ -271,24 +272,49 @@ static bool size_arg(mp_obj_t o, int32_t *out)
 {
     if (o == mp_const_none || o == MP_OBJ_NULL) return false;
     if (mp_obj_is_int(o)) {
-        *out = T5_DP(mp_obj_get_int(o));
+        *out = t5ui_dp(mp_obj_get_int(o));
         return true;
     }
     const char *s = mp_obj_str_get_str(o);
-    if (!strcmp(s, "fill") || !strcmp(s, "100%")) *out = LV_PCT(100);
-    else if (!strcmp(s, "content")) *out = LV_SIZE_CONTENT;
+    if (!strcmp(s, "fill") || !strcmp(s, "100%")) *out = T5UI_PCT(100);
+    else if (!strcmp(s, "content")) *out = T5UI_CONTENT;
     else mp_raise_ValueError(MP_ERROR_TEXT("size is dp, 'fill' or 'content'"));
     return true;
 }
 
-static void box_style(lv_obj_t *o, bool row, int gap_dp)
+static void set_gap(t5ui_obj_t *o, int32_t px)
 {
-    lv_obj_remove_style_all(o);
-    lv_obj_set_size(o, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(o, row ? LV_FLEX_FLOW_ROW_WRAP : LV_FLEX_FLOW_COLUMN);
-    if (row) lv_obj_set_flex_align(o, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(o, T5_DP(gap_dp), 0);
-    lv_obj_set_scrollable(o, false);
+    t5ui_set_int(o, T5UI_P_PAD_ROW, px);
+    t5ui_set_int(o, T5UI_P_PAD_COLUMN, px);
+}
+
+/* A bare box (T5UI_BOX): no look of its own. */
+static void box_style(t5ui_obj_t *o, bool row, int gap_dp)
+{
+    t5ui_set_int(o, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(o, T5UI_P_HEIGHT, T5UI_CONTENT);
+    t5ui_set_int(o, T5UI_P_FLOW, row ? T5UI_ROW_WRAP : T5UI_COLUMN);
+    if (row) {
+        t5ui_set_int(o, T5UI_P_PLACE_MAIN, T5UI_PLACE_START);
+        t5ui_set_int(o, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
+        t5ui_set_int(o, T5UI_P_PLACE_TRACK, T5UI_PLACE_CENTER);
+    }
+    set_gap(o, t5ui_dp(gap_dp));
+    t5ui_set_int(o, T5UI_P_SCROLLABLE, false);
+}
+
+/* A list row that reacts to taps: clickable, with Material ink. */
+static void row_clickable(t5ui_obj_t *r)
+{
+    t5ui_set_int(r, T5UI_P_CLICKABLE, true);
+    t5ui_set_int(r, T5UI_P_RIPPLE, true);
+}
+
+/* A text field: t5ui sends its taps, value changes, focus and disabled
+ * state to its text area, so the field itself is the widget's inner part. */
+static t5ui_obj_t *field_ta(t5ui_obj_t *f)
+{
+    return f;
 }
 
 /* ---- screen --------------------------------------------------------------------------------- */
@@ -306,22 +332,24 @@ static mp_obj_t ui_screen(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     const char *title = a[A_title].u_obj == mp_const_none ? NULL : mp_obj_str_get_str(a[A_title].u_obj);
     py_widget_t *w = new_widget(K_BOX, MP_OBJ_NULL);
     py_ui_lock();
-    if (vm->ui_root) lv_obj_delete(vm->ui_root);
-    lv_obj_t *root = lv_obj_create(vm->cfg.ui_parent);
-    lv_obj_remove_style_all(root);
-    lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(root, md_color(md_scheme()->c.background), 0);
-    lv_obj_t *body = root;
+    if (vm->ui_root) t5ui_delete(vm->ui_root);
+    t5ui_obj_t *root = t5ui_create(t5ui_sys_obj(vm->cfg.ui_parent), T5UI_BOX);
+    t5ui_set_int(root, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(root, T5UI_P_HEIGHT, T5UI_PCT(100));
+    t5ui_set_int(root, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+    t5ui_set_color(root, T5UI_P_BG_COLOR, t5ui_theme_color(T5UI_COLOR_BACKGROUND));
+    t5ui_obj_t *body = root;
     if (title) {
-        lv_obj_set_scrollable(root, false);
-        lv_obj_t *page = md_page_create(root, title, back_cb, tag(0xffff), NULL);
-        body = md_page_body(page);
+        t5ui_set_int(root, T5UI_P_SCROLLABLE, false);
+        t5ui_obj_t *page = t5ui_create(root, T5UI_MD_PAGE);
+        t5ui_set_str(page, T5UI_P_TITLE, title);
+        t5ui_on(page, T5UI_EV_BACK, back_cb, tag(0xffff));
+        body = t5ui_get_obj(page, T5UI_P_CONTENT);
     }
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(body, T5_DP(16), 0);
-    lv_obj_set_style_pad_gap(body, T5_DP(8), 0);
-    lv_obj_set_scrollable(body, a[A_scroll].u_bool);
+    t5ui_set_int(body, T5UI_P_FLOW, T5UI_COLUMN);
+    t5ui_set_int(body, T5UI_P_PAD_ALL, t5ui_dp(16));
+    set_gap(body, t5ui_dp(8));
+    t5ui_set_int(body, T5UI_P_SCROLLABLE, a[A_scroll].u_bool);
     vm->ui_root = root;
     vm->ui_used = true;
     attach(w, root, NULL);
@@ -332,15 +360,15 @@ static mp_obj_t ui_screen(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
 static MP_DEFINE_CONST_FUN_OBJ_KW(ui_screen_obj, 0, ui_screen);
 
 /* ---- children (container methods) ------------------------------------------------------------ */
-static lv_obj_t *parent_of(py_widget_t *p)
+static t5ui_obj_t *parent_of(py_widget_t *p)
 {
-    lv_obj_t *o = p->inner ? p->inner : p->obj;
+    t5ui_obj_t *o = p->inner ? p->inner : p->obj;
     return o;
 }
 
 #define LOCK_PARENT(p, par)                  \
     py_ui_lock();                            \
-    lv_obj_t *par = (p)->obj ? parent_of(p) : NULL; \
+    t5ui_obj_t *par = (p)->obj ? parent_of(p) : NULL; \
     if (!par) {                              \
         py_ui_unlock();                      \
         raise_deleted();                     \
@@ -360,16 +388,18 @@ static mp_obj_t c_label(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     mp_arg_parse_all(n_args, pos, kw, MP_ARRAY_SIZE(allowed), allowed, a);
     py_widget_t *p = widget(a[A_self].u_obj);
     const char *text = text_arg(a[A_text].u_obj);
-    md_type_role_t role = role_arg(a[A_role].u_obj);
+    t5ui_text_t role = role_arg(a[A_role].u_obj);
     bool has_color = a[A_color].u_obj != mp_const_none;
-    md_rgb_t color = has_color ? color_arg(a[A_color].u_obj) : 0;
+    t5ui_color_t color = has_color ? color_arg(a[A_color].u_obj) : 0;
     py_widget_t *w = new_widget(K_LABEL, a[A_fn].u_obj);
     LOCK_PARENT(p, par);
-    lv_obj_t *l = md_label_create(par, text, role);
-    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_style_max_width(l, LV_PCT(100), 0);
-    if (has_color) lv_obj_set_style_text_color(l, md_color(color), 0);
-    if (w->on_click != mp_const_none) lv_obj_set_clickable(l, true);
+    t5ui_obj_t *l = t5ui_create(par, T5UI_MD_TEXT);
+    t5ui_set_int(l, T5UI_P_TEXT_STYLE, role);
+    t5ui_set_str(l, T5UI_P_TEXT, text);
+    t5ui_set_int(l, T5UI_P_LONG_MODE, T5UI_LONG_WRAP);
+    t5ui_set_int(l, T5UI_P_MAX_WIDTH, T5UI_PCT(100));
+    if (has_color) t5ui_set_color(l, T5UI_P_TEXT_COLOR, color);
+    if (w->on_click != mp_const_none) t5ui_set_int(l, T5UI_P_CLICKABLE, true);
     attach(w, l, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
@@ -390,13 +420,14 @@ static mp_obj_t c_button(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     py_widget_t *p = widget(a[A_self].u_obj);
     const char *text = mp_obj_str_get_str(a[A_text].u_obj);
     const char *v = mp_obj_str_get_str(a[A_variant].u_obj);
-    md_button_variant_t var = !strcmp(v, "text") ? MD_BUTTON_TEXT : !strcmp(v, "outlined") ? MD_BUTTON_OUTLINED
-                                                                                           : MD_BUTTON_CONTAINED;
+    t5ui_kind_t var = !strcmp(v, "text") ? T5UI_MD_BUTTON_TEXT : !strcmp(v, "outlined") ? T5UI_MD_BUTTON_OUTLINED
+                                                                                       : T5UI_MD_BUTTON_CONTAINED;
     py_widget_t *w = new_widget(K_BUTTON, a[A_fn].u_obj);
     LOCK_PARENT(p, par);
-    lv_obj_t *b = md_button_create(par, text, var);
+    t5ui_obj_t *b = t5ui_create(par, var);
+    t5ui_set_str(b, T5UI_P_TEXT, text);
     attach(w, b, NULL);
-    w->inner = lv_obj_get_child(b, 0);
+    w->inner = t5ui_child(b, 0);       /* its label */
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
 }
@@ -414,7 +445,9 @@ static mp_obj_t c_switch(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     py_widget_t *p = widget(a[0].u_obj);
     py_widget_t *w = new_widget(K_SWITCH, a[2].u_obj);
     LOCK_PARENT(p, par);
-    attach(w, md_switch_create(par, a[1].u_bool), NULL);
+    t5ui_obj_t *s = t5ui_create(par, T5UI_MD_SWITCH);
+    if (a[1].u_bool) t5ui_set_int(s, T5UI_P_CHECKED, true);
+    attach(w, s, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
 }
@@ -434,8 +467,18 @@ static mp_obj_t c_slider(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     py_widget_t *p = widget(a[0].u_obj);
     py_widget_t *w = new_widget(K_SLIDER, a[4].u_obj);
     LOCK_PARENT(p, par);
-    lv_obj_t *s = md_slider_create(par, (int32_t)a[1].u_int, (int32_t)a[2].u_int, (int32_t)a[3].u_int);
-    lv_obj_set_width(s, LV_PCT(100));
+    int32_t lo = (int32_t)a[1].u_int, hi = (int32_t)a[2].u_int;
+    t5ui_obj_t *s = t5ui_create(par, T5UI_MD_SLIDER);   /* 0..100 */
+    /* The range one end at a time, never crossing the other end. */
+    if (lo > 100) {
+        t5ui_set_int(s, T5UI_P_MAX, hi);
+        t5ui_set_int(s, T5UI_P_MIN, lo);
+    } else {
+        t5ui_set_int(s, T5UI_P_MIN, lo);
+        t5ui_set_int(s, T5UI_P_MAX, hi);
+    }
+    t5ui_set_int(s, T5UI_P_VALUE, (int32_t)a[3].u_int);
+    t5ui_set_int(s, T5UI_P_WIDTH, T5UI_PCT(100));
     attach(w, s, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
@@ -456,7 +499,10 @@ static mp_obj_t c_checkbox(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     const char *text = mp_obj_str_get_str(a[1].u_obj);
     py_widget_t *w = new_widget(K_CHECK, a[3].u_obj);
     LOCK_PARENT(p, par);
-    attach(w, md_checkbox_create(par, text, a[2].u_bool), NULL);
+    t5ui_obj_t *c = t5ui_create(par, T5UI_MD_CHECKBOX);
+    t5ui_set_str(c, T5UI_P_TEXT, text);
+    if (a[2].u_bool) t5ui_set_int(c, T5UI_P_CHECKED, true);
+    attach(w, c, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
 }
@@ -478,10 +524,11 @@ static mp_obj_t c_textfield(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     const char *text = mp_obj_str_get_str(a[2].u_obj);
     py_widget_t *w = new_widget(K_FIELD, a[4].u_obj);
     LOCK_PARENT(p, par);
-    lv_obj_t *f = md_textfield_create(par, label, a[3].u_bool);
-    lv_obj_set_width(f, LV_PCT(100));
-    if (text[0]) md_textfield_set_text(f, text);
-    lv_obj_t *ta = md_textfield_ta(f);
+    t5ui_obj_t *f = t5ui_create(par, a[3].u_bool ? T5UI_MD_PASSWORD : T5UI_MD_TEXTFIELD);
+    t5ui_set_str(f, T5UI_P_PLACEHOLDER, label);
+    t5ui_set_int(f, T5UI_P_WIDTH, T5UI_PCT(100));
+    if (text[0]) t5ui_set_str(f, T5UI_P_TEXT, text);
+    t5ui_obj_t *ta = field_ta(f);
     attach(w, f, ta);
     w->inner = ta;
     py_ui_unlock();
@@ -506,8 +553,16 @@ static mp_obj_t c_item(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     const char *icon = icon_arg(a[3].u_obj);
     py_widget_t *w = new_widget(K_ITEM, a[4].u_obj);
     LOCK_PARENT(p, par);
-    lv_obj_t *r = md_row_create(par, icon, t1, t2);
-    if (w->on_click != mp_const_none) md_row_set_clickable(r, NULL, NULL);
+    t5ui_obj_t *r = t5ui_create(par, T5UI_MD_ROW);
+    if (icon) t5ui_set_str(r, T5UI_P_ICON, icon);
+    t5ui_set_str(r, T5UI_P_TEXT, t1);
+    if (t2) {
+        t5ui_set_str(r, T5UI_P_SECONDARY, t2);
+        /* Two lines, growing when the second wraps (as made with both). */
+        t5ui_set_int(r, T5UI_P_HEIGHT, T5UI_CONTENT);
+        t5ui_set_int(r, T5UI_P_MIN_HEIGHT, t5ui_dp(64));
+    }
+    if (w->on_click != mp_const_none) row_clickable(r);
     attach(w, r, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
@@ -520,7 +575,9 @@ static mp_obj_t c_section(mp_obj_t self, mp_obj_t title)
     const char *t = mp_obj_str_get_str(title);
     py_widget_t *w = new_widget(K_SECTION, MP_OBJ_NULL);
     LOCK_PARENT(p, par);
-    attach(w, md_section_create(par, t), NULL);
+    t5ui_obj_t *s = t5ui_create(par, T5UI_MD_SECTION);
+    t5ui_set_str(s, T5UI_P_TEXT, t);
+    attach(w, s, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
 }
@@ -531,7 +588,7 @@ static mp_obj_t c_divider(mp_obj_t self)
     py_widget_t *p = widget(self);
     py_widget_t *w = new_widget(K_DIVIDER, MP_OBJ_NULL);
     LOCK_PARENT(p, par);
-    attach(w, md_divider_create(par), NULL);
+    attach(w, t5ui_create(par, T5UI_MD_DIVIDER), NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
 }
@@ -551,12 +608,14 @@ static mp_obj_t c_icon(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     py_widget_t *p = widget(a[0].u_obj);
     const char *g = icon_arg(a[1].u_obj);
     bool has_color = a[3].u_obj != mp_const_none;
-    md_rgb_t color = has_color ? color_arg(a[3].u_obj) : 0;
+    t5ui_color_t color = has_color ? color_arg(a[3].u_obj) : 0;
     py_widget_t *w = new_widget(K_ICON, a[4].u_obj);
     LOCK_PARENT(p, par);
-    lv_obj_t *l = md_icon_create(par, g, (int)a[2].u_int);
-    if (has_color) lv_obj_set_style_text_color(l, md_color(color), 0);
-    if (w->on_click != mp_const_none) lv_obj_set_clickable(l, true);
+    t5ui_obj_t *l = t5ui_create(par, T5UI_MD_ICON);
+    t5ui_set_int(l, T5UI_P_ICON_SIZE, (int32_t)a[2].u_int);
+    t5ui_set_str(l, T5UI_P_ICON, g);
+    if (has_color) t5ui_set_color(l, T5UI_P_TEXT_COLOR, color);
+    if (w->on_click != mp_const_none) t5ui_set_int(l, T5UI_P_CLICKABLE, true);
     attach(w, l, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
@@ -568,19 +627,20 @@ static mp_obj_t make_box(mp_obj_t self, bool row, bool card, int gap, mp_obj_t f
     py_widget_t *p = widget(self);
     py_widget_t *w = new_widget(K_BOX, fn);
     LOCK_PARENT(p, par);
-    lv_obj_t *o;
+    t5ui_obj_t *o;
     if (card) {
-        o = md_card_create(par);
-        lv_obj_set_size(o, LV_PCT(100), LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(o, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_all(o, T5_DP(16), 0);
-        lv_obj_set_style_pad_gap(o, T5_DP(gap), 0);
-        lv_obj_set_scrollable(o, false);
+        o = t5ui_create(par, T5UI_MD_CARD);
+        t5ui_set_int(o, T5UI_P_WIDTH, T5UI_PCT(100));
+        t5ui_set_int(o, T5UI_P_HEIGHT, T5UI_CONTENT);
+        t5ui_set_int(o, T5UI_P_FLOW, T5UI_COLUMN);
+        t5ui_set_int(o, T5UI_P_PAD_ALL, t5ui_dp(16));
+        set_gap(o, t5ui_dp(gap));
+        t5ui_set_int(o, T5UI_P_SCROLLABLE, false);
     } else {
-        o = lv_obj_create(par);
+        o = t5ui_create(par, T5UI_BOX);
         box_style(o, row, gap);
     }
-    if (w->on_click != mp_const_none) lv_obj_set_clickable(o, true);
+    if (w->on_click != mp_const_none) t5ui_set_int(o, T5UI_P_CLICKABLE, true);
     attach(w, o, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
@@ -620,21 +680,23 @@ static mp_obj_t c_chart(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     if (points < 2 || points > 1000) mp_raise_ValueError(MP_ERROR_TEXT("points is 2..1000"));
     py_widget_t *w = new_widget(K_CHART, MP_OBJ_NULL);
     LOCK_PARENT(p, par);
-    lv_obj_t *c = lv_chart_create(par);
-    lv_obj_set_size(c, LV_PCT(100), T5_DP(a[4].u_int));
-    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(c, 0, 0);
-    lv_obj_set_style_line_color(c, md_color(md_scheme()->c.on_surface), LV_PART_MAIN);
-    lv_obj_set_style_line_opa(c, md_scheme()->on_surface.divider, LV_PART_MAIN);
-    lv_obj_set_style_size(c, 0, 0, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(c, T5_DP(1), LV_PART_ITEMS);
-    lv_chart_set_type(c, LV_CHART_TYPE_LINE);
-    lv_chart_set_point_count(c, (uint32_t)points);
-    lv_chart_set_axis_range(c, LV_CHART_AXIS_PRIMARY_Y, (int32_t)a[2].u_int, (int32_t)a[3].u_int);
-    lv_chart_set_div_line_count(c, 5, 0);
-    lv_chart_set_update_mode(c, LV_CHART_UPDATE_MODE_SHIFT);
-    w->ser = lv_chart_add_series(c, md_color(md_scheme()->c.secondary), LV_CHART_AXIS_PRIMARY_Y);
-    lv_chart_set_all_values(c, w->ser, LV_CHART_POINT_NONE);
+    t5ui_obj_t *c = t5ui_create(par, T5UI_CHART);   /* shifting, no dots on the line */
+    t5ui_set_int(c, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(c, T5UI_P_HEIGHT, t5ui_dp((int32_t)a[4].u_int));
+    t5ui_set_int(c, T5UI_P_BG_OPA, T5UI_OPA_TRANSP);
+    t5ui_set_int(c, T5UI_P_BORDER_WIDTH, 0);
+    t5ui_set_color(c, T5UI_P_LINE_COLOR, t5ui_theme_color(T5UI_COLOR_ON_SURFACE));
+    t5ui_set_int(c, T5UI_P_LINE_OPA, t5ui_theme_emphasis(T5UI_EMPHASIS_DIVIDER));
+    t5ui_set_int_at(c, T5UI_P_LINE_WIDTH, T5UI_AT(T5UI_PART_ITEMS, T5UI_STATE_DEFAULT), t5ui_dp(1));
+    t5ui_set_int(c, T5UI_P_CHART_TYPE, T5UI_CHART_LINE);
+    t5ui_set_int(c, T5UI_P_COUNT, (int32_t)points);
+    t5ui_set_int(c, T5UI_P_MIN, (int32_t)a[2].u_int);
+    t5ui_set_int(c, T5UI_P_MAX, (int32_t)a[3].u_int);
+    t5ui_set_int(c, T5UI_P_CHART_GRID_ROWS, 5);
+    t5ui_set_int(c, T5UI_P_CHART_GRID_COLUMNS, 0);
+    int32_t ser = t5ui_cmd(c, T5UI_CMD_CHART_ADD_SERIES, (int32_t)t5ui_theme_color(T5UI_COLOR_SECONDARY), 0, 0, NULL);
+    w->ser = (int16_t)(ser >= 0 ? ser : -1);
+    if (ser >= 0) t5ui_cmd(c, T5UI_CMD_CHART_SET_ALL, ser, T5UI_CHART_NONE, 0, NULL);
     attach(w, c, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
@@ -647,11 +709,12 @@ static mp_obj_t c_progress(size_t n, const mp_obj_t *args)
     int32_t v = n > 1 ? (int32_t)mp_obj_get_int(args[1]) : 0;
     py_widget_t *w = new_widget(K_BAR, MP_OBJ_NULL);
     LOCK_PARENT(p, par);
-    lv_obj_t *b = lv_bar_create(par);
-    lv_obj_set_size(b, LV_PCT(100), T5_DP(4));
-    lv_bar_set_range(b, 0, 100);
-    lv_bar_set_value(b, v, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(b, md_color(md_scheme()->c.primary), LV_PART_INDICATOR);
+    t5ui_obj_t *b = t5ui_create(par, T5UI_BAR);   /* the indicator in the theme's primary */
+    t5ui_set_int(b, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(b, T5UI_P_HEIGHT, t5ui_dp(4));
+    t5ui_set_int(b, T5UI_P_MIN, 0);
+    t5ui_set_int(b, T5UI_P_MAX, 100);
+    t5ui_set_int(b, T5UI_P_VALUE, v);
     attach(w, b, NULL);
     py_ui_unlock();
     return MP_OBJ_FROM_PTR(w);
@@ -672,11 +735,11 @@ static mp_obj_t w_set_text(mp_obj_t self, mp_obj_t text)
     const char *t = text_arg(text);
     LOCK_W(w);
     switch (w->kind) {
-    case K_LABEL: lv_label_set_text(w->obj, t); break;
-    case K_BUTTON: if (w->inner) lv_label_set_text(w->inner, t); break;
-    case K_FIELD: md_textfield_set_text(w->obj, t); break;
-    case K_ITEM: md_row_set_text(w->obj, t); break;
-    case K_CHECK: lv_checkbox_set_text(w->obj, t); break;
+    case K_LABEL:
+    case K_FIELD:
+    case K_ITEM:
+    case K_CHECK: t5ui_set_str(w->obj, T5UI_P_TEXT, t); break;
+    case K_BUTTON: if (w->inner) t5ui_set_str(w->inner, T5UI_P_TEXT, t); break;
     default: break;
     }
     py_ui_unlock();
@@ -692,10 +755,10 @@ static mp_obj_t w_text(mp_obj_t self)
     LOCK_W(w);
     const char *t = NULL;
     switch (w->kind) {
-    case K_LABEL: t = lv_label_get_text(w->obj); break;
-    case K_BUTTON: t = w->inner ? lv_label_get_text(w->inner) : NULL; break;
-    case K_FIELD: t = md_textfield_text(w->obj); break;
-    case K_CHECK: t = lv_checkbox_get_text(w->obj); break;
+    case K_LABEL:
+    case K_FIELD:
+    case K_CHECK: t = t5ui_get_str(w->obj, T5UI_P_TEXT, NULL); break;
+    case K_BUTTON: t = w->inner ? t5ui_get_str(w->inner, T5UI_P_TEXT, NULL) : NULL; break;
     default: break;
     }
     if (t) snprintf(buf, sizeof buf, "%s", t);
@@ -709,7 +772,7 @@ static mp_obj_t w_set_secondary(mp_obj_t self, mp_obj_t text)
     py_widget_t *w = widget(self);
     const char *t = mp_obj_str_get_str(text);
     LOCK_W(w);
-    if (w->kind == K_ITEM) md_row_set_secondary(w->obj, t);
+    if (w->kind == K_ITEM) t5ui_set_str(w->obj, T5UI_P_SECONDARY, t);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -724,9 +787,9 @@ static mp_obj_t w_value(mp_obj_t self)
     LOCK_W(w);
     switch (w->kind) {
     case K_SWITCH:
-    case K_CHECK: v = lv_obj_has_state(w->obj, LV_STATE_CHECKED); is_bool = true; break;
-    case K_SLIDER: v = lv_slider_get_value(w->obj); break;
-    case K_BAR: v = lv_bar_get_value(w->obj); break;
+    case K_CHECK: v = t5ui_get_int(w->obj, T5UI_P_CHECKED, 0); is_bool = true; break;
+    case K_SLIDER:
+    case K_BAR: v = t5ui_get_int(w->obj, T5UI_P_VALUE, 0); break;
     default: break;
     }
     py_ui_unlock();
@@ -743,12 +806,9 @@ static mp_obj_t w_set_value(mp_obj_t self, mp_obj_t val)
     LOCK_W(w);
     switch (w->kind) {
     case K_SWITCH:
-    case K_CHECK:
-        if (v) lv_obj_add_state(w->obj, LV_STATE_CHECKED);
-        else lv_obj_remove_state(w->obj, LV_STATE_CHECKED);
-        break;
-    case K_SLIDER: lv_slider_set_value(w->obj, (int32_t)v, LV_ANIM_OFF); break;
-    case K_BAR: lv_bar_set_value(w->obj, (int32_t)v, LV_ANIM_OFF); break;
+    case K_CHECK: t5ui_set_int(w->obj, T5UI_P_CHECKED, v != 0); break;
+    case K_SLIDER:
+    case K_BAR: t5ui_set_int(w->obj, T5UI_P_VALUE, (int32_t)v); break;
     default: break;
     }
     py_ui_unlock();
@@ -760,9 +820,9 @@ static mp_obj_t w_push(mp_obj_t self, mp_obj_t val)
 {
     py_widget_t *w = widget(self);
     if (w->kind != K_CHART) mp_raise_TypeError(MP_ERROR_TEXT("push() is for charts"));
-    int32_t v = val == mp_const_none ? LV_CHART_POINT_NONE : (int32_t)mp_obj_get_float(val);
+    int32_t v = val == mp_const_none ? T5UI_CHART_NONE : (int32_t)mp_obj_get_float(val);
     LOCK_W(w);
-    lv_chart_set_next_value(w->obj, w->ser, v);
+    if (w->ser >= 0) t5ui_cmd(w->obj, T5UI_CMD_CHART_PUSH, w->ser, v, 0, NULL);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -776,15 +836,18 @@ static mp_obj_t w_set_points(mp_obj_t self, mp_obj_t seq)
     mp_obj_t *items;
     mp_obj_get_array(seq, &n, &items);
     int32_t *vals = m_new(int32_t, n ? n : 1);
-    for (size_t i = 0; i < n; i++) vals[i] = items[i] == mp_const_none ? LV_CHART_POINT_NONE : (int32_t)mp_obj_get_float(items[i]);
+    for (size_t i = 0; i < n; i++) vals[i] = items[i] == mp_const_none ? T5UI_CHART_NONE : (int32_t)mp_obj_get_float(items[i]);
     LOCK_W(w);
-    uint32_t cnt = lv_chart_get_point_count(w->obj);
-    lv_chart_set_all_values(w->obj, w->ser, LV_CHART_POINT_NONE);
-    int32_t *y = lv_chart_get_series_y_array(w->obj, w->ser);
-    uint32_t off = n < cnt ? cnt - (uint32_t)n : 0;
-    for (uint32_t i = 0; i + off < cnt && i < n; i++) y[off + i] = vals[n > cnt ? n - cnt + i : i];
-    lv_chart_set_x_start_point(w->obj, w->ser, 0);
-    lv_chart_refresh(w->obj);
+    if (w->ser >= 0) {
+        /* The newest values at the right end; older points stay empty. */
+        uint32_t cnt = (uint32_t)t5ui_get_int(w->obj, T5UI_P_COUNT, 0);
+        t5ui_cmd(w->obj, T5UI_CMD_CHART_SET_ALL, w->ser, T5UI_CHART_NONE, 0, NULL);
+        uint32_t off = n < cnt ? cnt - (uint32_t)n : 0;
+        for (uint32_t i = 0; i + off < cnt && i < n; i++) {
+            t5ui_cmd(w->obj, T5UI_CMD_CHART_SET, w->ser, (int32_t)(off + i), vals[n > cnt ? n - cnt + i : i], NULL);
+        }
+        t5ui_cmd(w->obj, T5UI_CMD_CHART_X_START, w->ser, 0, 0, NULL);
+    }
     py_ui_unlock();
     m_del(int32_t, vals, n ? n : 1);
     return mp_const_none;
@@ -797,8 +860,8 @@ static mp_obj_t w_on_click(mp_obj_t self, mp_obj_t fn)
     w->on_click = fn;
     LOCK_W(w);
     if (fn != mp_const_none) {
-        lv_obj_set_clickable(w->obj, true);
-        if (w->kind == K_ITEM) md_row_set_clickable(w->obj, NULL, NULL);
+        t5ui_set_int(w->obj, T5UI_P_CLICKABLE, true);
+        if (w->kind == K_ITEM) row_clickable(w->obj);
     }
     py_ui_unlock();
     return mp_const_none;
@@ -817,7 +880,7 @@ static mp_obj_t w_set_hidden(mp_obj_t self, mp_obj_t hide)
     py_widget_t *w = widget(self);
     bool h = mp_obj_is_true(hide);
     LOCK_W(w);
-    lv_obj_set_hidden(w->obj, h);
+    t5ui_set_int(w->obj, T5UI_P_HIDDEN, h);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -828,9 +891,8 @@ static mp_obj_t w_enable(mp_obj_t self, mp_obj_t on)
     py_widget_t *w = widget(self);
     bool e = mp_obj_is_true(on);
     LOCK_W(w);
-    lv_obj_t *o = w->kind == K_FIELD && w->inner ? w->inner : w->obj;
-    if (e) lv_obj_remove_state(o, LV_STATE_DISABLED);
-    else lv_obj_add_state(o, LV_STATE_DISABLED);
+    t5ui_obj_t *o = w->kind == K_FIELD && w->inner ? w->inner : w->obj;
+    t5ui_set_int(o, T5UI_P_DISABLED, !e);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -842,7 +904,7 @@ static mp_obj_t w_delete(mp_obj_t self)
     py_ui_lock();
     if (w->obj) {
         if (py_vm && w->obj == py_vm->ui_root) py_vm->ui_root = NULL;
-        lv_obj_delete(w->obj);       /* the DELETE event clears w->obj and the slot */
+        t5ui_delete(w->obj);         /* the DELETE event clears w->obj and the slot */
     }
     py_ui_unlock();
     return mp_const_none;
@@ -853,7 +915,7 @@ static mp_obj_t w_clear(mp_obj_t self)
 {
     py_widget_t *w = widget(self);
     LOCK_W(w);
-    lv_obj_clean(parent_of(w));
+    t5ui_clean(parent_of(w));
     py_ui_unlock();
     return mp_const_none;
 }
@@ -866,8 +928,8 @@ static mp_obj_t w_size(size_t n, const mp_obj_t *args)
     bool sw = n > 1 && size_arg(args[1], &ww);
     bool sh = n > 2 && size_arg(args[2], &hh);
     LOCK_W(w);
-    if (sw) lv_obj_set_width(w->obj, ww);
-    if (sh) lv_obj_set_height(w->obj, hh);
+    if (sw) t5ui_set_int(w->obj, T5UI_P_WIDTH, ww);
+    if (sh) t5ui_set_int(w->obj, T5UI_P_HEIGHT, hh);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -878,7 +940,7 @@ static mp_obj_t w_grow(size_t n, const mp_obj_t *args)
     py_widget_t *w = widget(args[0]);
     uint8_t g = n > 1 ? (uint8_t)mp_obj_get_int(args[1]) : 1;
     LOCK_W(w);
-    lv_obj_set_flex_grow(w->obj, g);
+    t5ui_set_int(w->obj, T5UI_P_GROW, g);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -887,11 +949,11 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(w_grow_obj, 1, 2, w_grow);
 static mp_obj_t w_color(mp_obj_t self, mp_obj_t c)
 {
     py_widget_t *w = widget(self);
-    md_rgb_t rgb = color_arg(c);
+    t5ui_color_t rgb = color_arg(c);
     LOCK_W(w);
-    if (w->kind == K_CHART && w->ser) lv_chart_set_series_color(w->obj, w->ser, md_color(rgb));
-    else if (w->kind == K_BAR) lv_obj_set_style_bg_color(w->obj, md_color(rgb), LV_PART_INDICATOR);
-    else lv_obj_set_style_text_color(w->obj, md_color(rgb), 0);
+    if (w->kind == K_CHART && w->ser >= 0) t5ui_cmd(w->obj, T5UI_CMD_CHART_COLOR, w->ser, (int32_t)rgb, 0, NULL);
+    else if (w->kind == K_BAR) t5ui_set_color_at(w->obj, T5UI_P_BG_COLOR, T5UI_AT(T5UI_PART_INDICATOR, T5UI_STATE_DEFAULT), rgb);
+    else t5ui_set_color(w->obj, T5UI_P_TEXT_COLOR, rgb);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -900,10 +962,10 @@ static MP_DEFINE_CONST_FUN_OBJ_2(w_color_obj, w_color);
 static mp_obj_t w_bg(mp_obj_t self, mp_obj_t c)
 {
     py_widget_t *w = widget(self);
-    md_rgb_t rgb = color_arg(c);
+    t5ui_color_t rgb = color_arg(c);
     LOCK_W(w);
-    lv_obj_set_style_bg_opa(w->obj, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(w->obj, md_color(rgb), 0);
+    t5ui_set_int(w->obj, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+    t5ui_set_color(w->obj, T5UI_P_BG_COLOR, rgb);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -914,10 +976,9 @@ static mp_obj_t w_focus(mp_obj_t self)
     py_widget_t *w = widget(self);
     LOCK_W(w);
     if (w->kind == K_FIELD && w->inner) {
-        lv_group_t *g = lv_group_get_default();
-        if (g) lv_group_focus_obj(w->inner);
-        lv_obj_add_state(w->inner, LV_STATE_FOCUSED);
-        t5_shell_keyboard_show(w->inner);
+        t5ui_cmd(w->inner, T5UI_CMD_FOCUS, 0, 0, 0, NULL);
+        t5ui_set_int(w->inner, T5UI_P_STATE, t5ui_get_int(w->inner, T5UI_P_STATE, 0) | T5UI_STATE_FOCUSED);
+        t5_shell_keyboard_show(t5ui_sys_native_input(w->inner));
     }
     py_ui_unlock();
     return mp_const_none;
@@ -996,7 +1057,7 @@ static mp_obj_t ui_snackbar(size_t n, const mp_obj_t *args)
     bool cb = action && n > 2 && args[2] != mp_const_none;
     if (cb) h = py_slot_put(args[2]);
     py_ui_lock();
-    md_snackbar_show(text, action, cb ? snack_cb : NULL, (void *)h);
+    t5ui_snackbar(text, action, cb ? snack_cb : NULL, (void *)h);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -1025,7 +1086,7 @@ static mp_obj_t ui_dialog(size_t n_args, const mp_obj_t *pos, mp_map_t *kw)
     const char *cancel = a[3].u_obj == mp_const_none ? NULL : mp_obj_str_get_str(a[3].u_obj);
     uintptr_t h = a[4].u_obj == mp_const_none ? 0 : py_slot_put(a[4].u_obj);
     py_ui_lock();
-    md_dialog_show(title, text, ok, cancel, h ? dialog_cb : NULL, (void *)h);
+    t5ui_dialog(title, text, ok, cancel, h ? dialog_cb : NULL, (void *)h);
     py_ui_unlock();
     return mp_const_none;
 }
@@ -1033,16 +1094,17 @@ static MP_DEFINE_CONST_FUN_OBJ_KW(ui_dialog_obj, 1, ui_dialog);
 
 static mp_obj_t ui_dp(mp_obj_t n)
 {
-    return mp_obj_new_int(T5_DP(mp_obj_get_int(n)));
+    return mp_obj_new_int(t5ui_dp(mp_obj_get_int(n)));
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(ui_dp_obj, ui_dp);
 
 static mp_obj_t ui_size(void)
 {
     py_ui_lock();
-    int32_t w = lv_display_get_horizontal_resolution(NULL), h = lv_display_get_vertical_resolution(NULL);
+    int32_t w = 0, h = 0;
+    t5ui_screen_size(&w, &h);
     py_ui_unlock();
-    mp_obj_t t[2] = { MP_OBJ_NEW_SMALL_INT(w / T5_DP(1)), MP_OBJ_NEW_SMALL_INT(h / T5_DP(1)) };
+    mp_obj_t t[2] = { MP_OBJ_NEW_SMALL_INT(w / t5ui_dp(1)), MP_OBJ_NEW_SMALL_INT(h / t5ui_dp(1)) };
     return mp_obj_new_tuple(2, t);
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(ui_size_obj, ui_size);

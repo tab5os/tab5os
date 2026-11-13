@@ -26,6 +26,8 @@
 #include "t5/shell.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
+#include "t5_gui/t5ui_icons.h"
+#include "t5_gui/t5ui_sys.h"
 #include "t5_power/power.h"
 #include "t5_ui/plane.h"
 #include "sysapps_priv.h"
@@ -50,8 +52,8 @@ typedef struct {
     void (*on_close)(void);
     bool was_fullscreen;
     /* UI task */
-    lv_obj_t *root, *view, *msg, *top, *bar, *play, *slider, *pos_lbl, *dur_lbl;
-    lv_timer_t *timer;
+    t5ui_obj_t *root, *view, *msg, *top, *bar, *play, *slider, *pos_lbl, *dur_lbl;
+    t5ui_timer_t *timer;
     uint32_t touched_ms, away_ms;
     bool controls, dragging, ready_seen;
     t5_wakelock_t *lock;
@@ -658,14 +660,16 @@ static void show_controls(video_t *v, bool on)
 {
     v->controls = on;
     v->touched_ms = t5_time_ms();
-    lv_obj_set_hidden(v->top, !on);
-    if (v->state == ST_PLAYING || v->state == ST_READY) lv_obj_set_hidden(v->bar, !on);
+    t5ui_set_int(v->top, T5UI_P_HIDDEN, !on);
+    if (v->state == ST_PLAYING || v->state == ST_READY) t5ui_set_int(v->bar, T5UI_P_HIDDEN, !on);
 }
 
 /* The plane: the video scaled to fit (in 1/16 steps) and centred. */
 static void make_view(video_t *v)
 {
-    int32_t rw = lv_obj_get_width(v->root), rh = lv_obj_get_height(v->root);
+    t5ui_rect_t rc;
+    t5ui_coords(v->root, &rc);
+    int32_t rw = rc.x2 - rc.x1 + 1, rh = rc.y2 - rc.y1 + 1;
     if (rw < 16 || rh < 16 || !v->jw) return;
     int k = (int)(16 * rw / v->jw);
     int ky = (int)(16 * rh / v->jh);
@@ -676,13 +680,16 @@ static void make_view(video_t *v)
     if (pw < 1 || ph < 1) return;
     t5_plane_t *p = t5_plane_new(pw, ph);
     if (!p) return;
-    lv_obj_t *view = t5_ui_plane_create(v->root, p);
+    /* The plane's view is platform code's: an object of its own, taken in here. */
+    t5ui_obj_t *view = t5ui_sys_obj(t5_ui_plane_create(t5ui_sys_native(v->root), p));
     if (!view) {
         t5_plane_release(p);
         return;
     }
-    lv_obj_center(view);
-    lv_obj_move_background(view);     /* under the controls */
+    t5ui_set_int(view, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
+    t5ui_set_int(view, T5UI_P_X, 0);
+    t5ui_set_int(view, T5UI_P_Y, 0);
+    t5ui_move_to(view, 0);            /* under the controls */
     t5_mutex_lock(v->mx);
     t5_plane_t *old = v->plane;
     v->plane = p;
@@ -691,35 +698,43 @@ static void make_view(video_t *v)
     v->ph = ph;
     t5_mutex_unlock(v->mx);
     t5_plane_release(old);
-    if (v->view) lv_obj_delete(v->view);
+    if (v->view) t5ui_delete(v->view);
     v->view = view;
     /* A new plane starts black: put the current frame back up. */
     if (old && v->state == ST_PLAYING) v->seek_ms = (int32_t)v->pos_ms;
 }
 
-static void resized(lv_event_t *e)
+static void resized(t5ui_event_t *e)
 {
-    video_t *v = lv_event_get_user_data(e);
+    video_t *v = t5ui_event_user(e);
     if (v->plane) make_view(v);
 }
 
 static void paint_play(video_t *v)
 {
-    lv_obj_t *icon = lv_obj_get_child(v->play, 0);
-    const char *want = v->paused || v->ended ? MD_ICON_PLAY_ARROW : MD_ICON_PAUSE;
+    t5ui_obj_t *icon = t5ui_child(v->play, 0);
+    const char *want = v->paused || v->ended ? T5UI_ICON_PLAY_ARROW : T5UI_ICON_PAUSE;
     sa_set_text(icon, want);
 }
 
-static void tick(lv_timer_t *t)
+/* The screen obj is on: its topmost ancestor. */
+static t5ui_obj_t *screen_of(t5ui_obj_t *o)
 {
-    video_t *v = lv_timer_get_user_data(t);
+    for (t5ui_obj_t *up; (up = t5ui_parent(o));) o = up;
+    return o;
+}
+
+static void tick(t5ui_timer_t *t, void *user)
+{
+    (void)t;
+    video_t *v = user;
     if (v->state == ST_ERROR) {
         char m[160];
         snprintf(m, sizeof m, "Can't play this video. %s", v->err);
         sa_set_text(v->msg, m);
-        lv_obj_set_hidden(v->msg, false);
-        lv_obj_set_hidden(v->bar, true);
-        lv_obj_set_hidden(v->top, false);
+        t5ui_set_int(v->msg, T5UI_P_HIDDEN, false);
+        t5ui_set_int(v->bar, T5UI_P_HIDDEN, true);
+        t5ui_set_int(v->top, T5UI_P_HIDDEN, false);
         if (v->lock) t5_wakelock_release(v->lock);
         v->lock = NULL;
         return;
@@ -732,18 +747,19 @@ static void tick(lv_timer_t *t)
             v->state = ST_ERROR;
             return;
         }
-        lv_obj_set_hidden(v->msg, true);
-        lv_slider_set_range(v->slider, 0, v->dur_ms ? (int32_t)v->dur_ms : 1);
+        t5ui_set_int(v->msg, T5UI_P_HIDDEN, true);
+        t5ui_set_int(v->slider, T5UI_P_MIN, 0);
+        t5ui_set_int(v->slider, T5UI_P_MAX, v->dur_ms ? (int32_t)v->dur_ms : 1);
         char b[16];
         fmt_time(b, sizeof b, v->dur_ms);
-        lv_label_set_text(v->dur_lbl, b);
+        t5ui_set_str(v->dur_lbl, T5UI_P_TEXT, b);
         show_controls(v, true);
-        if (v->note[0]) md_snackbar_show(v->note, NULL, NULL, NULL);
+        if (v->note[0]) t5ui_snackbar(v->note, NULL, NULL, NULL);
     }
     if (!v->ready_seen) return;
     /* Off screen for a second (the app went to the background, not just a
      * screen animation): pause. */
-    if (lv_obj_get_screen(v->root) != lv_screen_active()) {
+    if (screen_of(v->root) != t5ui_sys_layer(T5UI_LAYER_SCREEN)) {
         if (!v->away_ms) v->away_ms = t5_time_ms() | 1;
         else if (t5_time_ms() - v->away_ms > 1000) v->paused = true;
     } else {
@@ -757,7 +773,7 @@ static void tick(lv_timer_t *t)
     }
     paint_play(v);
     if (!v->dragging) {
-        lv_slider_set_value(v->slider, (int32_t)v->pos_ms, LV_ANIM_OFF);
+        t5ui_set_int(v->slider, T5UI_P_VALUE, (int32_t)v->pos_ms);
         char b[16];
         fmt_time(b, sizeof b, v->pos_ms);
         sa_set_text(v->pos_lbl, b);
@@ -766,16 +782,16 @@ static void tick(lv_timer_t *t)
     if (!playing && !v->controls) show_controls(v, true);
 }
 
-static void root_clicked(lv_event_t *e)
+static void root_clicked(t5ui_event_t *e)
 {
-    video_t *v = lv_event_get_user_data(e);
+    video_t *v = t5ui_event_user(e);
     /* Until it plays, back stays in reach. */
     if (v->ready_seen && v->state != ST_ERROR) show_controls(v, !v->controls);
 }
 
-static void play_clicked(lv_event_t *e)
+static void play_clicked(t5ui_event_t *e)
 {
-    video_t *v = lv_event_get_user_data(e);
+    video_t *v = t5ui_event_user(e);
     if (v->ended) {
         v->seek_ms = 0;
         v->ended = false;
@@ -787,20 +803,20 @@ static void play_clicked(lv_event_t *e)
     paint_play(v);
 }
 
-static void slider_event(lv_event_t *e)
+static void slider_event(t5ui_event_t *e)
 {
-    video_t *v = lv_event_get_user_data(e);
-    lv_event_code_t c = lv_event_get_code(e);
-    int32_t ms = lv_slider_get_value(v->slider);
+    video_t *v = t5ui_event_user(e);
+    t5ui_ev_t c = t5ui_event_kind(e);
+    int32_t ms = t5ui_get_int(v->slider, T5UI_P_VALUE, 0);
     v->touched_ms = t5_time_ms();
-    if (c == LV_EVENT_PRESSED) {
+    if (c == T5UI_EV_PRESS) {
         v->dragging = true;
-    } else if (c == LV_EVENT_VALUE_CHANGED) {
+    } else if (c == T5UI_EV_VALUE) {
         v->seek_ms = ms;                  /* the worker shows the newest */
         char b[16];
         fmt_time(b, sizeof b, (uint32_t)ms);
         sa_set_text(v->pos_lbl, b);
-    } else if (c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST) {
+    } else if (c == T5UI_EV_RELEASE || c == T5UI_EV_PRESS_LOST) {
         v->dragging = false;
         v->seek_ms = ms;
         v->pos_ms = (uint32_t)ms;
@@ -811,102 +827,116 @@ static void slider_event(lv_event_t *e)
     }
 }
 
-static void close_clicked(lv_event_t *e)
+static void close_clicked(t5ui_event_t *e)
 {
     (void)e;
     sa_video_close();
 }
 
-static lv_obj_t *round_button(lv_obj_t *parent, const char *icon, lv_event_cb_t cb, void *ud)
+static t5ui_obj_t *round_button(t5ui_obj_t *parent, const char *icon, t5ui_event_cb_t cb, void *ud)
 {
-    lv_obj_t *b = lv_button_create(parent);
-    lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, T5_DP(44), T5_DP(44));
-    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(b, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_50, 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_80, LV_STATE_PRESSED);
-    lv_obj_t *l = md_icon_create(b, icon, MD_ICON_DP);
-    lv_obj_set_style_text_color(l, lv_color_white(), 0);
-    lv_obj_center(l);
-    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
+    t5ui_obj_t *b = t5ui_create(parent, T5UI_BUTTON);
+    t5ui_style_clear(b);
+    t5ui_set_int(b, T5UI_P_WIDTH, t5ui_dp(44));
+    t5ui_set_int(b, T5UI_P_HEIGHT, t5ui_dp(44));
+    t5ui_set_int(b, T5UI_P_RADIUS, T5UI_RADIUS_CIRCLE);
+    t5ui_set_color(b, T5UI_P_BG_COLOR, 0x000000);
+    t5ui_set_int(b, T5UI_P_BG_OPA, 127);                                         /* 50% */
+    t5ui_set_int_at(b, T5UI_P_BG_OPA, T5UI_AT(T5UI_PART_MAIN, T5UI_STATE_PRESSED), 204);   /* 80% */
+    t5ui_obj_t *l = t5ui_create(b, T5UI_MD_ICON);
+    t5ui_set_str(l, T5UI_P_ICON, icon);
+    t5ui_set_color(l, T5UI_P_TEXT_COLOR, 0xffffff);
+    t5ui_set_int(l, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
+    t5ui_on(b, T5UI_EV_CLICK, cb, ud);
     return b;
 }
 
-static lv_obj_t *white_label(lv_obj_t *parent, const char *text, md_type_role_t type)
+static t5ui_obj_t *white_label(t5ui_obj_t *parent, const char *text, t5ui_text_t type)
 {
-    lv_obj_t *l = md_label_create(parent, text, type);
-    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    t5ui_obj_t *l = t5ui_create(parent, T5UI_MD_TEXT);
+    t5ui_set_int(l, T5UI_P_TEXT_STYLE, type);
+    t5ui_set_str(l, T5UI_P_TEXT, text);
+    t5ui_set_color(l, T5UI_P_TEXT_COLOR, 0xffffff);
     return l;
 }
 
-static void build(video_t *v, lv_obj_t *screen)
+static void build(video_t *v, t5ui_obj_t *screen)
 {
-    v->root = lv_obj_create(screen);
-    lv_obj_remove_style_all(v->root);
-    lv_obj_set_ignore_layout(v->root, true);
-    lv_obj_set_size(v->root, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(v->root, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(v->root, LV_OPA_COVER, 0);
-    lv_obj_set_scrollable(v->root, false);
-    lv_obj_set_clickable(v->root, true);
-    lv_obj_add_event_cb(v->root, root_clicked, LV_EVENT_CLICKED, v);
+    v->root = t5ui_create(screen, T5UI_BOX);
+    t5ui_set_int(v->root, T5UI_P_FLOATING, true);
+    t5ui_set_int(v->root, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(v->root, T5UI_P_HEIGHT, T5UI_PCT(100));
+    t5ui_set_color(v->root, T5UI_P_BG_COLOR, 0x000000);
+    t5ui_set_int(v->root, T5UI_P_BG_OPA, T5UI_OPA_COVER);
+    t5ui_set_int(v->root, T5UI_P_SCROLLABLE, false);
+    t5ui_set_int(v->root, T5UI_P_CLICKABLE, true);
+    t5ui_on(v->root, T5UI_EV_CLICK, root_clicked, v);
 
-    v->msg = white_label(v->root, "Opening...", MD_TYPE_BODY1);
-    lv_obj_set_width(v->msg, LV_PCT(80));
-    lv_obj_set_style_text_align(v->msg, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(v->msg);
+    v->msg = white_label(v->root, "Opening...", T5UI_TEXT_BODY1);
+    t5ui_set_int(v->msg, T5UI_P_WIDTH, T5UI_PCT(80));
+    t5ui_set_int(v->msg, T5UI_P_TEXT_ALIGN, T5UI_TEXT_CENTER);
+    t5ui_set_int(v->msg, T5UI_P_ALIGN, T5UI_ALIGN_CENTER);
 
     /* Top: back and the file's name. Plain containers draw nothing, so only
      * the button and the caption are redrawn over each frame. */
-    v->top = lv_obj_create(v->root);
-    lv_obj_remove_style_all(v->top);
-    lv_obj_set_size(v->top, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_all(v->top, T5_DP(12), 0);
-    lv_obj_set_style_pad_column(v->top, T5_DP(12), 0);
-    lv_obj_set_flex_flow(v->top, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(v->top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_scrollable(v->top, false);
-    lv_obj_set_clickable(v->top, false);
-    round_button(v->top, MD_ICON_ARROW_BACK, close_clicked, v);
+    v->top = t5ui_create(v->root, T5UI_BOX);
+    t5ui_set_int(v->top, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(v->top, T5UI_P_HEIGHT, T5UI_CONTENT);
+    t5ui_set_int(v->top, T5UI_P_PAD_ALL, t5ui_dp(12));
+    t5ui_set_int(v->top, T5UI_P_PAD_COLUMN, t5ui_dp(12));
+    t5ui_set_int(v->top, T5UI_P_FLOW, T5UI_ROW);
+    t5ui_set_int(v->top, T5UI_P_PLACE_MAIN, T5UI_PLACE_START);
+    t5ui_set_int(v->top, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
+    t5ui_set_int(v->top, T5UI_P_PLACE_TRACK, T5UI_PLACE_CENTER);
+    t5ui_set_int(v->top, T5UI_P_SCROLLABLE, false);
+    t5ui_set_int(v->top, T5UI_P_CLICKABLE, false);
+    round_button(v->top, T5UI_ICON_ARROW_BACK, close_clicked, v);
     const char *name = strrchr(v->path, '/');
-    lv_obj_t *title = white_label(v->top, name ? name + 1 : v->path, MD_TYPE_SUBTITLE1);
-    lv_obj_set_style_bg_color(title, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(title, LV_OPA_50, 0);
-    lv_obj_set_style_radius(title, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_hor(title, T5_DP(12), 0);
-    lv_obj_set_style_pad_ver(title, T5_DP(4), 0);
-    lv_label_set_long_mode(title, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_flex_grow(title, 0);
-    lv_obj_set_style_max_width(title, LV_PCT(70), 0);
+    t5ui_obj_t *title = white_label(v->top, name ? name + 1 : v->path, T5UI_TEXT_SUBTITLE1);
+    t5ui_set_color(title, T5UI_P_BG_COLOR, 0x000000);
+    t5ui_set_int(title, T5UI_P_BG_OPA, 127);                     /* 50% */
+    t5ui_set_int(title, T5UI_P_RADIUS, T5UI_RADIUS_CIRCLE);
+    t5ui_set_int(title, T5UI_P_PAD_LEFT, t5ui_dp(12));
+    t5ui_set_int(title, T5UI_P_PAD_RIGHT, t5ui_dp(12));
+    t5ui_set_int(title, T5UI_P_PAD_TOP, t5ui_dp(4));
+    t5ui_set_int(title, T5UI_P_PAD_BOTTOM, t5ui_dp(4));
+    t5ui_set_int(title, T5UI_P_LONG_MODE, T5UI_LONG_DOTS);
+    t5ui_set_int(title, T5UI_P_GROW, 0);
+    t5ui_set_int(title, T5UI_P_MAX_WIDTH, T5UI_PCT(70));
 
     /* Bottom: play, position, the seek bar, length. */
-    v->bar = lv_obj_create(v->root);
-    lv_obj_remove_style_all(v->bar);
-    lv_obj_set_size(v->bar, LV_PCT(100), T5_DP(64));
-    lv_obj_align(v->bar, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(v->bar, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(v->bar, LV_OPA_60, 0);
-    lv_obj_set_style_pad_hor(v->bar, T5_DP(12), 0);
-    lv_obj_set_style_pad_column(v->bar, T5_DP(16), 0);
-    lv_obj_set_flex_flow(v->bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(v->bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_scrollable(v->bar, false);
-    v->play = round_button(v->bar, MD_ICON_PAUSE, play_clicked, v);
-    lv_obj_set_style_bg_opa(v->play, LV_OPA_TRANSP, 0);
-    v->pos_lbl = white_label(v->bar, "0:00", MD_TYPE_BODY2);
-    v->slider = md_slider_create(v->bar, 0, 1, 0);
-    lv_obj_set_flex_grow(v->slider, 1);
-    lv_obj_add_event_cb(v->slider, slider_event, LV_EVENT_PRESSED, v);
-    lv_obj_add_event_cb(v->slider, slider_event, LV_EVENT_VALUE_CHANGED, v);
-    lv_obj_add_event_cb(v->slider, slider_event, LV_EVENT_RELEASED, v);
-    lv_obj_add_event_cb(v->slider, slider_event, LV_EVENT_PRESS_LOST, v);
-    v->dur_lbl = white_label(v->bar, "0:00", MD_TYPE_BODY2);
-    lv_obj_set_hidden(v->bar, true);
-    lv_obj_add_event_cb(v->root, resized, LV_EVENT_SIZE_CHANGED, v);
+    v->bar = t5ui_create(v->root, T5UI_BOX);
+    t5ui_set_int(v->bar, T5UI_P_WIDTH, T5UI_PCT(100));
+    t5ui_set_int(v->bar, T5UI_P_HEIGHT, t5ui_dp(64));
+    t5ui_set_int(v->bar, T5UI_P_ALIGN, T5UI_ALIGN_BOTTOM_MID);
+    t5ui_set_color(v->bar, T5UI_P_BG_COLOR, 0x000000);
+    t5ui_set_int(v->bar, T5UI_P_BG_OPA, 153);                    /* 60% */
+    t5ui_set_int(v->bar, T5UI_P_PAD_LEFT, t5ui_dp(12));
+    t5ui_set_int(v->bar, T5UI_P_PAD_RIGHT, t5ui_dp(12));
+    t5ui_set_int(v->bar, T5UI_P_PAD_COLUMN, t5ui_dp(16));
+    t5ui_set_int(v->bar, T5UI_P_FLOW, T5UI_ROW);
+    t5ui_set_int(v->bar, T5UI_P_PLACE_MAIN, T5UI_PLACE_START);
+    t5ui_set_int(v->bar, T5UI_P_PLACE_CROSS, T5UI_PLACE_CENTER);
+    t5ui_set_int(v->bar, T5UI_P_PLACE_TRACK, T5UI_PLACE_CENTER);
+    t5ui_set_int(v->bar, T5UI_P_SCROLLABLE, false);
+    v->play = round_button(v->bar, T5UI_ICON_PAUSE, play_clicked, v);
+    t5ui_set_int(v->play, T5UI_P_BG_OPA, T5UI_OPA_TRANSP);
+    v->pos_lbl = white_label(v->bar, "0:00", T5UI_TEXT_BODY2);
+    v->slider = t5ui_create(v->bar, T5UI_MD_SLIDER);
+    t5ui_set_int(v->slider, T5UI_P_MIN, 0);
+    t5ui_set_int(v->slider, T5UI_P_MAX, 1);
+    t5ui_set_int(v->slider, T5UI_P_VALUE, 0);
+    t5ui_set_int(v->slider, T5UI_P_GROW, 1);
+    t5ui_on(v->slider, T5UI_EV_PRESS, slider_event, v);
+    t5ui_on(v->slider, T5UI_EV_VALUE, slider_event, v);
+    t5ui_on(v->slider, T5UI_EV_RELEASE, slider_event, v);
+    t5ui_on(v->slider, T5UI_EV_PRESS_LOST, slider_event, v);
+    v->dur_lbl = white_label(v->bar, "0:00", T5UI_TEXT_BODY2);
+    t5ui_set_int(v->bar, T5UI_P_HIDDEN, true);
+    t5ui_on(v->root, T5UI_EV_RESIZE, resized, v);
 }
 
-bool sa_video_open(lv_obj_t *screen, const char *path, void (*on_close)(void))
+bool sa_video_open(t5ui_obj_t *screen, const char *path, void (*on_close)(void))
 {
     sa_video_close();
     if (!sa_video_can_open(path)) return false;
@@ -927,10 +957,10 @@ bool sa_video_open(lv_obj_t *screen, const char *path, void (*on_close)(void))
     build(v, screen);
     v->was_fullscreen = t5_shell_fullscreen();
     t5_shell_set_fullscreen(true);
-    v->timer = lv_timer_create(tick, TICK_MS, v);
+    v->timer = t5ui_timer(TICK_MS, tick, v);
     if (t5_task_create("video", worker, v, 6144, 6, T5_CORE_ANY, NULL) != T5_OK) {
-        lv_timer_delete(v->timer);
-        lv_obj_delete(v->root);
+        t5ui_timer_delete(v->timer);
+        t5ui_delete(v->root);
         t5_shell_set_fullscreen(v->was_fullscreen);
         vSemaphoreDelete(v->exited);
         t5_mutex_delete(v->mx);
@@ -948,8 +978,8 @@ void sa_video_close(void)
     if (!v) return;
     s_v = NULL;
     v->quit = true;
-    lv_timer_delete(v->timer);
-    lv_obj_delete(v->root);           /* the view lets go of the plane; the worker sees it closed */
+    t5ui_timer_delete(v->timer);
+    t5ui_delete(v->root);             /* the view lets go of the plane; the worker sees it closed */
     if (v->lock) t5_wakelock_release(v->lock);
     t5_shell_set_fullscreen(v->was_fullscreen);
     void (*cb)(void) = v->on_close;

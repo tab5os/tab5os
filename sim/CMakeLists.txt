@@ -38,10 +38,11 @@ add_executable(t5sim
     main.c sim_ui.c sim_services.c sim_shell_sys.c png.c
     ${T5_SHELL_PORTABLE_SRCS} ${T5_SHELL_LVGL_SRCS}
     ${T5_MD_PORTABLE_SRCS} ${T5_MD_LVGL_SRCS} ${T5_MD_ASSET_SRCS}
-    ${T5_UI_PORTABLE_SRCS} ${T5_UI_LVGL_SRCS})
+    ${T5_UI_PORTABLE_SRCS} ${T5_UI_LVGL_SRCS}
+    ${FW}/t5_gui/t5ui_core.c ${FW}/t5_gui/t5ui_lvgl9.c)
 target_include_directories(t5sim PRIVATE ${FW}/md ${FW}/md/include ${FW}/t5_ui ${FW}/t5_ui/include
     ${FW}/t5_core/include ${FW}/t5_bsp/include ${FW}/t5_battery/include ${FW}/t5_app/include ${FW}/t5_pkg/include ${FW}/t5_storage/include
-    ${FW}/t5_shell ${FW}/t5_shell/include
+    ${FW}/t5_shell ${FW}/t5_shell/include ${FW}/t5_gui ${FW}/t5_gui/include
     ${LVGL_DIR}/src)  # LVGL private headers (md_freeze.c), as on the device
 target_compile_options(t5sim PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations)
 target_link_libraries(t5sim PRIVATE lvgl)

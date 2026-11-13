@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "t5_core/err.h"
+#include "t5_core/excl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -167,6 +168,70 @@ t5_err_t t5_ble_server_set(t5_ble_server_t *s, int chr, const void *data, size_t
  * error. 16 events are queued. */
 int t5_ble_server_next(t5_ble_server_t *s, t5_ble_server_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
 t5_err_t t5_ble_server_close(t5_ble_server_t *s);
+
+/* ---- HID: the Tab5 as a Bluetooth keyboard, mouse or gamepad (API level 2) --
+ * HID over GATT. Every app shares one report map: t5_hid's descriptor of
+ * every part (T5_HID_PART_ALL, with the T5_HID_ID_* report IDs), so a
+ * computer that paired once keeps working whichever app is in front. Send
+ * reports built with t5/hid.h's pack functions.
+ *
+ * Opening asks the person the first time (as t5/usbdev.h does), then
+ * advertises as a HID device until closed; one at a time, and not while an
+ * app advertises (T5_ERR_BUSY). Computers pair from their Bluetooth
+ * settings; the Tab5 shows the code to confirm (a system dialog). Reports
+ * only go out while the app is in the foreground and resumed: when it's
+ * suspended the OS sends all-released reports. The handle closes with the
+ * app; the person can stop it in Quick Settings. */
+#define T5_BLE_APPEARANCE_HID 0x03c0
+#define T5_BLE_APPEARANCE_KEYBOARD 0x03c1
+#define T5_BLE_APPEARANCE_MOUSE 0x03c2
+#define T5_BLE_APPEARANCE_GAMEPAD 0x03c4
+
+typedef struct t5_ble_hid t5_ble_hid_t;
+typedef struct {
+    uint32_t size;            /* sizeof(t5_ble_hid_cfg_t) */
+    const char *name;         /* advertised, NULL: "Tab5" */
+    uint16_t appearance;      /* T5_BLE_APPEARANCE_*, 0: HID */
+} t5_ble_hid_cfg_t;
+typedef enum {
+    T5_BLE_HID_CONNECTED,     /* a computer connected, paired, and is listening (addr) */
+    T5_BLE_HID_DISCONNECTED,
+    T5_BLE_HID_OUTPUT,        /* an output report (keyboard LEDs): bytes in buf, report_id */
+    T5_BLE_HID_SUSPEND,       /* the computer suspended (on) or woke (off) the device */
+} t5_ble_hid_ev_type_t;
+typedef struct {
+    t5_ble_hid_ev_type_t type;
+    uint8_t addr[6];
+    uint8_t report_id;
+    bool on;
+} t5_ble_hid_ev_t;
+
+t5_err_t t5_ble_hid_open(const t5_ble_hid_cfg_t *cfg, t5_ble_hid_t **out);
+/* A paired computer is connected and listening for reports. */
+bool t5_ble_hid_connected(t5_ble_hid_t *h);
+/* One input report for part (T5_HID_PART_KEYBOARD, _MOUSE, _CONSUMER,
+ * _GAMEPAD or _ABSOLUTE), its body without the report ID, to every
+ * listening computer. T5_ERR_STATE when none is, or not foreground;
+ * T5_ERR_TIMEOUT if the radio's buffers stayed full for timeout_ms. */
+t5_err_t t5_ble_hid_send(t5_ble_hid_t *h, uint32_t part, const void *report, size_t len, uint32_t timeout_ms);
+/* The next event; an output report's bytes go to buf (cut to cap) and the
+ * count is returned. 0 for other events, T5_ERR_TIMEOUT. 16 are queued. */
+int t5_ble_hid_next(t5_ble_hid_t *h, t5_ble_hid_ev_t *ev, void *buf, size_t cap, uint32_t timeout_ms);
+t5_err_t t5_ble_hid_close(t5_ble_hid_t *h);
+
+/* ---- raw HCI: exclusive Bluetooth (API level 2) ---------------------------
+ * With an exclusive claim (t5_excl_claim(T5_EXCL_BT); t5/excl.h) the OS's
+ * Bluetooth stack is stopped and the app talks HCI to the C6's Bluetooth LE
+ * controller: run its own host stack, or send commands directly. Frames
+ * are H4: the packet type byte (1 command, 2 ACL, 4 event, 5 ISO) first.
+ * The controller is the app's from the claim on (send HCI Reset first); on
+ * release the OS resets it and starts its own stack again, with saved
+ * pairings intact. If the C6 restarts meanwhile, events stop until it's
+ * back. */
+t5_err_t t5_bt_hci_send(t5_excl_t *h, const void *frame, size_t len);
+/* The next frame from the controller (cut to cap): its length,
+ * T5_ERR_TIMEOUT, or T5_ERR_STATE once the claim ended. 32 KB are queued. */
+int t5_bt_hci_next(t5_excl_t *h, void *buf, size_t cap, uint32_t timeout_ms);
 
 /* ---- helpers (no permission, pure) ---------------------------------------- */
 bool t5_ble_parse_addr(const char *s, uint8_t out[6]);           /* "aa:bb:cc:dd:ee:ff" */

@@ -8,7 +8,7 @@ You need a USB-C cable and [esptool](https://docs.espressif.com/projects/esptool
 
 1. Unpack the release and open `firmware/`.
 2. Connect the Tab5 over USB-C. If it doesn't show up as a serial port, hold the reset button for a moment.
-3. Run `./flash_all.sh` (or `PORT=/dev/ttyACM0 ./flash_all.sh`). It writes the bootloader, the partition table, Tab5 OS into the first system slot and the recovery image. Settings and files in `/data` are kept; the SD card isn't touched.
+3. Run `./flash_all.sh` (or `PORT=/dev/ttyACM0 ./flash_all.sh`). It writes the bootloader, the partition table, Tab5 OS into the first system slot, the recovery image and the Wi-Fi chip's firmware (see below). Settings and files in `/data` are kept; the SD card isn't touched.
 4. The Tab5 restarts into the launcher.
 
 To back up the factory firmware first: `esptool --port PORT read-flash 0 0x1000000 tab5-factory.bin` (16 MB, a few minutes).
@@ -24,6 +24,14 @@ Updates never need a cable once Tab5 OS is installed, and a failed one never lea
 The update is written to the other system slot and checked (signature, contents, chip revision) before the Tab5 will start it. After the restart it runs on trial: if it crashes or is reset in its first minute, the Tab5 goes back to the previous version by itself. Updates signed by a key the installed system doesn't trust, and unsigned ones, install only in developer mode (from Settings, or pushed from a paired computer) or from the USB-C console with `ota file PATH unsigned`. The recovery image installs unsigned updates after asking, never ones signed by a key it doesn't trust. From Settings without developer mode, an update older than the running system is refused, so an old release can't be put back by accident or on purpose.
 
 Releases from 0.1.4 on are signed by the Tab5 OS release key, whose public half is `firmware/ota_keys/release.pem`; 0.1.0 to 0.1.3 were unsigned and trust no key. So moving from 0.1.3 or earlier to a signed release is a one-time step: install it in developer mode (Settings > Developer, then from the card or `t5 ota`), or with `./flash_all.sh`. After that, updates install over Wi-Fi or from the card with developer mode off. Updates don't rewrite the recovery image, so on a Tab5 updated that way, recovery still trusts only the keys it was flashed with; `./flash_all.sh` brings it up to date.
+
+### The Wi-Fi chip's firmware
+
+The Tab5's Wi-Fi and Bluetooth run on a second chip, an ESP32-C6, with firmware of its own. Each Tab5 OS release comes with the C6 firmware it was built with, `tab5os-c6-<C6 version>.t5c6`, signed with the same key. The C6 firmware has its own version, raised only when it changes, so most updates leave the C6 alone. Wi-Fi monitor mode and raw frames need it, and units leave the factory with Espressif's.
+
+The OS keeps the C6 on the firmware it was built with by itself. Once a new system has passed its first minute, it asks the C6 which firmware it runs. If that isn't the one it expects, it takes `tab5os-c6-<C6 version>.t5c6` from the SD card's top folder or `/update` if it's there, or else downloads it from the release over Wi-Fi. It checks the signature, writes the firmware to the C6's update area, and moves the C6 onto it. That takes about 20 seconds, and Wi-Fi and Bluetooth drop for a few seconds at the end, when the C6 restarts. Nothing happens while an app has Wi-Fi or Bluetooth to itself. After three failed tries for one version it stops; `ota c6 retry` on the console starts it again, and `ota c6` says where it is.
+
+A development build has no release to download from: put its C6 firmware on with `t5 c6-build`, `t5 c6-stage` and `net update`. How releases carry both pieces of firmware, and the rules that keep them working together: [Releasing](releasing.md).
 
 ## When it doesn't start
 
@@ -41,4 +49,4 @@ tools/t5/t5 build && tools/t5/t5 flash          # bootloader, partition table, O
 tools/t5/t5 recovery-build && tools/t5/t5 recovery-flash
 ```
 
-`tools/release.sh [--sign key.pem]` builds everything above into `dist/`. Maintainers publish a release with the `release` GitHub Actions workflow (Actions > release > Run workflow, on `main`). It releases the version in `VERSION`, takes its notes from that version's section of `CHANGELOG.md`, and refuses to run until `ci` has passed on that commit. It signs with the private release key in the `T5_OTA_SIGNING_KEY` secret and stops without it. It also stops if the update isn't signed by `firmware/ota_keys/release.pem`. The maintainer keeps an offline backup of that key: if it's lost, or has to be replaced, devices need `./flash_all.sh` once to trust the new one.
+`tools/release.sh [--sign key.pem]` builds everything above into `dist/`. Maintainers publish a release with the `release` GitHub Actions workflow (Actions > release > Run workflow, on `main`); [Releasing](releasing.md) has the whole procedure. It releases the version in `VERSION`, takes its notes from that version's section of `CHANGELOG.md`, and refuses to run until `ci` has passed on that commit. It signs with the private release key in the `T5_OTA_SIGNING_KEY` secret and stops without it. It also stops if the update isn't signed by `firmware/ota_keys/release.pem`. The maintainer keeps an offline backup of that key: if it's lost, or has to be replaced, devices need `./flash_all.sh` once to trust the new one.

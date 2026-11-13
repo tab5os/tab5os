@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "md/md.h"
 #include "t5_core/log.h"
+#include "t5_gui/t5ui.h"
 #include "t5_pkg/pkg.h"
 #include "t5_ui/t5_ui.h"
 #include "app_priv.h"
@@ -19,7 +19,9 @@ static const char *TAG = "t5.perm";
 #define WAIT_MS 60000
 
 _Static_assert(T5_CORE_PERM_CAMERA == T5_PERM_CAMERA && T5_CORE_PERM_MIC == T5_PERM_MIC &&
-               T5_CORE_PERM_USB == T5_PERM_USB, "t5_core's permission bits are the manifest's");
+               T5_CORE_PERM_USB == T5_PERM_USB && T5_CORE_PERM_NET == T5_PERM_NET && T5_CORE_PERM_BLE == T5_PERM_BLE,
+               "t5_core's permission bits are the manifest's");
+_Static_assert((T5_CORE_CAPS & T5_PERM_ALL) == 0, "capabilities sit above the manifest bits");
 
 typedef struct {
     t5_app_t *app;           /* NULL once the app is gone */
@@ -28,7 +30,7 @@ typedef struct {
     void *user;
     int answer;              /* -1 pending, 0 denied, 1 granted */
     int refs;                /* the dialog, plus a waiting task if any */
-    lv_obj_t *dlg;
+    t5ui_obj_t *dlg;
     SemaphoreHandle_t wake;   /* a waiting task's, given with the answer */
     char name[T5_APP_NAME_LEN];
 } prompt_t;
@@ -93,7 +95,7 @@ void perm_app_gone(t5_app_t *app)
 {
     for (;;) {
         prompt_t *p = NULL;
-        lv_obj_t *dlg = NULL;
+        t5ui_obj_t *dlg = NULL;
         apps_lock();
         for (int i = 0; i < MAX_PROMPTS && !p; i++) {
             if (s_open[i] && s_open[i]->app == app) p = s_open[i];
@@ -109,7 +111,7 @@ void perm_app_gone(t5_app_t *app)
         apps_unlock();
         if (!p) return;
         if (dlg) {
-            md_dialog_close(dlg);   /* closes without calling answered() */
+            t5ui_dialog_close(dlg);   /* closes without calling answered() */
             unref(p);               /* the dialog's reference */
         }
     }
@@ -145,12 +147,29 @@ static const struct {
     uint32_t bit;
     const char *label;
     const char *ask;
+    const char *detail;       /* what saying yes means, before "You can change this later" */
 } s_words[] = {
-    { T5_PERM_SHARED_READ, "See shared files", "see your photos, music and documents" },
-    { T5_PERM_SHARED_WRITE, "Change shared files", "change your photos, music and documents" },
-    { T5_PERM_ALL_FILES, "Manage all files", "manage all files on your SD card and USB drives" },
-    { T5_PERM_MIC, NULL, "use the microphone" },
-    { T5_PERM_AMBIENT, "Show a card on the standby screen", NULL },
+    { T5_PERM_SHARED_READ, "See shared files", "see your photos, music and documents", NULL },
+    { T5_PERM_SHARED_WRITE, "Change shared files", "change your photos, music and documents", NULL },
+    { T5_PERM_ALL_FILES, "Manage all files", "manage all files on your SD card and USB drives", NULL },
+    { T5_PERM_MIC, NULL, "use the microphone", NULL },
+    { T5_PERM_AMBIENT, "Show a card on the standby screen", NULL, NULL },
+    { T5_CORE_CAP_USB_DEVICE, "Act as a USB device", "act as a USB keyboard, mouse or MIDI device",
+      "The USB-C console and sound are off while it does." },
+    { T5_CORE_CAP_USB_TAKEOVER, "Take over USB devices", "take over USB devices you plug in",
+      "That includes your USB keyboard: what you type would go to the app." },
+    { T5_CORE_CAP_BLE_HID, "Act as a Bluetooth keyboard or mouse", "act as a Bluetooth keyboard or mouse", NULL },
+    { T5_CORE_CAP_WIFI_MONITOR, "See all nearby Wi-Fi traffic", "see all Wi-Fi traffic nearby", NULL },
+    { T5_CORE_CAP_WIFI_TX, "Send raw Wi-Fi frames", "send raw Wi-Fi frames",
+      "Misuse can disrupt networks and may be illegal where you are." },
+    { T5_CORE_CAP_EXCL_USBC, "Full control of USB-C", "take full control of the USB-C port",
+      "The console and sound are off until it stops." },
+    { T5_CORE_CAP_EXCL_USBA, "Full control of USB-A", "take full control of the USB-A port",
+      "USB keyboards, mice and drives stop working for the system until it stops." },
+    { T5_CORE_CAP_EXCL_WIFI, "Full control of Wi-Fi", "take full control of Wi-Fi",
+      "Other apps and the system lose Wi-Fi until it stops." },
+    { T5_CORE_CAP_EXCL_BT, "Full control of Bluetooth", "take full control of Bluetooth",
+      "Other apps and the system lose Bluetooth until it stops." },
 };
 
 const char *t5_perm_label(uint32_t perm_bit)
@@ -172,23 +191,27 @@ static void show(void *arg)
         unref(p);   /* the dialog's reference; it never opened */
         return;
     }
-    char title[112];
-    const char *ask = NULL;
+    char title[112], body[160];
+    const char *ask = NULL, *detail = NULL;
     for (size_t i = 0; i < sizeof s_words / sizeof s_words[0]; i++) {
-        if (s_words[i].bit == p->perm) ask = s_words[i].ask;
+        if (s_words[i].bit == p->perm) {
+            ask = s_words[i].ask;
+            detail = s_words[i].detail;
+        }
     }
+    snprintf(body, sizeof body, "%s%sYou can change this later in App Manager.", detail ? detail : "", detail ? " " : "");
     if (ask) snprintf(title, sizeof title, "Allow %s to %s?", p->name, ask);
     else snprintf(title, sizeof title, "Allow %s to use the %s?", p->name, t5_perm_name(p->perm));
     /* The dialog belongs to the system, not the app. */
     void *saved = t5_sys_enter();
-    lv_obj_t *dlg = md_dialog_show(title, "You can change this later in App Manager.", "Allow", "Don't allow", answered, p);
+    t5ui_obj_t *dlg = t5ui_dialog(title, body, "Allow", "Don't allow", answered, p);
     t5_sys_leave(saved);
     apps_lock();
     gone = !p->app;
     if (!gone) p->dlg = dlg;
     apps_unlock();
     if (gone) {
-        if (dlg) md_dialog_close(dlg);
+        if (dlg) t5ui_dialog_close(dlg);
         unref(p);
     }
 }
@@ -203,11 +226,23 @@ static void perm_prompt(t5_app_t *app, uint32_t perm, t5_perm_cb_t cb, void *use
     show(p);
 }
 
+/* Capabilities are always asked, inside a group the app declared. */
+static uint32_t prompted(void)
+{
+    return t5_perm_prompted() | T5_CORE_CAPS;
+}
+
+static bool declared(const t5_app_t *a, uint32_t perm)
+{
+    if (perm & T5_CORE_CAPS) return (perm & (perm - 1)) == 0 && (a->man.perms & t5_core_cap_group(perm));
+    return (a->man.perms & perm) != 0;
+}
+
 t5_err_t t5_app_request_permission(t5_app_t *app, uint32_t perm, t5_perm_cb_t cb, void *user)
 {
     if (!app || app->hdr.magic != T5_APP_CTX_MAGIC) return T5_ERR_INVALID_ARG;
-    if (!(app->man.perms & perm)) return T5_ERR_DENIED;          /* not declared */
-    if (!(perm & t5_perm_prompted()) || (app->granted & perm) == perm) {
+    if (!declared(app, perm)) return T5_ERR_DENIED;
+    if (!(perm & prompted()) || (app->granted & perm) == perm) {
         if (cb) cb(app, perm, true, user);
         return T5_OK;
     }
@@ -246,8 +281,8 @@ t5_err_t perm_check_any(t5_app_t *a, uint32_t mask)
 
 static t5_err_t check_for(t5_app_t *a, uint32_t perm)
 {
-    if (!(a->man.perms & perm)) return T5_ERR_DENIED;
-    if (!(perm & t5_perm_prompted()) || (a->granted & perm) == perm) return T5_OK;
+    if (!declared(a, perm)) return T5_ERR_DENIED;
+    if (!(perm & prompted()) || (a->granted & perm) == perm) return T5_OK;
     if (a->denied & perm) return T5_ERR_DENIED;
     if (t5_ui_on_ui_task()) {
         /* Can't block the UI task on a dialog: ask, and deny this call. The

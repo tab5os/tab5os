@@ -17,6 +17,7 @@
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "t5_core/event.h"
+#include "t5_core/excl_sys.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
@@ -53,6 +54,8 @@ static QueueHandle_t s_work;
 static t5_usb_dev_t s_devs[T5_USB_MAX_DEVICES];
 static int s_ndevs;
 static t5_usb_stats_t s_st;
+/* An app has the whole bus (t5_core/excl.h): the OS's drivers stay off it. */
+static volatile bool s_excl;
 
 const char *t5_usb_class_name(t5_usb_class_t c)
 {
@@ -177,7 +180,7 @@ static void client_event(const usb_host_client_event_msg_t *msg, void *arg)
                 }
                 d.product[k] = 0;
             }
-            usb_midi_check(h, addr, cd);    /* claims the interface if it is MIDI */
+            if (!s_excl) usb_midi_check(h, addr, cd);    /* claims the interface if it is MIDI */
         }
         usb_midi_release_if_unused(h, addr);
         t5_mutex_lock(s_mx);
@@ -193,6 +196,7 @@ static void client_event(const usb_host_client_event_msg_t *msg, void *arg)
         uint8_t addr = 0;
         if (usb_host_device_info(msg->dev_gone.dev_hdl, &info) == ESP_OK) addr = info.dev_addr;
         usb_midi_gone(msg->dev_gone.dev_hdl);
+        usbraw_gone(msg->dev_gone.dev_hdl);
         dev_removed(addr);
     } else if (msg->event == USB_HOST_CLIENT_EVENT_DEV_REMOVED) {
         /* Everything else: the client closed it after reading descriptors. */
@@ -230,6 +234,112 @@ static void lib_task(void *arg)
     }
 }
 
+/* The HID interfaces the OS has open (boot keyboards and mice), so an app
+ * can take one over; and what apps took over, to say where it came from. */
+#define MAX_HID_IFS 8
+static struct {
+    hid_host_device_handle_t h;
+    uint8_t addr, iface;
+} s_hidifs[MAX_HID_IFS];
+static struct {
+    uint8_t addr, iface, owner;
+} s_taken[8];
+static msc_host_device_handle_t s_msc;
+static uint8_t s_msc_addr;
+
+static void hidif_set(hid_host_device_handle_t h, uint8_t addr, uint8_t iface, bool on)
+{
+    t5_mutex_lock(s_mx);
+    for (int i = 0; i < MAX_HID_IFS; i++) {
+        if (on && !s_hidifs[i].h) {
+            s_hidifs[i].h = h;
+            s_hidifs[i].addr = addr;
+            s_hidifs[i].iface = iface;
+            break;
+        }
+        if (!on && s_hidifs[i].h == h) s_hidifs[i].h = NULL;
+    }
+    t5_mutex_unlock(s_mx);
+}
+
+static hid_host_device_handle_t hidif_find(uint8_t addr, uint8_t iface)
+{
+    hid_host_device_handle_t h = NULL;
+    t5_mutex_lock(s_mx);
+    for (int i = 0; i < MAX_HID_IFS && !h; i++) {
+        if (s_hidifs[i].h && s_hidifs[i].addr == addr && s_hidifs[i].iface == iface) h = s_hidifs[i].h;
+    }
+    t5_mutex_unlock(s_mx);
+    return h;
+}
+
+usb_owner_t usb_iface_owner(uint8_t addr, uint8_t iface)
+{
+    if (hidif_find(addr, iface)) return USB_OWNER_HID;
+    if (usb_midi_owns(addr, iface)) return USB_OWNER_MIDI;
+    t5_mutex_lock(s_mx);
+    t5_usb_dev_t *d = dev_find(addr);
+    bool busy = (s_msc && s_msc_addr == addr) || (d && d->driver && (d->cls == T5_USB_SERIAL || d->cls == T5_USB_CAMERA));
+    t5_mutex_unlock(s_mx);
+    return busy ? USB_OWNER_BUSY : USB_OWNER_NONE;
+}
+
+usb_owner_t usb_iface_owner_was(uint8_t addr, uint8_t iface)
+{
+    usb_owner_t o = USB_OWNER_NONE;
+    t5_mutex_lock(s_mx);
+    for (int i = 0; i < 8; i++) {
+        if (s_taken[i].owner && s_taken[i].addr == addr && s_taken[i].iface == iface) {
+            o = (usb_owner_t)s_taken[i].owner;
+            s_taken[i].owner = 0;
+        }
+    }
+    t5_mutex_unlock(s_mx);
+    return o;
+}
+
+t5_err_t usb_iface_detach(uint8_t addr, uint8_t iface, usb_owner_t owner)
+{
+    if (owner == USB_OWNER_HID) {
+        hid_host_device_handle_t h = hidif_find(addr, iface);
+        if (!h) return T5_ERR_STATE;
+        /* The first close reports DISCONNECTED, and hid_iface_event closes
+         * again, which takes the interface out of the HID driver. */
+        if (hid_host_device_close(h) != ESP_OK) return T5_ERR_BUSY;
+    } else if (owner == USB_OWNER_MIDI) {
+        usb_midi_detach();
+    } else {
+        return T5_ERR_BUSY;
+    }
+    t5_mutex_lock(s_mx);
+    for (int i = 0; i < 8; i++) {
+        if (!s_taken[i].owner) {
+            s_taken[i].addr = addr;
+            s_taken[i].iface = iface;
+            s_taken[i].owner = (uint8_t)owner;
+            break;
+        }
+    }
+    t5_mutex_unlock(s_mx);
+    return T5_OK;
+}
+
+void usb_iface_reattach(usb_device_handle_t dev, uint8_t addr, usb_owner_t owner)
+{
+    (void)dev;
+    if (owner == USB_OWNER_MIDI) {
+        usb_device_handle_t h;
+        const usb_config_desc_t *cd;
+        if (usb_host_device_open(s_client, addr, &h) != ESP_OK) return;
+        if (usb_host_get_active_config_descriptor(h, &cd) == ESP_OK) usb_midi_check(h, addr, cd);
+        usb_midi_release_if_unused(h, addr);
+    } else if (owner == USB_OWNER_HID) {
+        /* The HID driver dropped the interface when it let go; it finds it
+         * again when the device is plugged in again. */
+        T5_LOGI(TAG, "addr %u: an app gave back a keyboard or mouse; unplug and replug it to use it again", addr);
+    }
+}
+
 static void hid_iface_event(hid_host_device_handle_t h, const hid_host_interface_event_t ev, void *arg)
 {
     (void)arg;
@@ -247,6 +357,7 @@ static void hid_iface_event(hid_host_device_handle_t h, const hid_host_interface
             s_st.mouse_reports++;
         }
     } else if (ev == HID_HOST_INTERFACE_EVENT_DISCONNECTED) {
+        hidif_set(h, 0, 0, false);
         if (p.proto == HID_PROTOCOL_KEYBOARD) usb_hid_attached(T5_HID_KEYBOARD, false);
         if (p.proto == HID_PROTOCOL_MOUSE) usb_hid_attached(T5_HID_MOUSE, false);
         hid_host_device_close(h);
@@ -267,6 +378,9 @@ static void hid_open(hid_host_device_handle_t h)
 {
     hid_host_dev_params_t p;
     if (hid_host_device_get_params(h, &p) != ESP_OK) return;
+    /* Only boot keyboards and mice: other HID devices (gamepads, macro
+     * pads, vendor ones) stay free for apps to claim (t5_usb_claim). */
+    if (s_excl || (p.proto != HID_PROTOCOL_KEYBOARD && p.proto != HID_PROTOCOL_MOUSE)) return;
     const hid_host_device_config_t dc = { .callback = hid_iface_event, .callback_arg = NULL };
     if (hid_host_device_open(h, &dc) != ESP_OK) return;
     if (p.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
@@ -274,6 +388,7 @@ static void hid_open(hid_host_device_handle_t h)
         if (p.proto == HID_PROTOCOL_KEYBOARD) hid_class_request_set_idle(h, 0, 0);
     }
     if (hid_host_device_start(h) != ESP_OK) return;
+    hidif_set(h, p.addr, p.iface_num, true);
     if (p.proto == HID_PROTOCOL_KEYBOARD) {
         usb_dev_set_class(p.addr, T5_USB_KEYBOARD, true);
         usb_hid_attached(T5_HID_KEYBOARD, true);
@@ -283,7 +398,6 @@ static void hid_open(hid_host_device_handle_t h)
     }
 }
 
-static msc_host_device_handle_t s_msc;
 static msc_host_vfs_handle_t s_msc_vfs;
 
 static void msc_event(const msc_host_event_t *e, void *arg)
@@ -318,7 +432,7 @@ static void msc_unmount(void)
 
 static void msc_mount(uint8_t addr)
 {
-    if (s_msc) return;                              /* one drive at /usb */
+    if (s_msc || s_excl) return;                    /* one drive at /usb; none while an app has the bus */
     if (msc_host_install_device(addr, &s_msc) != ESP_OK) {
         s_msc = NULL;
         return;
@@ -331,6 +445,7 @@ static void msc_mount(uint8_t addr)
         s_msc = NULL;
         return;
     }
+    s_msc_addr = addr;
     usb_dev_set_class(addr, T5_USB_STORAGE, true);
     T5_LOGI(TAG, "USB drive mounted at %s", T5_USB_PATH);
     t5_ev_usb_t ev = { .addr = addr, .cls = T5_USB_STORAGE, .mounted = 1 };
@@ -628,6 +743,57 @@ static t5_err_t power_on(bool on)
     return T5_OK;
 }
 
+/* Cut USB-A's power and restore it: every device leaves and enumerates
+ * again (under s_mx). */
+static void bus_cycle(void)
+{
+    if (s_installed) usb_host_lib_set_root_port_power(false);
+    power_on(false);
+    t5_delay_ms(300);
+    power_on(true);
+    t5_delay_ms(200);
+    if (s_installed) usb_host_lib_set_root_port_power(true);
+}
+
+static t5_err_t excl_take(void)
+{
+    if (!s_installed || !s_enabled) return T5_ERR_STATE;
+    if (s_serial || s_uvc) return T5_ERR_BUSY;      /* an app's serial port or camera */
+    t5_mutex_lock(s_mx);
+    msc_unmount();                                  /* cleanly, before the power goes */
+    s_excl = true;
+    bus_cycle();
+    t5_mutex_unlock(s_mx);
+    T5_LOGW(TAG, "an app has the USB-A bus");
+    return T5_OK;
+}
+
+static void excl_give(void)
+{
+    t5_mutex_lock(s_mx);
+    s_excl = false;
+    if (s_enabled) bus_cycle();                     /* the OS's drivers find everything again */
+    t5_mutex_unlock(s_mx);
+    T5_LOGI(TAG, "USB-A back to the system");
+}
+
+t5_err_t t5_usba_power(t5_excl_t *h, bool on)
+{
+    if (!t5_excl_holds(h, T5_EXCL_USBA)) return T5_ERR_STATE;
+    t5_mutex_lock(s_mx);
+    t5_err_t e = T5_OK;
+    if (on) {
+        e = power_on(true);
+        t5_delay_ms(200);
+        if (e == T5_OK && s_installed) usb_host_lib_set_root_port_power(true);
+    } else {
+        if (s_installed) usb_host_lib_set_root_port_power(false);
+        power_on(false);
+    }
+    t5_mutex_unlock(s_mx);
+    return e;
+}
+
 t5_err_t t5_usb_host_enable(bool on)
 {
     if (!s_inited) return T5_ERR_STATE;
@@ -700,6 +866,8 @@ t5_err_t t5_usb_init(void)
     }
     usb_midi_init();
     usbc_init();
+    static const t5_excl_provider_t prov = { excl_take, excl_give };
+    t5_excl_set_provider(T5_EXCL_USBA, &prov);
     s_inited = true;
     const t5_suspend_hook_t hook = {
         .name = "usb", .prio = T5_SUSPEND_PRIO_MEDIA, .budget_ms = 200, .suspend = usb_suspend,

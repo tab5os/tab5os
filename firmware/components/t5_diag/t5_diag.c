@@ -43,6 +43,7 @@ esp_err_t t5_diag_start(void)
     diag_print_boot_banner();
     ESP_RETURN_ON_ERROR(esp_console_register_help_command(), TAG, "help");
     diag_register_sys();
+    diag_register_starve();
     diag_register_i2c();
     diag_register_exp();
     diag_register_dev();

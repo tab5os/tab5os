@@ -33,7 +33,7 @@ t5_err_t t5_shell_register(void);
  * much they take (dp), and T5_EV_UI_INSETS is posted when that changes.
  *
  * There is no app bar or title bar: an app that wants one draws its own
- * (md_appbar_create, or md_page_create for a page with a back arrow).
+ * (a T5UI_MD_APPBAR, or a T5UI_MD_PAGE for a page with a back arrow).
  *
  * Full screen hides both and the padding goes to 0. The swipes still
  * work: touching the bottom edge shows the handle for a moment, and so does
@@ -58,13 +58,13 @@ t5_err_t t5_shell_get_insets(t5_shell_insets_t *out);
  * T5_SHELL_ACTIVITY_MAX per app. Any task.
  *
  *   t5_shell_activity_t *a;
- *   t5_shell_activity_start(MD_ICON_DOWNLOAD, "Syncing photos", &a);
+ *   t5_shell_activity_start(T5UI_ICON_DOWNLOAD, "Syncing photos", &a);
  *   t5_shell_activity_update(a, "Syncing photos: 12 of 40", 30);
  *   t5_shell_activity_end(a);
  */
 #define T5_SHELL_ACTIVITY_MAX 4
 typedef struct t5_shell_activity t5_shell_activity_t;
-/* icon: one MD_ICON_* glyph (NULL: a clock). text is copied (47 bytes kept). */
+/* icon: one T5UI_ICON_* glyph (NULL: a clock). text is copied (47 bytes kept). */
 t5_err_t t5_shell_activity_start(const char *icon, const char *text, t5_shell_activity_t **out);
 /* text NULL keeps it; percent 0..100, or -1 for no progress bar. */
 t5_err_t t5_shell_activity_update(t5_shell_activity_t *a, const char *text, int percent);
@@ -81,7 +81,7 @@ t5_err_t t5_shell_activity_end(t5_shell_activity_t *a);
  * clears it or it expires, so an app that updates it from its background
  * alarm keeps it current without running. Any task. */
 typedef struct {
-    char icon[8];             /* one MD_ICON_* glyph, "" for the app's */
+    char icon[8];             /* one T5UI_ICON_* glyph, "" for the app's */
     char title[32];           /* "Weather", "Next alarm" */
     char value[24];           /* the big line: "21°", "07:30" */
     char detail[64];          /* "Cloudy, high 24°" */

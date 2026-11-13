@@ -432,6 +432,7 @@ static t5_err_t make_app(const char *id, t5_app_t **out)
     snprintf(a->id, sizeof a->id, "%s", id);
     a->hdr.magic = T5_APP_CTX_MAGIC;
     a->hdr.id = a->id;
+    a->hdr.name = a->man.name;
     const t5_builtin_app_t *b = find_builtin(id);
     if (b) {
         a->builtin = b;
@@ -804,6 +805,18 @@ static void exit_id_async(void *id)
     if (s_fg && !strcmp(s_fg->id, id)) exit_fg(true);
 }
 
+/* t5_core_app_foreground: the calling task's app is the foreground app and
+ * resumed. System callers (no app) count as foreground. */
+static bool fg_check_self(void)
+{
+    t5_app_t *a = t5_app_self();
+    if (!a) return true;
+    apps_lock();
+    bool fg = a == s_fg && a->state == APP_RESUMED;
+    apps_unlock();
+    return fg;
+}
+
 static bool is_fg(const char *id)
 {
     if (!s_inited) return false;
@@ -1044,6 +1057,9 @@ static void suspend_on_ui(void *p)
     if (a && a->state == APP_RESUMED) {
         call(a, a->desc->on_suspend);
         a->state = APP_SUSPENDED;
+        t5_ev_app_t ev = { 0 };
+        ev_id(&ev, a->id);
+        t5_event_post(T5_EV_APP_SUSPENDED, &ev, sizeof ev);
     }
 }
 
@@ -1054,6 +1070,9 @@ static void resume_on_ui(void *p)
     if (a && a->state == APP_SUSPENDED) {
         call(a, a->desc->on_resume);
         a->state = APP_RESUMED;
+        t5_ev_app_t ev = { 0 };
+        ev_id(&ev, a->id);
+        t5_event_post(T5_EV_APP_RESUMED, &ev, sizeof ev);
     }
 }
 
@@ -1786,6 +1805,7 @@ t5_err_t t5_apps_init(void)
     };
     T5_LOG_ON_ERR(TAG, t5_power_register_hook(&hook));
     t5_core_set_perm_check(perm_check_self);
+    t5_core_set_fg_check(fg_check_self);
     t5_core_set_path_check(apps_path_check);
     t5_ports_set_access_check(port_access);
     /* Isolation (isolate.h): app heaps away from the OS's internal RAM,

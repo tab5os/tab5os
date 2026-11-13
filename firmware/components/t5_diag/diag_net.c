@@ -15,6 +15,8 @@
 #include "t5_net/ble_sys.h"
 #include "t5_net/net.h"
 #include "t5_net/sock.h"
+#include "t5_net/wifimon.h"
+#include "t5_core/excl.h"
 #include "t5_power/power.h"
 #include "diag_priv.h"
 
@@ -85,8 +87,87 @@ out:
     vTaskDelete(NULL);
 }
 
+/* net mon S [CH] [all]: a Wi-Fi monitor self-test. Counts frames by type
+ * and lists the networks whose beacons it heard, then the drop counts. */
+static int net_mon(uint32_t secs, uint8_t ch, bool all, bool excl)
+{
+    t5_excl_t *x = NULL;
+    if (excl) {
+        t5_err_t xe = t5_excl_claim(T5_EXCL_WIFI, &x);
+        if (xe != T5_OK) {
+            printf("exclusive: %s\n", t5_err_str(xe));
+            return 1;
+        }
+    }
+    t5_wifimon_cfg_t cfg = { .size = sizeof cfg, .channel = ch, .snaplen = 128,
+                             .types = all ? (T5_WIFIMON_MGMT | T5_WIFIMON_DATA | T5_WIFIMON_CTRL) : T5_WIFIMON_MGMT };
+    t5_wifimon_t *m;
+    t5_err_t e = t5_wifimon_open(&cfg, &m);
+    if (e != T5_OK) {
+        printf("monitor: %s\n", t5_err_str(e));
+        if (x) T5_IGNORE(t5_excl_release(x));
+        return 1;
+    }
+    struct { uint8_t bssid[6]; char ssid[33]; int8_t rssi; uint8_t ch; uint32_t n; } seen[16];
+    int nseen = 0;
+    uint32_t by_type[16] = { 0 }, bytes = 0;
+    int64_t until = t5_time_us() + (int64_t)secs * 1000000;
+    uint8_t buf[128];
+    while (t5_time_us() < until) {
+        t5_wifimon_frame_t f;
+        int n = t5_wifimon_next(m, &f, buf, sizeof buf, 200);
+        if (n < 0) continue;
+        by_type[f.type & 0x0f]++;
+        bytes += f.len;
+        /* Beacons: type 0 subtype 8; the SSID element at 36. */
+        if (n >= 38 && buf[0] == 0x80 && buf[36] == 0) {
+            int k = 0;
+            while (k < nseen && memcmp(seen[k].bssid, buf + 16, 6)) k++;
+            if (k == nseen && nseen < 16) {
+                nseen++;
+                memcpy(seen[k].bssid, buf + 16, 6);
+                int l = buf[37] < 32 && 38 + buf[37] <= n ? buf[37] : 0;
+                memcpy(seen[k].ssid, buf + 38, (size_t)l);
+                seen[k].ssid[l] = 0;
+                seen[k].n = 0;
+            }
+            if (k < nseen) {
+                seen[k].rssi = f.rssi;
+                seen[k].ch = f.channel;
+                seen[k].n++;
+            }
+        }
+    }
+    t5_wifimon_stats_t st;
+    t5_wifimon_stats(m, &st);
+    T5_IGNORE(t5_wifimon_close(m));
+    if (x) T5_IGNORE(t5_excl_release(x));
+    printf("monitor ch %u, %u s: %u frames (mgmt %u, ctrl %u, data %u, misc %u), %u bytes on air\n", st.channel,
+           (unsigned)secs, (unsigned)st.frames, (unsigned)by_type[1], (unsigned)by_type[2], (unsigned)by_type[4],
+           (unsigned)by_type[8], (unsigned)bytes);
+    printf("dropped: radio %u, link %u, queue %u\n", (unsigned)st.dropped_radio, (unsigned)st.dropped_link,
+           (unsigned)st.dropped_queue);
+    for (int k = 0; k < nseen; k++) {
+        printf("  %02x:%02x:%02x:%02x:%02x:%02x ch %2u %4d dBm %4u beacons  %s\n", seen[k].bssid[0], seen[k].bssid[1],
+               seen[k].bssid[2], seen[k].bssid[3], seen[k].bssid[4], seen[k].bssid[5], seen[k].ch, seen[k].rssi,
+               (unsigned)seen[k].n, seen[k].ssid[0] ? seen[k].ssid : "(hidden)");
+    }
+    return 0;
+}
+
 static int cmd_net(int argc, char **argv)
 {
+    if (argc >= 3 && !strcmp(argv[1], "mon")) {
+        uint32_t secs = 0, ch = 0;
+        if (!diag_parse_u32(argv[2], 1, 60, &secs)) return 1;
+        bool all = false, excl = false;
+        for (int i = 3; i < argc; i++) {
+            if (!strcmp(argv[i], "all")) all = true;
+            else if (!strcmp(argv[i], "excl")) excl = true;
+            else if (!diag_parse_u32(argv[i], 1, 13, &ch)) return 1;
+        }
+        return net_mon(secs, (uint8_t)ch, all, excl);
+    }
     if (argc == 1) { print_status(); return 0; }
     const char *c = argv[1];
     if (!strcmp(c, "on")) return t5_net_enable(true) != T5_OK;
@@ -158,7 +239,7 @@ static int cmd_net(int argc, char **argv)
         return 0;
     }
 usage:
-    printf("usage: net [on | off | scan | connect <ssid> [pass] [nosave] | disconnect | forget <ssid> | saved\n"
+    printf("usage: net [mon <s> [ch] [all] [excl] | on | off | scan | connect <ssid> [pass] [nosave] | disconnect | forget <ssid> | saved\n"
            "           | reset | update [--force] | ant int|ext | echo <port>|stop | handles]\n");
     return 1;
 }

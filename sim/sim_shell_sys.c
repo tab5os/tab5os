@@ -12,6 +12,7 @@
 #include "shell_priv.h"
 #include "t5_storage/paths.h"
 #include "sim.h"
+#include "t5_gui/t5ui_sys.h"
 
 /* The device's built-in apps (sysapps) that the launcher shows, and two
  * installed ones, one of them blocked after crashes. */
@@ -76,7 +77,7 @@ static void open_stand_in(const char *id)
     snprintf(s_cur, sizeof s_cur, "%s", id);
     if (s_app_scr) lv_obj_delete(s_app_scr);
     s_app_scr = lv_obj_create(NULL);
-    shell_prepare(s_app_scr, id);
+    shell_prepare(t5ui_sys_obj(s_app_scr), id);
     shell_changed(id);
     lv_obj_t *page = md_page_create(s_app_scr, id, NULL, NULL, NULL);
     sa_sim_fill(md_page_body(page));
@@ -84,7 +85,7 @@ static void open_stand_in(const char *id)
 }
 
 /* The simulator has no installed apps, so every app keeps its glyph. */
-lv_obj_t *shell_sys_app_icon(lv_obj_t *parent, const char *id, int32_t size_px)
+t5ui_obj_t *shell_sys_app_icon(t5ui_obj_t *parent, const char *id, int32_t size_px)
 {
     (void)parent; (void)id; (void)size_px;
     return NULL;
@@ -115,7 +116,7 @@ void sim_show_app(bool fullscreen)
     snprintf(s_cur, sizeof s_cur, "com.example.airlog");
     if (s_app_scr) lv_obj_delete(s_app_scr);
     s_app_scr = lv_obj_create(NULL);
-    shell_prepare(s_app_scr, s_cur);
+    shell_prepare(t5ui_sys_obj(s_app_scr), s_cur);
     shell_changed(s_cur);
     lv_obj_set_flex_flow(s_app_scr, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_hor(s_app_scr, T5_DP(16), 0);
@@ -190,6 +191,11 @@ bool shell_sys_standby_enabled(void)
 
 /* The activities a screenshot shows: one an app posted, with progress, and
  * an app working in the background. */
+void shell_sys_stop(uint8_t stop)
+{
+    (void)stop;
+}
+
 int shell_sys_activities(shell_activity_t *out, int max)
 {
     static const shell_activity_t demo[] = {
@@ -211,7 +217,7 @@ void shell_sys_home(void)
 {
     if (!s_cur[0]) return;
     s_cur[0] = 0;
-    lv_screen_load(shell_home_screen());
+    lv_screen_load(t5ui_sys_native(shell_home_screen()));
     shell_changed("");
     lv_obj_delete(s_app_scr);
     s_app_scr = NULL;

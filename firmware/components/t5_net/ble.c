@@ -17,9 +17,12 @@
 #include <string.h>
 #include <strings.h>
 #include "esp_heap_caps.h"
+#include "eh_host_feat_bt.h"
+#include "eh_host_feat_bt_mcu.h"
 #include "esp_hosted_bt_host_stack.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/message_buffer.h"
 #include "freertos/semphr.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
@@ -32,15 +35,22 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "t5_core/event.h"
+#include "t5_core/excl_sys.h"
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "t5_core/res.h"
 #include "t5_net/ble_sys.h"
 #include "t5_net/net.h"
 #include "t5_power/power.h"
+#include "esp_random.h"
+#include "host/ble_store.h"
+#include "ble_priv.h"
 #include "net_priv.h"
 
 static const char *TAG = "t5.ble";
+
+/* NimBLE's NVS bond store; no header declares it (IDF's examples do this too). */
+void ble_store_config_init(void);
 
 #define SYNC_WAIT_MS 3000
 #define CLOSE_WAIT_MS 2000
@@ -311,6 +321,7 @@ struct t5_ble_advertiser {
     uint8_t mfr[31];
     ble_uuid_any_t uuid;
     bool has_uuid;
+    uint16_t appearance;                /* the system's (HID): 0 for none */
 };
 
 static t5_ble_advertiser_t *s_adv;
@@ -320,6 +331,10 @@ static void adv_fields(const t5_ble_advertiser_t *a, struct ble_hs_adv_fields *f
 {
     memset(f, 0, sizeof *f);
     f->flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    if (a->appearance) {
+        f->appearance = a->appearance;
+        f->appearance_is_present = 1;
+    }
     if (with_name && a->name[0]) {
         f->name = (const uint8_t *)a->name;
         f->name_len = (uint8_t)strlen(a->name);
@@ -343,7 +358,7 @@ static void adv_fields(const t5_ble_advertiser_t *a, struct ble_hs_adv_fields *f
 /* Bytes the advertising packet needs (flags, mfr data, uuid, name). */
 static size_t adv_size(const t5_ble_advertiser_t *a, bool with_name)
 {
-    size_t n = 3 + (a->cfg.mfr_len ? 2u + a->cfg.mfr_len : 0u);
+    size_t n = 3 + (a->cfg.mfr_len ? 2u + a->cfg.mfr_len : 0u) + (a->appearance ? 4u : 0u);
     if (a->has_uuid) n += a->uuid.u.type == BLE_UUID_TYPE_16 ? 4u : 18u;
     if (with_name && a->name[0]) n += 2 + strlen(a->name);
     return n;
@@ -380,11 +395,57 @@ static int adv_apply_locked(t5_ble_advertiser_t *a)
     return ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &p, adv_event, NULL);
 }
 
+/* Pairing and bonding, for every link. The person confirms a code on the
+ * Tab5 (the shell's dialog, through T5_EV_BLE_PAIRING) or reads one to
+ * type on the other device; a device that wants the Tab5 to type one is
+ * refused. True with *rc set when the event is handled here. */
+static bool sec_event(struct ble_gap_event *e, int *rc)
+{
+    *rc = 0;
+    struct ble_gap_conn_desc d;
+    switch (e->type) {
+    case BLE_GAP_EVENT_PASSKEY_ACTION: {
+        t5_ev_ble_pair_t ev = { .conn = e->passkey.conn_handle };
+        if (ble_gap_conn_find(ev.conn, &d) == 0) memcpy(ev.addr, d.peer_ota_addr.val, 6);
+        if (e->passkey.params.action == BLE_SM_IOACT_NUMCMP) {
+            ev.action = 1;
+            ev.passkey = e->passkey.params.numcmp;
+            t5_event_post(T5_EV_BLE_PAIRING, &ev, sizeof ev);
+        } else if (e->passkey.params.action == BLE_SM_IOACT_DISP) {
+            struct ble_sm_io io = { .action = BLE_SM_IOACT_DISP, .passkey = esp_random() % 1000000 };
+            ev.action = 2;
+            ev.passkey = io.passkey;
+            ble_sm_inject_io(ev.conn, &io);
+            t5_event_post(T5_EV_BLE_PAIRING, &ev, sizeof ev);
+        } else {
+            ble_gap_terminate(ev.conn, BLE_ERR_AUTH_FAIL);
+        }
+        return true;
+    }
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+        /* The other device forgot us and pairs again: drop the old bond. */
+        if (ble_gap_conn_find(e->repeat_pairing.conn_handle, &d) == 0) ble_store_util_delete_peer(&d.peer_id_addr);
+        *rc = BLE_GAP_REPEAT_PAIRING_RETRY;
+        return true;
+    case BLE_GAP_EVENT_ENC_CHANGE: {
+        t5_ev_ble_pair_t ev = { .conn = e->enc_change.conn_handle,
+                                .err = e->enc_change.status ? T5_ERR_DENIED : T5_OK };
+        if (ble_gap_conn_find(ev.conn, &d) == 0) memcpy(ev.addr, d.peer_id_addr.val, 6);
+        t5_event_post(T5_EV_BLE_PAIRED, &ev, sizeof ev);
+        return false;                       /* HID wants it too */
+    }
+    default: return false;
+    }
+}
+
 /* GAP events for links centrals made to us, through the advertiser. */
 static int adv_event(struct ble_gap_event *e, void *arg)
 {
     (void)arg;
+    int rc;
+    if (sec_event(e, &rc)) return rc;
     t5_mutex_lock(s_mx);
+    ble_hid_gap_locked(e);
     switch (e->type) {
     case BLE_GAP_EVENT_CONNECT:
         if (e->connect.status == 0) {
@@ -922,6 +983,8 @@ static int mtu_done(uint16_t h, const struct ble_gatt_error *err, uint16_t mtu, 
 
 static int link_event(struct ble_gap_event *e, void *arg)
 {
+    int src;
+    if (sec_event(e, &src)) return src;
     t5_mutex_lock(s_mx);
     t5_ble_conn_t *c = arg;
     if (!link_valid_locked(c)) {
@@ -1081,7 +1144,7 @@ static void adv_release(void *h)
     T5_IGNORE(t5_ble_adv_stop(h));
 }
 
-t5_err_t t5_ble_adv_start(const t5_ble_adv_cfg_t *cfg, t5_ble_advertiser_t **out)
+static t5_err_t adv_start(const t5_ble_adv_cfg_t *cfg, void *app, uint16_t appearance, t5_ble_advertiser_t **out)
 {
     if (!cfg || !out || cfg->mfr_len > 29 || (cfg->mfr_len && !cfg->mfr_data)) return T5_ERR_INVALID_ARG;
     if (cfg->interval_ms && (cfg->interval_ms < 20 || cfg->interval_ms > 10240)) return T5_ERR_INVALID_ARG;
@@ -1090,7 +1153,8 @@ t5_err_t t5_ble_adv_start(const t5_ble_adv_cfg_t *cfg, t5_ble_advertiser_t **out
     t5_ble_advertiser_t *a = heap_caps_calloc(1, sizeof *a, MALLOC_CAP_SPIRAM);
     if (!a) return T5_ERR_NO_MEM;
     a->magic = ADV_MAGIC;
-    a->app = t5_app_ctx_get();
+    a->app = app;
+    a->appearance = appearance;
     a->cfg = *cfg;
     if (cfg->name) snprintf(a->name, sizeof a->name, "%s", cfg->name);
     if (cfg->mfr_len) memcpy(a->mfr, cfg->mfr_data, cfg->mfr_len);
@@ -1124,6 +1188,45 @@ t5_err_t t5_ble_adv_start(const t5_ble_adv_cfg_t *cfg, t5_ble_advertiser_t **out
     }
     *out = a;
     return T5_OK;
+}
+
+t5_err_t t5_ble_adv_start(const t5_ble_adv_cfg_t *cfg, t5_ble_advertiser_t **out)
+{
+    return adv_start(cfg, t5_app_ctx_get(), 0, out);
+}
+
+static t5_ble_advertiser_t *s_sys_adv;
+
+t5_err_t ble_adv_sys_start(const char *name, uint16_t appearance, const char *uuid)
+{
+    t5_mutex_lock(s_mx);
+    t5_err_t e = s_sys_adv ? T5_ERR_BUSY : T5_OK;
+    if (e == T5_OK) {
+        /* Fast enough for a host looking to (re)connect. */
+        const t5_ble_adv_cfg_t cfg = { .name = name, .svc_uuid = uuid, .interval_ms = 50, .connectable = true };
+        e = adv_start(&cfg, NULL, appearance, &s_sys_adv);
+    }
+    t5_mutex_unlock(s_mx);
+    return e;
+}
+
+void ble_adv_sys_stop(void)
+{
+    t5_mutex_lock(s_mx);
+    t5_ble_advertiser_t *a = s_sys_adv;
+    s_sys_adv = NULL;
+    t5_mutex_unlock(s_mx);
+    if (a) T5_IGNORE(t5_ble_adv_stop(a));
+}
+
+t5_mutex_t ble_mx(void)
+{
+    return s_mx;
+}
+
+bool ble_synced(void)
+{
+    return s_synced;
 }
 
 t5_err_t t5_ble_adv_stop(t5_ble_advertiser_t *a)
@@ -1336,9 +1439,22 @@ static void host_task(void *arg)
     nimble_port_freertos_deinit();
 }
 
+/* Exclusive Bluetooth (t5_core/excl.h): an app has the controller over raw
+ * HCI and NimBLE is stopped. s_life orders the stack's start and stop
+ * between the net task and an app's claim. */
+static bool s_excl;
+static t5_mutex_t s_life;
+static MessageBufferHandle_t s_hci_rx;
+static eh_host_bt_mcu_hci_tx_fn_t s_hci_tx;
+static t5_wakelock_t *s_excl_lock;
+static uint32_t s_hci_dropped;
+
+static t5_err_t excl_take(void);
+static void excl_give(void);
+
 static void stack_start(void)
 {
-    if (s_running || !s_enabled || !s_link_up) return;
+    if (s_running || !s_enabled || !s_link_up || s_excl) return;
     esp_hosted_bt_host_stack_cfg_t cfg = ESP_HOSTED_BT_HOST_STACK_CONFIG_DEFAULT();
     /* C6 firmware before esp_hosted 2.x (the factory 1.4.1 on Unit A) brings
      * its controller up at boot and doesn't know the controller RPCs. */
@@ -1360,6 +1476,19 @@ static void stack_start(void)
     ble_svc_gap_init();
     ble_svc_gatt_init();
     ble_svc_gap_device_name_set(DEVICE_NAME);
+    /* Pairing: LE Secure Connections with numeric comparison (the Tab5
+     * shows a code, the person confirms it matches), bonds kept in NVS;
+     * when the store is full the oldest bond goes. */
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_DISP_YES_NO;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 1;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ble_store_config_init();
+    /* HID's services first and every time, so their handles never move. */
+    if (ble_hid_register()) T5_LOGE(TAG, "the HID services didn't register");
     xSemaphoreTake(s_sync, 0);
     s_running = true;
     nimble_port_freertos_init(host_task);
@@ -1387,6 +1516,7 @@ static void stack_down_locked(void)
         if (was) post(T5_EV_BLE_DISCONNECTED, -1, 0);
     }
     if (s_scanner) s_scanner->ended = true;
+    ble_hid_down_locked();
     for (int i = 0; i < MAX_SERVERS; i++) {
         if (s_servers[i]) s_servers[i]->registered = false;
     }
@@ -1422,7 +1552,10 @@ static void ensure_init(void)
     t5_mutex_lock(m);
     if (!s_inited) {
         s_mx = t5_mutex_create();
+        s_life = t5_mutex_create();
         s_sync = xSemaphoreCreateBinary();
+        static const t5_excl_provider_t prov = { excl_take, excl_give };
+        t5_excl_set_provider(T5_EXCL_BT, &prov);
         nvs_handle_t h;
         uint8_t v = 0;
         if (net_nvs_open(NVS_READONLY, &h) == ESP_OK) {
@@ -1435,12 +1568,111 @@ static void ensure_init(void)
     t5_mutex_unlock(m);
 }
 
+static void hci_rx(const uint8_t *frame, uint16_t len, void *ctx)
+{
+    (void)ctx;
+    if (!s_hci_rx || xMessageBufferSend(s_hci_rx, frame, len, 0) != len) s_hci_dropped++;
+}
+
+/* The controller to the app's HCI (under s_life). esp_hosted's host-stack
+ * helper is built for NimBLE only, so this goes one layer down: the
+ * controller RPCs and the raw HCI channel it would have used. */
+static t5_err_t raw_up(void)
+{
+    esp_err_t r = ESP_FAIL;
+    for (int waited = 0; waited <= 5000; waited += 100) {
+        r = eh_host_bt_controller_init();
+        if (r == ESP_OK || r == ESP_ERR_INVALID_STATE) break;   /* INVALID_STATE: already up */
+        t5_delay_ms(100);
+    }
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) return T5_ERR_IO;
+    r = eh_host_bt_controller_enable();
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) return T5_ERR_IO;
+    s_hci_tx = eh_host_bt_mcu_hci_register(hci_rx, NULL);
+    return s_hci_tx ? T5_OK : T5_ERR_IO;
+}
+
+static void raw_down(void)
+{
+    if (!s_hci_tx) return;
+    s_hci_tx = NULL;
+    eh_host_bt_mcu_hci_unregister();
+    eh_host_bt_controller_disable();
+    eh_host_bt_controller_deinit(false);    /* NimBLE's setup brings it up again */
+}
+
 void t5_ble_on_link(bool up)
 {
     ensure_init();
+    t5_mutex_lock(s_life);
     s_link_up = up;
-    if (up && s_enabled) stack_start();
-    else stack_stop();
+    if (s_excl) {
+        /* The app's transport follows the C6 like NimBLE would. */
+        if (up && !s_hci_tx) T5_LOG_ON_ERR(TAG, raw_up());
+        else if (!up) raw_down();
+    } else if (up && s_enabled) {
+        stack_start();
+    } else {
+        stack_stop();
+    }
+    t5_mutex_unlock(s_life);
+}
+
+static t5_err_t excl_take(void)
+{
+    ensure_init();
+    t5_mutex_lock(s_life);
+    t5_err_t e = s_link_up ? T5_OK : T5_ERR_STATE;      /* the C6 is off: Bluetooth and Wi-Fi off */
+    if (e == T5_OK && !s_hci_rx) {
+        s_hci_rx = xMessageBufferCreateWithCaps(32 * 1024, MALLOC_CAP_SPIRAM);
+        if (!s_hci_rx) e = T5_ERR_NO_MEM;
+    }
+    if (e == T5_OK) {
+        s_excl = true;
+        stack_stop();                              /* every BLE handle's link drops */
+        xMessageBufferReset(s_hci_rx);
+        s_hci_dropped = 0;
+        e = raw_up();
+        if (e != T5_OK) {
+            s_excl = false;
+            stack_start();
+        } else {
+            s_excl_lock = t5_wakelock_acquire_system(T5_LOCK_NET, "bt.excl");
+            T5_LOGW(TAG, "an app has the Bluetooth controller (raw HCI)");
+        }
+    }
+    t5_mutex_unlock(s_life);
+    return e;
+}
+
+static void excl_give(void)
+{
+    t5_mutex_lock(s_life);
+    raw_down();
+    s_excl = false;
+    if (s_excl_lock) t5_wakelock_release(s_excl_lock);
+    s_excl_lock = NULL;
+    stack_start();                                 /* NimBLE resets the controller */
+    t5_mutex_unlock(s_life);
+    T5_LOGI(TAG, "Bluetooth back to the system");
+}
+
+t5_err_t t5_bt_hci_send(t5_excl_t *h, const void *frame, size_t len)
+{
+    if (!frame || len < 2 || len > 1024) return T5_ERR_INVALID_ARG;
+    if (!t5_excl_holds(h, T5_EXCL_BT)) return T5_ERR_STATE;
+    eh_host_bt_mcu_hci_tx_fn_t tx = s_hci_tx;
+    if (!tx) return T5_ERR_STATE;
+    return tx(frame, (uint16_t)len) == 0 ? T5_OK : T5_ERR_IO;
+}
+
+int t5_bt_hci_next(t5_excl_t *h, void *buf, size_t cap, uint32_t timeout_ms)
+{
+    if (!buf || !cap) return T5_ERR_INVALID_ARG;
+    if (!t5_excl_holds(h, T5_EXCL_BT) || !s_hci_rx) return T5_ERR_STATE;
+    size_t n = xMessageBufferReceive(s_hci_rx, buf, cap, ticks(timeout_ms));
+    if (!n) return t5_excl_holds(h, T5_EXCL_BT) ? T5_ERR_TIMEOUT : T5_ERR_STATE;
+    return (int)n;
 }
 
 /* ---- the system's API (ble_sys.h) ------------------------------------------ */
@@ -1542,4 +1774,47 @@ bool t5_ble_sys_connected(void)
     bool up = s_sys_link && s_sys_link->up;
     t5_mutex_unlock(s_mx);
     return up;
+}
+
+/* ---- pairing and bonds (t5_net/ble_sys.h) --------------------------------- */
+t5_err_t t5_ble_sys_pair_reply(uint16_t conn, bool accept)
+{
+    if (!s_synced) return T5_ERR_STATE;
+    struct ble_sm_io io = { .action = BLE_SM_IOACT_NUMCMP, .numcmp_accept = accept };
+    return map_rc(ble_sm_inject_io(conn, &io));
+}
+
+int t5_ble_sys_bonds(t5_ble_bond_t *out, int max)
+{
+    if (!s_running || !out || max <= 0) return 0;
+    ble_addr_t peers[MYNEWT_VAL(BLE_STORE_MAX_BONDS)];
+    int n = 0;
+    if (ble_store_util_bonded_peers(peers, &n, MYNEWT_VAL(BLE_STORE_MAX_BONDS))) return 0;
+    if (n > max) n = max;
+    for (int i = 0; i < n; i++) {
+        memcpy(out[i].addr, peers[i].val, 6);
+        out[i].addr_type = peers[i].type;
+    }
+    return n;
+}
+
+t5_err_t t5_ble_sys_forget(const uint8_t addr[6], uint8_t addr_type)
+{
+    if (!addr) return T5_ERR_INVALID_ARG;
+    if (!s_running) return T5_ERR_STATE;
+    ble_addr_t a = { .type = addr_type };
+    memcpy(a.val, addr, 6);
+    /* A link to it ends first: its keys go with the bond. */
+    struct ble_gap_conn_desc d;
+    for (int i = 0; i < T5_BLE_MAX_LINKS; i++) {
+        t5_mutex_lock(s_mx);
+        t5_ble_conn_t *c = s_links[i];
+        uint16_t h = c && c->up ? c->handle : BLE_HS_CONN_HANDLE_NONE;
+        t5_mutex_unlock(s_mx);
+        if (h != BLE_HS_CONN_HANDLE_NONE && ble_gap_conn_find(h, &d) == 0 && !ble_addr_cmp(&d.peer_id_addr, &a)) {
+            ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
+        }
+    }
+    int rc = ble_store_util_delete_peer(&a);
+    return rc == 0 || rc == BLE_HS_ENOENT ? T5_OK : map_rc(rc);
 }
