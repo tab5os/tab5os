@@ -131,7 +131,8 @@ t5_err_t t5_jpeg_dims(const uint8_t *jpeg, size_t len, uint16_t *w, uint16_t *h)
 t5_err_t t5_jpeg_decode_dma(const uint8_t *jpeg, size_t len, uint16_t *out, size_t out_bytes, uint16_t *w,
                             uint16_t *h);
 /* PSRAM the JPEG decoder can read and write directly: aligned to 128, the
- * size rounded up to 128 (and zeroed). Free with free(). */
+ * size rounded up to 128 (and zeroed). Free with free(). NULL when out of
+ * memory, or when bytes is too large to round up. */
 void *t5_jpeg_alloc(size_t bytes);
 
 /* Diagnostics: the next frame as the preview shows it, scaled to w x h

@@ -35,6 +35,13 @@
 #define HIDE_MS 3000
 #define AUDIO_AHEAD_MS 400
 #define TICK_MS 50
+/* The largest chunks we buffer. The Camera's frames are at most w*h bytes
+ * (its encoder's output buffer: 0.9 MiB at 1280x720), and ffmpeg's are far
+ * smaller; a sound chunk is usually one frame's worth, at most a second's
+ * (192 KiB at 48 kHz stereo). */
+#define FRAME_MAX (4u * 1024 * 1024)
+#define SOUND_CHUNK_MAX (1024u * 1024)
+#define PIXELS_MAX (4096u * 4096)      /* a decoded frame's, so its size can't wrap */
 
 enum { ST_OPENING, ST_READY, ST_PLAYING, ST_ERROR };
 
@@ -181,9 +188,18 @@ static void parse_hdrl(video_t *v, const uint8_t *p, uint32_t n)
     }
 }
 
-static bool add_chunk(video_t *v, const uint8_t id[4], uint32_t off, uint32_t len)
+/* A chunk that isn't all inside the file (fsize bytes) is dropped, not the
+ * whole file refused: a file cut short or a slightly damaged index still
+ * plays what is there. A dropped frame becomes a repeat of the last one, so
+ * the frames after it keep their time. Nothing outside the file is ever
+ * read, and max_v and max_a only count chunks that are. */
+static bool add_chunk(video_t *v, const uint8_t id[4], uint64_t off, uint32_t len, uint32_t fsize)
 {
     if (id[0] < '0' || id[0] > '9' || id[1] < '0' || id[1] > '9') return true;
+    if (off > fsize || len > fsize - off) {
+        off = 0;
+        len = 0;
+    }
     int stream = (id[0] - '0') * 10 + (id[1] - '0');
     if (stream == v->vstream && (id[2] == 'd') && (id[3] == 'c' || id[3] == 'b')) {
         if (v->nv == v->v_cap) {
@@ -193,7 +209,7 @@ static bool add_chunk(video_t *v, const uint8_t id[4], uint32_t off, uint32_t le
             v->v = n;
             v->v_cap = cap;
         }
-        v->v[v->nv++] = (vchunk_t){ off, len };
+        v->v[v->nv++] = (vchunk_t){ (uint32_t)off, len };
         if (len > v->max_v) v->max_v = len;
     } else if (stream == v->astream && id[2] == 'w' && id[3] == 'b' && len) {
         if (v->na == v->a_cap) {
@@ -203,7 +219,7 @@ static bool add_chunk(video_t *v, const uint8_t id[4], uint32_t off, uint32_t le
             v->a = n;
             v->a_cap = cap;
         }
-        v->a[v->na++] = (achunk_t){ off, len, v->a_total };
+        v->a[v->na++] = (achunk_t){ (uint32_t)off, len, v->a_total };
         v->a_total += len;
         if (len > v->max_a) v->max_a = len;
     }
@@ -212,7 +228,7 @@ static bool add_chunk(video_t *v, const uint8_t id[4], uint32_t off, uint32_t le
 
 /* idx1: one entry per chunk. Offsets count from the 'movi' fourcc, or
  * (some writers) from the start of the file. */
-static t5_err_t read_idx1(video_t *v, uint32_t at, uint32_t n, uint32_t movi, uint32_t movi_end)
+static t5_err_t read_idx1(video_t *v, uint32_t at, uint32_t n, uint32_t movi, uint32_t movi_end, uint32_t fsize)
 {
     enum { BATCH = 256 };
     uint8_t *buf = malloc(BATCH * 16);
@@ -233,7 +249,7 @@ static t5_err_t read_idx1(video_t *v, uint32_t at, uint32_t n, uint32_t movi, ui
                 based = true;
                 base = off >= movi && off < movi_end ? 0 : movi;
             }
-            if (!add_chunk(v, en, base + off + 8, len)) {
+            if (!add_chunk(v, en, (uint64_t)base + off + 8, len, fsize)) {
                 e = T5_ERR_NO_MEM;
                 break;
             }
@@ -243,18 +259,22 @@ static t5_err_t read_idx1(video_t *v, uint32_t at, uint32_t n, uint32_t movi, ui
     return e;
 }
 
-/* No index: walk the movi list. */
-static t5_err_t scan_movi(video_t *v, uint32_t pos, uint32_t end)
+/* No index: walk the movi list (end is within the file). A chunk that runs
+ * past the end stops the walk: nothing after it can be found. */
+static t5_err_t scan_movi(video_t *v, uint32_t pos, uint32_t end, uint32_t fsize)
 {
     uint8_t h[12];
-    while (pos + 8 <= end && !v->quit) {
+    while (pos <= end && end - pos >= 8 && !v->quit) {
         if (!read_at(v, pos, h, 12)) break;
         uint32_t sz = rd32(h + 4);
         if (is4(h, "LIST")) {          /* 'rec ' groups */
+            if (end - pos < 12) break;
             pos += 12;
             continue;
         }
-        if (!add_chunk(v, h, pos + 8, sz)) return T5_ERR_NO_MEM;
+        if (sz > end - pos - 8) break;
+        if (!add_chunk(v, h, (uint64_t)pos + 8, sz, fsize)) return T5_ERR_NO_MEM;
+        if (sz + (sz & 1) > end - pos - 8) break;
         pos += 8 + sz + (sz & 1);
     }
     return T5_OK;
@@ -274,11 +294,14 @@ static t5_err_t parse(video_t *v)
         snprintf(v->err, sizeof v->err, "It isn't an AVI file.");
         return T5_ERR_NOT_SUPPORTED;
     }
-    uint32_t end = (uint32_t)fsize, riff_end = 8 + rd32(h + 4);
-    if (riff_end < end) end = riff_end;
+    /* Every offset and length from here on is checked against fbytes (long
+     * is 32 bits here, and FAT files are under 4 GB, so it fits). */
+    uint32_t fbytes = (uint32_t)fsize, end = fbytes;
+    uint64_t riff_end = 8 + (uint64_t)rd32(h + 4);
+    if (riff_end < end) end = (uint32_t)riff_end;
     uint32_t movi = 0, movi_end = 0, idx_at = 0, idx_n = 0;
     v->vstream = v->astream = -1;
-    for (uint32_t pos = 12; pos + 8 <= end;) {
+    for (uint32_t pos = 12; pos <= end && end - pos >= 8;) {
         if (!read_at(v, pos, h, 12)) break;
         uint32_t sz = rd32(h + 4);
         if (is4(h, "LIST") && is4(h + 8, "hdrl") && sz >= 4 && sz < 256 * 1024) {
@@ -286,12 +309,14 @@ static t5_err_t parse(video_t *v)
             if (b && read_at(v, pos + 12, b, sz - 4)) parse_hdrl(v, b, sz - 4);
             free(b);
         } else if (is4(h, "LIST") && is4(h + 8, "movi")) {
+            /* A recording cut short says more than the file has. */
             movi = pos + 8;
-            movi_end = pos + 8 + sz;
+            movi_end = sz > end - pos - 8 ? end : pos + 8 + sz;
         } else if (is4(h, "idx1")) {
             idx_at = pos + 8;
-            idx_n = sz / 16;
+            idx_n = (sz < end - idx_at ? sz : end - idx_at) / 16;
         }
+        if (sz > end - pos - 8 || (sz & 1) > end - pos - 8 - sz) break;
         pos += 8 + sz + (sz & 1);
     }
     if (v->vstream < 0 || !movi) {
@@ -299,11 +324,15 @@ static t5_err_t parse(video_t *v)
         return T5_ERR_NOT_SUPPORTED;
     }
     if (!v->mjpeg) return T5_ERR_NOT_SUPPORTED;
-    t5_err_t e = idx_n ? read_idx1(v, idx_at, idx_n, movi, movi_end) : T5_OK;
-    if (e == T5_OK && !v->nv) e = scan_movi(v, movi + 4, movi_end > end ? end : movi_end);
+    t5_err_t e = idx_n ? read_idx1(v, idx_at, idx_n, movi, movi_end, fbytes) : T5_OK;
+    if (e == T5_OK && !v->nv) e = scan_movi(v, movi + 4, movi_end > end ? end : movi_end, fbytes);
     if (e != T5_OK || !v->nv) {
         snprintf(v->err, sizeof v->err, "Its index couldn't be read.");
         return e != T5_OK ? e : T5_ERR_IO;
+    }
+    if (v->max_v > FRAME_MAX) {
+        snprintf(v->err, sizeof v->err, "Its frames are too large to play.");
+        return T5_ERR_NOT_SUPPORTED;
     }
     if (!v->us_per_frame) v->us_per_frame = 33333;
     v->dur_ms = (uint32_t)((uint64_t)v->nv * v->us_per_frame / 1000);
@@ -311,7 +340,9 @@ static t5_err_t parse(video_t *v)
     if (v->astream >= 0 && v->na) {
         bool pcm = v->a_fmt == 1 && (v->a_bits == 8 || v->a_bits == 16) && v->a_ch >= 1 && v->a_ch <= 2 &&
                    v->a_rate >= 8000 && v->a_rate <= 48000;
-        if (pcm) {
+        if (pcm && v->max_a > SOUND_CHUNK_MAX) {
+            snprintf(v->note, sizeof v->note, "No sound: its sound comes in pieces too large to play");
+        } else if (pcm) {
             v->has_audio = true;
             v->a_bps = v->a_rate * v->a_ch * (v->a_bits / 8);
             if (!v->a_align) v->a_align = (uint16_t)(v->a_ch * (v->a_bits / 8));
@@ -333,6 +364,10 @@ static t5_err_t probe(video_t *v)
         t5_err_t e = ok ? t5_jpeg_size(b, n, &v->jpw, &v->jph) : T5_ERR_IO;
         if (e == T5_OK) e = t5_jpeg_dims(b, n, &v->jw, &v->jh);
         free(b);
+        if (e == T5_OK && (uint32_t)v->jpw * v->jph > PIXELS_MAX) {
+            snprintf(v->err, sizeof v->err, "Its frames are too large to play.");
+            return T5_ERR_NOT_SUPPORTED;
+        }
         if (e != T5_OK || !v->jw || !v->jh) {
             snprintf(v->err, sizeof v->err, "Its frames aren't JPEGs this decoder can read.");
             return T5_ERR_NOT_SUPPORTED;
@@ -346,6 +381,7 @@ static t5_err_t probe(video_t *v)
 /* ---- playback (the worker) ---------------------------------------------------------- */
 typedef struct {
     uint8_t *in;
+    size_t in_cap;                    /* what in holds: no frame longer is read */
     /* Two decoded frames: one the screen may still read (until the plane
      * releases it), one being decoded. */
     uint16_t *dec[2];
@@ -354,7 +390,8 @@ typedef struct {
     uint32_t dec_seq[2];
     int next;
     uint8_t *abuf;
-    int16_t *a16;
+    int16_t *a16;                     /* 8-bit sound widened: twice abuf's */
+    size_t a_cap;                     /* what abuf holds */
     t5_audio_out_t *out;
     bool out_paused;
     uint32_t ai, a_skip;
@@ -412,7 +449,7 @@ static void audio_fill(video_t *v, play_t *pl)
     while (pl->ai < v->na && !v->quit && t5_audio_out_queued_ms(pl->out) < AUDIO_AHEAD_MS) {
         const achunk_t *c = &v->a[pl->ai];
         uint32_t n = c->len - pl->a_skip;
-        if (!read_at(v, c->off + pl->a_skip, pl->abuf, n)) {
+        if (n > pl->a_cap || !read_at(v, c->off + pl->a_skip, pl->abuf, n)) {
             pl->ai = v->na;               /* stop the sound, keep the picture */
             break;
         }
@@ -480,7 +517,7 @@ static int decode(video_t *v, play_t *pl, uint32_t i)
 {
     const vchunk_t *c = &v->v[i];
     int s = pl->next;
-    if (!read_at(v, c->off, pl->in, c->len) || !slot_free(v, pl, s)) return -1;
+    if (c->len > pl->in_cap || !read_at(v, c->off, pl->in, c->len) || !slot_free(v, pl, s)) return -1;
     uint16_t w, h;
     if (t5_jpeg_decode_dma(pl->in, c->len, pl->dec[s], pl->dec_bytes, &w, &h) != T5_OK || w != v->jpw || h != v->jph)
         return -1;
@@ -512,12 +549,16 @@ static void post(video_t *v, play_t *pl, int s)
 static void play(video_t *v)
 {
     play_t pl = { 0 };
-    pl.in = t5_jpeg_alloc(v->max_v + 16);
+    /* parse() and probe() bound max_v, max_a and the frame size, so none of
+     * these sizes can wrap. */
+    pl.in_cap = (size_t)v->max_v + 16;
+    pl.in = t5_jpeg_alloc(pl.in_cap);
     pl.dec_bytes = ((size_t)v->jpw * v->jph * 2 + 127) & ~(size_t)127;
     pl.dec[0] = t5_jpeg_alloc(pl.dec_bytes);
     pl.dec[1] = t5_jpeg_alloc(pl.dec_bytes);
     if (v->has_audio) {
         pl.abuf = heap_caps_malloc(v->max_a, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        pl.a_cap = pl.abuf ? v->max_a : 0;
         pl.a16 = v->a_bits == 8 ? heap_caps_malloc((size_t)v->max_a * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
         if (!pl.abuf || (v->a_bits == 8 && !pl.a16)) {
             v->has_audio = false;

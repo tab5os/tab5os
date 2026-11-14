@@ -27,6 +27,7 @@
 #define MICROPY_PERSISTENT_CODE_LOAD            (0)   /* no .mpy: could carry machine code */
 #define MICROPY_PY_MACHINE                      (0)   /* machine.mem32, Pin, I2C... */
 #define MICROPY_PY_UCTYPES                      (0)   /* uctypes.bytearray_at(addr) */
+#define MICROPY_PY_STRUCT_UNSAFE_TYPECODES      (0)   /* struct/array 'O' 'P' 'S': int <-> pointer, read at an address */
 #define MICROPY_PY_OS                           (0)   /* replaced by the sandboxed os in fs.c */
 #define MICROPY_VFS                             (0)   /* no mounts: fs.c checks every path */
 #define MICROPY_PY_VFS                          (0)
