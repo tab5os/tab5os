@@ -21,3 +21,10 @@ t5_err_t t5_secret_seal(const void *in, size_t len, void *out, size_t outcap, si
 t5_err_t t5_secret_open(const void *in, size_t len, void *out, size_t outcap, size_t *outlen);
 /* True if data starts like a sealed blob (for migrating plaintext). */
 int t5_secret_is_sealed(const void *in, size_t len);
+
+/* HMAC-SHA256 of msg, keyed from the same chip IDs under another label: it
+ * ties a record to this Tab5 (t5_pkg's SD install records), so a copy made
+ * on another device or a PC doesn't verify. Same caveat as above: someone
+ * holding this Tab5 can compute it. The host tests use a mock. */
+#define T5_SECRET_MAC_LEN 32
+t5_err_t t5_secret_mac(const void *msg, size_t len, uint8_t out[T5_SECRET_MAC_LEN]);

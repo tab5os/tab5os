@@ -16,11 +16,12 @@
 #include "t5_pkg/png.h"
 #include "t5_pkg/toml.h"
 #include "t5_pkg/zip.h"
+#include "t5_storage/paths.h"
 #include "pkg_test.h"
 #include "fixtures/pkg_fixtures.h"
 
 static char s_dir[128];
-static char s_sd[192], s_data[192], s_appdata[192];
+static char s_sd[192], s_data[192], s_appdata[192], s_sys[64];
 
 static void sh(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void sh(const char *fmt, ...)
@@ -36,11 +37,13 @@ static void sh(const char *fmt, ...)
 void setUp(void)
 {
     snprintf(s_dir, sizeof s_dir, "/tmp/t5_pkg_test_%d", (int)getpid());
-    sh("rm -rf '%s' && mkdir -p '%s/sd' '%s/data'", s_dir, s_dir, s_dir);
+    sh("rm -rf '%s' && mkdir -p '%s/sd' '%s/data/sys'", s_dir, s_dir, s_dir);
     snprintf(s_sd, sizeof s_sd, "%s/sd/apps", s_dir);
     snprintf(s_data, sizeof s_data, "%s/data/apps", s_dir);
     snprintf(s_appdata, sizeof s_appdata, "%s/data/appdata", s_dir);
+    snprintf(s_sys, sizeof s_sys, "%s/data/sys", s_dir);
     t5_pkg_set_roots(s_sd, s_data, s_appdata);
+    t5_sys_dir_set(s_sys);   /* grants and the SD binding marker */
 }
 
 void tearDown(void)
@@ -942,18 +945,20 @@ static void test_list_and_shadowing(void)
     TEST_ASSERT_EQUAL(0, t5_pkg_list(list, 8));
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v2), T5_PKG_DEST_DATA, NULL, err, sizeof err));
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_other), T5_PKG_DEST_DATA, NULL, err, sizeof err));
-    /* The same id copied onto the SD by hand (e.g. from a PC). */
+    /* The same id copied onto the SD by hand, record and all (it was
+     * written on this device, so its MAC verifies). */
     char cmd[640];
     snprintf(cmd, sizeof cmd, "mkdir -p '%s' && cp -R '%s/com.example.hello' '%s/'", s_sd, s_data, s_sd);
     TEST_ASSERT_EQUAL(0, system(cmd));
     /* Junk that must be ignored. */
     sh("mkdir -p '%s/not_an_id' '%s/com.example.broken'", s_sd, s_sd);
 
+    /* The internal install wins: an SD copy never stands in for it. */
     int n = t5_pkg_list(list, 8);
     TEST_ASSERT_EQUAL(2, n);
     int hello = strcmp(list[0].manifest.id, "com.example.hello") == 0 ? 0 : 1;
     TEST_ASSERT_EQUAL_STRING("com.example.hello", list[hello].manifest.id);
-    TEST_ASSERT_EQUAL(T5_PKG_DEST_SD, list[hello].root);
+    TEST_ASSERT_EQUAL(T5_PKG_DEST_DATA, list[hello].root);
     TEST_ASSERT_TRUE(list[hello].shadowed);
     TEST_ASSERT_EQUAL_STRING("com.example.other", list[1 - hello].manifest.id);
     TEST_ASSERT_EQUAL(T5_PKG_DEST_DATA, list[1 - hello].root);
@@ -962,8 +967,101 @@ static void test_list_and_shadowing(void)
 
     t5_pkg_info_t f;
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_find("com.example.hello", &f));
-    TEST_ASSERT_EQUAL(T5_PKG_DEST_SD, f.root);
+    TEST_ASSERT_EQUAL(T5_PKG_DEST_DATA, f.root);
     TEST_ASSERT_TRUE(f.shadowed);
+
+    /* An unbound SD copy doesn't even count as a shadow. */
+    sh("printf 't5pkg 1\\nsize=1\\ntime=1\\n' > '%s/com.example.hello/.install'", s_sd);
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_find("com.example.hello", &f));
+    TEST_ASSERT_EQUAL(T5_PKG_DEST_DATA, f.root);
+    TEST_ASSERT_FALSE(f.shadowed);
+    TEST_ASSERT_EQUAL(2, t5_pkg_list(list, 8));
+    TEST_ASSERT_FALSE(list[0].shadowed || list[1].shadowed);
+}
+
+/* Rewrite an installed app's record, as a PC or another Tab5 could. */
+static void put_record(const t5_pkg_info_t *info, const char *mac_line)
+{
+    char text[256];
+    snprintf(text, sizeof text, "t5pkg 1\nsize=%llu\ntime=%lld\n%s", (unsigned long long)info->size,
+             (long long)info->install_time, mac_line);
+    write_text(info->dir, ".install", text);
+}
+
+static char *read_record(const t5_pkg_info_t *info)
+{
+    static char text[256];
+    char p[300];
+    snprintf(p, sizeof p, "%s/.install", info->dir);
+    FILE *f = fopen(p, "r");
+    TEST_ASSERT_NOT_NULL(f);
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n] = 0;
+    return text;
+}
+
+static void test_sd_install_bound_to_device(void)
+{
+    t5_pkg_info_t info, f, list[4];
+    char err[160];
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_SD, &info, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(read_record(&info), "\nmac="));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_find("com.example.hello", &f));
+    TEST_ASSERT_EQUAL(1, t5_pkg_list(list, 4));
+    char good[160];
+    snprintf(good, sizeof good, "%s", strstr(read_record(&info), "mac="));
+
+    /* No MAC (a card prepared on a PC): not installed. */
+    put_record(&info, "");
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_find("com.example.hello", &f));
+    TEST_ASSERT_EQUAL(0, t5_pkg_list(list, 4));
+    /* A wrong MAC (another Tab5's key), or the right one over other fields. */
+    char bad[160];
+    snprintf(bad, sizeof bad, "%s", good);
+    bad[4] = bad[4] == '0' ? '1' : '0';
+    put_record(&info, bad);
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_find("com.example.hello", &f));
+    info.install_time++;
+    put_record(&info, good);
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_find("com.example.hello", &f));
+    TEST_ASSERT_EQUAL(0, t5_pkg_list(list, 4));
+    info.install_time--;
+    put_record(&info, good);
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_find("com.example.hello", &f));
+
+    /* The record from one app doesn't vouch for another id. */
+    t5_pkg_info_t other;
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_other), T5_PKG_DEST_SD, &other, err, sizeof err));
+    other.size = info.size;
+    other.install_time = info.install_time;
+    put_record(&other, good);
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_find("com.example.other", &f));
+    TEST_ASSERT_EQUAL(1, t5_pkg_list(list, 4));
+}
+
+static void test_sd_binding_migration(void)
+{
+    t5_pkg_info_t info, f;
+    char err[160];
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_SD, &info, err, sizeof err));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_other), T5_PKG_DEST_SD, NULL, err, sizeof err));
+    /* hello as older firmware left it; other already bound. */
+    put_record(&info, "");
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_find("com.example.hello", &f));
+
+    /* First boot of the new firmware adopts it, once. */
+    TEST_ASSERT_EQUAL(1, t5_pkg_bind_sd_once());
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_find("com.example.hello", &f));
+    TEST_ASSERT_EQUAL(info.size, f.size);
+    TEST_ASSERT_EQUAL(info.install_time, f.install_time);
+    TEST_ASSERT_TRUE(exists("%s/%s", s_sys, "sdapps.bound"));
+
+    /* After that, a card's unbound apps stay ignored. */
+    put_record(&info, "");
+    TEST_ASSERT_EQUAL(0, t5_pkg_bind_sd_once());
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_find("com.example.hello", &f));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_find("com.example.other", &f));
 }
 
 static void test_recover_interrupted(void)
@@ -1038,22 +1136,103 @@ static void test_grants(void)
     TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_load("com.example.hello", &g, &d));
     TEST_ASSERT_EQUAL_HEX32(T5_PERM_MIC, g);
     TEST_ASSERT_EQUAL_HEX32(T5_PERM_USB, d);
-    /* Saving leaves the grants file and nothing else behind. */
+    /* Saved under the system dir, one file per app and nothing else; not
+     * in the app's data folder, which the app can write. */
     char dir[300];
-    snprintf(dir, sizeof dir, "%s/com.example.hello", s_appdata);
+    snprintf(dir, sizeof dir, "%s/" T5_GRANTS_DIR_NAME, s_sys);
     DIR *dd = opendir(dir);
     TEST_ASSERT_NOT_NULL(dd);
     struct dirent *de;
     while ((de = readdir(dd))) {
-        if (strcmp(de->d_name, ".") && strcmp(de->d_name, "..")) TEST_ASSERT_EQUAL_STRING(".grants", de->d_name);
+        if (strcmp(de->d_name, ".") && strcmp(de->d_name, "..")) {
+            TEST_ASSERT_EQUAL_STRING("com.example.hello", de->d_name);
+        }
     }
     closedir(dd);
+    TEST_ASSERT_FALSE(exists("%s/%s", s_appdata, "com.example.hello"));
     /* Corrupt file. */
-    write_text(dir, ".grants", "garbage");
+    write_text(dir, "com.example.hello", "garbage");
     TEST_ASSERT_EQUAL(T5_ERR_FAIL, t5_pkg_grants_load("com.example.hello", &g, &d));
     TEST_ASSERT_EQUAL(0, g);
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_pkg_grants_save("../etc", 1, 0));
     TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_pkg_grants_load("x", &g, &d));
+}
+
+static void test_grants_forged_in_data_dir(void)
+{
+    /* What a Python app could write to its own working directory. */
+    const char *forged = "t5grants 1\ngranted=1ff1fff\ndenied=0\nlaunched=1\n";
+    t5_pkg_info_t info;
+    char err[160];
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_DATA, &info, err, sizeof err));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_save("com.example.hello", 0, T5_PERM_CAMERA));   /* "Don't allow" */
+    write_text(info.data_dir, ".grants", forged);
+
+    uint32_t g = 1, d = 0;
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_load("com.example.hello", &g, &d));
+    TEST_ASSERT_EQUAL_HEX32(0, g);
+    TEST_ASSERT_EQUAL_HEX32(T5_PERM_CAMERA, d);
+    TEST_ASSERT_FALSE(exists("%s/%s", info.data_dir, ".grants"));   /* removed, not copied */
+    TEST_ASSERT_FALSE(t5_pkg_launched("com.example.hello"));
+
+    /* Left by older firmware, with no grants of its own: asked again. */
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_remove("com.example.hello", true));
+    write_text(info.data_dir, ".grants", forged);
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_grants_load("com.example.hello", &g, &d));
+    TEST_ASSERT_EQUAL(0, g);
+    /* An upgrade or install removes it too. */
+    write_text(info.data_dir, ".grants", forged);
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_SD, &info, err, sizeof err));
+    TEST_ASSERT_FALSE(exists("%s/%s", info.data_dir, ".grants"));
+}
+
+static void test_remove_drops_grants(void)
+{
+    t5_pkg_info_t info;
+    char err[160];
+    uint32_t g, d;
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_SD, &info, err, sizeof err));
+    write_text(info.data_dir, "save.dat", "x");
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_save("com.example.hello", T5_PERM_CAMERA, 0));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_set_launched("com.example.hello"));
+    /* Data kept, grants not: another author's app under this id starts clean. */
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_remove("com.example.hello", true));
+    TEST_ASSERT_TRUE(exists("%s/%s", info.data_dir, "save.dat"));
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_grants_load("com.example.hello", &g, &d));
+    TEST_ASSERT_FALSE(t5_pkg_launched("com.example.hello"));
+    TEST_ASSERT_FALSE(exists("%s/" T5_GRANTS_DIR_NAME "/%s", s_sys, "com.example.hello"));
+
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_install(FIXTURE(fx_pkg_v1), T5_PKG_DEST_DATA, &info, err, sizeof err));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_save("com.example.hello", T5_PERM_CAMERA, 0));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_remove("com.example.hello", false));
+    TEST_ASSERT_EQUAL(T5_ERR_NOT_FOUND, t5_pkg_grants_load("com.example.hello", &g, &d));
+}
+
+static void test_launched_flag(void)
+{
+    const char *id = "com.example.hello";
+    uint32_t g, d;
+    TEST_ASSERT_FALSE(t5_pkg_launched(id));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_set_launched(id));
+    TEST_ASSERT_TRUE(t5_pkg_launched(id));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_load(id, &g, &d));   /* nothing granted yet */
+    TEST_ASSERT_EQUAL(0, g | d);
+    /* Answering a prompt keeps it, and it keeps the answers. */
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_save(id, T5_PERM_MIC, T5_PERM_CAMERA));
+    TEST_ASSERT_TRUE(t5_pkg_launched(id));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_set_launched(id));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_load(id, &g, &d));
+    TEST_ASSERT_EQUAL_HEX32(T5_PERM_MIC, g);
+    TEST_ASSERT_EQUAL_HEX32(T5_PERM_CAMERA, d);
+    /* A file without the line (as first written) reads as never opened. */
+    char dir[300];
+    snprintf(dir, sizeof dir, "%s/" T5_GRANTS_DIR_NAME, s_sys);
+    write_text(dir, id, "t5grants 1\ngranted=40\ndenied=0\n");
+    TEST_ASSERT_FALSE(t5_pkg_launched(id));
+    TEST_ASSERT_EQUAL(T5_OK, t5_pkg_grants_load(id, &g, &d));
+    TEST_ASSERT_EQUAL_HEX32(0x40, g);
+    TEST_ASSERT_FALSE(t5_pkg_launched("../etc"));
+    TEST_ASSERT_EQUAL(T5_ERR_INVALID_ARG, t5_pkg_set_launched("x"));
 }
 
 /* ---- png (app icons) ------------------------------------------------------- */
@@ -1390,7 +1569,12 @@ int main(void)
     RUN_TEST(test_remove_deep_data_dir);
     RUN_TEST(test_list_and_shadowing);
     RUN_TEST(test_recover_interrupted);
+    RUN_TEST(test_sd_install_bound_to_device);
+    RUN_TEST(test_sd_binding_migration);
     RUN_TEST(test_grants);
+    RUN_TEST(test_grants_forged_in_data_dir);
+    RUN_TEST(test_remove_drops_grants);
+    RUN_TEST(test_launched_flag);
     RUN_TEST(test_png_filters);
     RUN_TEST(test_png_formats);
     RUN_TEST(test_png_errors);

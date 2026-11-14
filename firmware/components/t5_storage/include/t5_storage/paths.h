@@ -33,6 +33,9 @@ extern "C" {
  * directory (t5_sys_path). The recovery image saves them to the SD card. */
 #define T5_CRASH_DB_NAME "crashes.bin"
 #define T5_DUMP_DIR_NAME "dumps"
+/* Installed apps' permission grants, one file per app (t5_pkg): here rather
+ * than in the app's own data folder, which the app can write. */
+#define T5_GRANTS_DIR_NAME "grants"
 
 /* The system records directory: T5_SYS_DIR, or a temporary directory that
  * host tests set. Every file in it is named through t5_sys_path(). */

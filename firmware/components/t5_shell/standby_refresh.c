@@ -10,7 +10,8 @@
  * by the app's max_seconds). An app is due when neither a run nor its own
  * card update happened within its interval; so one that set its card just
  * before standby isn't run straight away. Skipped: the open app (it runs, and
- * keeps its own card), and a Python app while a Python app is open (one VM).
+ * keeps its own card), a Python app while a Python app is open (one VM), and
+ * an app never opened in the foreground (t5_pkg_launched).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +77,8 @@ static int candidates(cand_t *out, int max)
     for (int i = 0; i < k && n < max; i++) {
         const t5_manifest_t *m = &infos[i].manifest;
         if (!m->background || !m->standby_refresh_min || !(m->perms & T5_PERM_AMBIENT)) continue;
+        /* Only an app the person has opened (t5_apps_run_alarm checks too). */
+        if (!t5_pkg_launched(m->id)) continue;
         snprintf(out[n].id, sizeof out[n].id, "%s", m->id);
         out[n].minutes = m->standby_refresh_min;
         out[n].runtime = m->runtime;

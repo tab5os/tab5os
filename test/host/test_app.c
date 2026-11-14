@@ -436,6 +436,10 @@ static void test_fs_scope(void)
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/appdata/com.ab/x", false, &n));        /* a neighbour, same prefix */
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/appdata/com.b/x", false, &n));
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs(T5_SYS_DIR "/" T5_CRASH_DB_NAME, false, &n));
+    /* Its own grants live outside its folders, out of its reach (t5_pkg). */
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs(T5_SYS_DIR "/" T5_GRANTS_DIR_NAME "/com.a", false, &n));
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs(T5_SYS_DIR "/" T5_GRANTS_DIR_NAME "/com.a", true, &n));
+    TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/Data/Sys/Grants", true, &n));
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/SD/APPS/com.b/x", false, &n));
     TEST_ASSERT_EQUAL(T5_FS_DENY, fs("/data/other", false, &n));
     TEST_ASSERT_EQUAL(T5_FS_ALLOW, fs("/sd/Other/song.mp3", false, &n));           /* picked */
