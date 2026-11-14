@@ -50,6 +50,17 @@ CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
 # App networking (t5_net/sock.h): room for app sockets next to the OS's own,
 # and TLS buffers (about 20 KB a connection) in PSRAM, not internal RAM.
 CONFIG_LWIP_MAX_SOCKETS=16
+# TCP receive window: IDF's default of 5760 bytes (4 segments) caps a
+# connection at window / round trip, about 19 KB/s (150 kb/s) to a server
+# 300 ms away, under a 160 kb/s radio stream, so it falls behind and never
+# catches up after a pause (Radio, 2026-11-14). 32 KB allows about 870 kb/s
+# at 300 ms without window scaling. The receive mailbox follows IDF's
+# guidance, window / MSS + 2. Unread data sits in the received frames,
+# which t5_net/hosted_compat.c moves to PSRAM (esp_hosted copied them into
+# internal RAM, where one unread socket could take ~50 KB): at worst 32 KB a
+# socket, in PSRAM.
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=25
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # Chains that end in a cross-signed root (Google's, among others) verify against the bundle.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y

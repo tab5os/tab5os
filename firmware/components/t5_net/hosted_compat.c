@@ -34,9 +34,9 @@ void __wrap_eh_host_bus_sdio_set_rx_staging_target(uint32_t target_size)
 /* ---- packet buffers in PSRAM ------------------------------------------------
  * Every Wi-Fi frame in either direction gets its own 1536-byte buffer from
  * eh_host_port_dma_alloc(), which esp_hosted takes from internal DMA RAM.
- * Received frames stay in those buffers until lwIP and the reading app are
- * done with them, so a busy download pins tens of KB of internal RAM, and
- * once internal RAM runs short (the camera open, ~74 KB free) allocations
+ * A busy download keeps many of them in flight (received frames are then
+ * copied for lwIP: see "received frames in PSRAM" below), and once internal
+ * RAM runs short (the camera open, ~74 KB free) allocations
  * fail and frames are dropped ("eh_sdio mempool OOM", the stream stalls).
  *
  * The P4's SDMMC host DMAs to and from PSRAM (SOC_SDMMC_PSRAM_DMA_CAPABLE;
@@ -57,4 +57,39 @@ void *__wrap_eh_host_port_dma_alloc(size_t n)
     size_t sz = (n + align - 1) & ~(align - 1);
     void *p = heap_caps_aligned_alloc(align, sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     return p ? p : __real_eh_host_port_dma_alloc(n);
+}
+
+/* ---- received frames in PSRAM --------------------------------------------------
+ * The SDIO RX task doesn't hand lwIP the DMA buffer above: it copies each
+ * Wi-Fi frame into a plain malloc() (eh_host_bus_sdio.c, "TODO: abstract
+ * heap_caps_malloc") and frees the DMA buffer. A frame is under
+ * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (4 KB), so the copy is internal RAM,
+ * and lwIP keeps it (zero copy, esp_pbuf_ref.c) until the app reads the data.
+ * Unread TCP data, up to the receive window, and out-of-order segments
+ * therefore sat in internal RAM: one socket left unread took free internal
+ * RAM from 57 KB to under 4 KB with the 32 KB window (2026-11-14), and Radio
+ * was closed for memory after a backlog built up while playing.
+ *
+ * Every frame reaches lwIP through esp_wifi_remote_channel_rx() (called from
+ * esp_hosted's wifi_remote glue, a separate object, so the linker can wrap
+ * it): move an internal copy to PSRAM there and free the internal one at
+ * once. lwIP frees the buffer through esp_wifi_internal_free_rx_buffer(),
+ * which is free(), so either heap works. If PSRAM is short the frame goes on
+ * as it is. */
+#include <string.h>
+#include "esp_memory_utils.h"
+
+esp_err_t __real_esp_wifi_remote_channel_rx(void *h, void *buffer, void *buff_to_free, size_t len);
+
+esp_err_t __wrap_esp_wifi_remote_channel_rx(void *h, void *buffer, void *buff_to_free, size_t len)
+{
+    if (buffer && buffer == buff_to_free && len && esp_ptr_internal(buffer)) {
+        void *p = heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (p) {
+            memcpy(p, buffer, len);
+            free(buffer);
+            buffer = buff_to_free = p;
+        }
+    }
+    return __real_esp_wifi_remote_channel_rx(h, buffer, buff_to_free, len);
 }
