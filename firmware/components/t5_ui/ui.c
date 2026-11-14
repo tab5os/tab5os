@@ -124,6 +124,12 @@ void t5_ui_set_low_power(bool on)
     __atomic_store_n(&s_low_power, on, __ATOMIC_RELAXED);
 }
 
+/* LVGL's animation timer is created at LV_DEF_REFR_PERIOD (lv_anim.c) and
+ * nothing here changes it, so it must match the display timer's period or
+ * animations step slower than frames are drawn (they ran at ~30 fps while
+ * CONFIG_LV_DEF_REFR_PERIOD was LVGL's default of 33). */
+_Static_assert(LV_DEF_REFR_PERIOD == T5_UI_REFRESH_MS, "CONFIG_LV_DEF_REFR_PERIOD must equal T5_UI_REFRESH_MS");
+
 /* UI task, under the lock. */
 static void apply_low_power(void)
 {
@@ -216,13 +222,15 @@ void t5_ui_show_stats(bool on)
  */
 /* Bands are drawn in internal RAM: CPU writes there don't pull PSRAM lines
  * into the cache first or need writing back, and the PPA reads them off the
- * PSRAM bus. Scroll went from 37 to 55 fps (2026-11-06). The two 20-line
- * bands are one 100 KB block, which the camera's H.264 encoder uses as its
- * reference buffer while it records (t5_ui_lend_internal); meanwhile the UI
- * draws in 40-line PSRAM bands. Bigger bands don't pay: the rest of the
- * system (LVGL's objects especially) needs ~130 KB of internal RAM free, and
- * the UI slows down 2-4x once they spill into PSRAM. */
-#define BAND_LINES_INT 20
+ * PSRAM bus. Scroll went from 37 to 55 fps (2026-11-06). The two bands are
+ * one block (26 lines: 130 KB), which the camera's H.264 encoder uses as its
+ * reference buffer while it records (needs 92 KB; t5_ui_lend_internal);
+ * meanwhile the UI draws in 40-line PSRAM bands. 2026-11-14, portrait gate,
+ * with OS data moved to PSRAM: 20 lines 50 fps scrolling, 26 or 30 lines 58
+ * (render 17 -> 13 ms, transitions 25.6 -> 29.8 fps). 26 rather than 30
+ * leaves room for a bigger LVGL pool (lv_mem_t5.c) at the same headroom
+ * (~57 KB internal free at a soak's low point). */
+#define BAND_LINES_INT 26
 #define BAND_LINES_PSRAM 40
 #define BAND_INT_BYTES ((size_t)T5_PANEL_H * BAND_LINES_INT * 2)
 #define BAND_INT_BLOCK (2 * BAND_INT_BYTES)

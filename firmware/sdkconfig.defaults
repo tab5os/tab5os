@@ -107,6 +107,11 @@ CONFIG_LV_OS_NONE=y
 CONFIG_LV_USE_CUSTOM_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y
+# LVGL's animation timer runs at this period (lv_anim.c), not at the display
+# timer's (T5_UI_REFRESH_MS, set in t5_ui/ui.c): left at LVGL's 33 ms, every
+# animation (scrolling, transitions, dialogs) advanced at ~30 fps. t5_ui/ui.c
+# checks the two agree.
+CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_DPI_DEF=320
 CONFIG_LV_DRAW_BUF_ALIGN=64
 # PPA fills run alongside the band copies. They used to hang the PPA on

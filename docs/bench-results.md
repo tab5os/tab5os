@@ -635,6 +635,23 @@ Unit A, 360 MHz. The preview, the player and the photo viewer now show their pic
 - **A transparent object counted as lying over the picture.** The standby screen stays on the top layer at zero opacity after it leaves, and made every frame a full redraw after a rotation. Objects LVGL doesn't draw are skipped.
 - **The player paused itself on its first frame**: during the app's opening animation its screen isn't the active one, which looked like going to the background. It now pauses after a second away.
 
+## Internal RAM rebalanced — 2026-11-14
+
+Unit A (rev1, 360 MHz), portrait (`ui rot 180`), standby off (standby on the charger refreshes app cards in the background and costs ~10 fps).
+
+- **Animations ran at ~30 fps since 2026-11-09.** `CONFIG_LV_DEF_REFR_PERIOD=16` left `sdkconfig.defaults` when the display timer's period moved to `T5_UI_REFRESH_MS`, but LVGL's animation timer takes its period only from that option (`lv_anim.c`), so it fell to LVGL's 33 ms default. Restored, with a `_Static_assert` in `t5_ui/ui.c` that the two agree. Scroll 29 -> 50 fps.
+- **OS data out of internal RAM** (esp_hosted task stacks, NVS cache, 52 statics, small OS allocations, two task stacks): internal free at boot 59 -> 172 KB. No measurable UI cost (gate identical with the moves undone). Moving the heap and libc lock code out of IRAM as well cost 25% of scroll speed (29 -> 22 fps) and was reverted.
+- **Spending it:**
+
+| Change | Scroll | Transition (animating) | Dialog (animating) | Internal free at boot | Soak low point |
+|---|---|---|---|---|---|
+| Baseline: 20-line bands, 88 KB pool | avg 50, min 40-44 | 25.6 fps | 37.1 fps | 172 KB | 82 KB |
+| 30-line bands | avg 56-58, min 44-52; render 17 -> 13.4 ms | 29.0 | 41.9 | 116 KB | 57 KB |
+| 30-line bands + LVGL's hot render code in IRAM (39 KB of text) | avg 58 | 29.9 | 42.1 | 83 KB | not run |
+| **Kept: 26-line bands, 112 KB pool** | **avg 58, min 46-49** | **29.8** | **42.7** | **116 KB** | **57 KB** |
+
+Hot LVGL code in IRAM bought ~1 fps on transitions for 33 KB, so it was dropped: scrolling is at the 16 ms refresh pacing, and transitions are bound by PSRAM bandwidth for the framebuffers, not by code fetch. The pool, at 88 KB, filled in Weather, Radio, Music and App Manager (38,867 of 87,792 LVGL allocations overflowed to PSRAM over six apps); at 112 KB, 24,929 of 89,048 did, and Settings fits.
+
 ## Still to answer
 
 | Item | Needs | Status |
