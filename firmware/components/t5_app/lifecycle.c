@@ -44,6 +44,11 @@
 #include "app_priv.h"
 #include "app_session.h"
 #include "apps_hw.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.app";
 
@@ -57,11 +62,11 @@ static t5_app_t *s_fg;
 static t5_app_t *s_headless;        /* app running on_alarm */
 static const t5_builtin_app_t *s_builtins[T5_APPS_BUILTIN_MAX];
 static int s_nbuiltins;
-static t5_crash_db_t s_db;
+EXT_RAM_BSS_ATTR static t5_crash_db_t s_db;
 static bool s_inited;
 static char s_crashed[T5_APP_ID_LEN];   /* the app that crashed or hung on the last run */
 static const t5_apps_home_t *s_home;
-static t5_energy_db_t s_energy;
+EXT_RAM_BSS_ATTR static t5_energy_db_t s_energy;
 static uint32_t s_energy_saved_seq;
 static bool s_restoring;            /* the next launch is a session restore */
 static bool s_safe;                 /* safe mode: installed apps don't run */
@@ -1706,7 +1711,7 @@ void apps_close_for_memory(void)
 }
 
 #define HOG_MAX T5_APP_MAX_TASKS
-static struct {
+EXT_RAM_BSS_ATTR static struct {
     void *task;
     uint64_t last;
     uint8_t strikes;

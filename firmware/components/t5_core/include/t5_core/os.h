@@ -35,6 +35,12 @@ static inline t5_mutex_t t5_mutex_once(t5_mutex_t *slot)
     return m;
 }
 
+/* calloc() from PSRAM when it can, else as calloc(); free() frees it.
+ * For OS data that only tasks touch (not DMA, ISRs, atomics or FreeRTOS
+ * objects): under CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (4 KB) plain calloc
+ * takes scarce internal RAM, and long-lived small blocks split it up. */
+void *t5_calloc_ext(size_t n, size_t size);
+
 /* Monotonic time since boot. */
 int64_t t5_time_us(void);
 static inline uint32_t t5_time_ms(void) { return (uint32_t)(t5_time_us() / 1000); }
@@ -65,6 +71,13 @@ t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t s
  * that use the P4's SIMD (esp-dsp and the like): LP RAM has no 128-bit access. */
 t5_err_t t5_task_create_lp(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
                            int prio, int core, t5_task_t *out);
+
+/* As t5_task_create, with the stack (and task block) in PSRAM when there is
+ * room, else in internal RAM as usual. For OS tasks that never write flash
+ * (the flash driver asserts on a PSRAM stack) and don't run while PSRAM is
+ * asleep: pollers, schedulers, workers that only move data. */
+t5_err_t t5_task_create_ext(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
+                            int prio, int core, t5_task_t *out);
 
 /* Called for every task t5_task_create() makes, with the inherited context.
  * The app resource tracker uses this to record app tasks. */

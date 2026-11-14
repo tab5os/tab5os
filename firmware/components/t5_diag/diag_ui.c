@@ -39,6 +39,11 @@
 #include "t5_shell/shell.h"
 #include "t5_core/event.h"
 #include "diag_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static void print_status(void)
 {
@@ -646,7 +651,7 @@ static int cmd_ui(int argc, char **argv)
     }
     if (!strcmp(c, "eat") && argc == 3) {
         /* Test aid: hold internal RAM in 4 KB pieces to simulate a busy system. */
-        static void *eaten[256];
+        EXT_RAM_BSS_ATTR static void *eaten[256];
         static int neaten;
         uint32_t kb;
         if (!strcmp(argv[2], "free")) {

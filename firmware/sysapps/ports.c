@@ -12,6 +12,11 @@
 #include "t5_gui/t5ui_icons.h"
 #include "sysapp_system.h"
 #include "sysapps_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static sa_nav_t s_nav;
 
@@ -271,7 +276,7 @@ static void i2c_refresh(sa_nav_t *nav, void *arg)
     t5_i2c_trace_t tr[24];
     int k = t5_i2c_trace_read(tr, 24);
     int off = 0;
-    static char text[24 * 48];
+    EXT_RAM_BSS_ATTR static char text[24 * 48];
     text[0] = 0;
     for (int i = 0; i < k && off < (int)sizeof text - 48; i++) {
         off += snprintf(text + off, sizeof text - (size_t)off, "%7u ms  0x%02x  reg %02x  w%u r%u  %s\n",

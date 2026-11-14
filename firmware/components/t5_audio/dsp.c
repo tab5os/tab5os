@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "t5_audio/dsp.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 /* ---- resampler --------------------------------------------------------------- */
 void t5_resampler_init(t5_resampler_t *r, uint32_t in_rate, uint8_t in_ch, uint32_t out_rate)
@@ -56,7 +61,7 @@ size_t t5_resample(t5_resampler_t *r, const int16_t *in, size_t n_in, size_t *co
 }
 
 /* ---- system sounds ------------------------------------------------------------ */
-static int16_t s_sine[256];
+EXT_RAM_BSS_ATTR static int16_t s_sine[256];
 static bool s_sine_ready;
 
 static void sine_init(void)

@@ -17,6 +17,11 @@
 #include "t5_storage/t5_storage.h"
 #include "t5_time/t5_time.h"
 #include "shell_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.shell";
 
@@ -37,7 +42,7 @@ typedef struct {
     entry_t e[MAX_CARDS];
 } store_t;
 
-static store_t s_st;
+EXT_RAM_BSS_ATTR static store_t s_st;
 static bool s_loaded, s_dirty;
 static t5_mutex_t s_mx;
 

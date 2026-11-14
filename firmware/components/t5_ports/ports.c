@@ -13,6 +13,11 @@
 #include "t5_ports/access.h"
 #include "ports_hw.h"
 #include "ports_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.ports";
 
@@ -41,7 +46,7 @@ struct t5_port {
     char owner[T5_PORT_OWNER_LEN];
 };
 
-static struct t5_port s_handles[MAX_HANDLES];
+EXT_RAM_BSS_ATTR static struct t5_port s_handles[MAX_HANDLES];
 static t5_mutex_t s_lock;
 static t5_ports_access_fn_t s_access;
 

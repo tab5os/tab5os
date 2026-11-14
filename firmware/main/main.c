@@ -101,8 +101,24 @@ static void log_event(t5_event_id_t id, const void *data, size_t len, void *arg)
     }
 }
 
+#if CONFIG_HEAP_TRACING_STANDALONE
+#include "esp_heap_caps.h"
+#include "esp_heap_trace.h"
+/* Diagnostic builds only: record every live allocation from here on, with
+ * its call stack, for the console's `heaplive` (internal RAM census). */
+#define HEAP_TRACE_RECORDS 12000
+static void heap_trace_boot(void)
+{
+    heap_trace_record_t *r = heap_caps_calloc(HEAP_TRACE_RECORDS, sizeof *r, MALLOC_CAP_SPIRAM);
+    if (r && heap_trace_init_standalone(r, HEAP_TRACE_RECORDS) == ESP_OK) heap_trace_start(HEAP_TRACE_LEAKS);
+}
+#endif
+
 void app_main(void)
 {
+#if CONFIG_HEAP_TRACING_STANDALONE
+    heap_trace_boot();
+#endif
     t5_log_capture_start();
     /* Plan 9.1, 9.3: a new image is on trial until this boot proves healthy;
      * failed boots before this one may mean safe mode. */

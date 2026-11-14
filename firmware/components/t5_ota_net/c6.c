@@ -190,7 +190,9 @@ t5_err_t t5_c6_sync_start(void)
     t5_ota_c6_version(T5_C6_VERSION, s_want, sizeof s_want);
     snprintf(s_msg, sizeof s_msg, "not checked yet");
     T5_RETURN_ON_ERR(t5_event_subscribe(T5_EV_NET_C6_UPDATE, on_update, NULL));
-    return t5_task_create_lp("t5_c6_sched", scheduler, NULL, 4096, 2, T5_CORE_ANY, NULL);
+    /* Only waits and starts the worker (which writes flash, so it keeps an
+     * internal stack): PSRAM is enough. LP RAM is usually full by now. */
+    return t5_task_create_ext("t5_c6_sched", scheduler, NULL, 4096, 2, T5_CORE_ANY, NULL);
 }
 
 void t5_c6_sync_status(char *out, size_t n)

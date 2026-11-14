@@ -6,10 +6,15 @@
 #include "t5_core/err.h"
 #include "t5_core/io_hold.h"
 #include "t5_core/os.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define WHO_LEN 32
 
-static struct {
+EXT_RAM_BSS_ATTR static struct {
     bool held;
     char who[WHO_LEN];
     t5_io_stop_fn_t stop;

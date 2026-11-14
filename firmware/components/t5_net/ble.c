@@ -46,6 +46,11 @@
 #include "host/ble_store.h"
 #include "ble_priv.h"
 #include "net_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.ble";
 
@@ -510,7 +515,7 @@ struct t5_ble_scanner {
 };
 
 static t5_ble_scanner_t *s_scanner;
-static t5_ble_dev_t s_devs[T5_BLE_MAX_SCAN];
+EXT_RAM_BSS_ATTR static t5_ble_dev_t s_devs[T5_BLE_MAX_SCAN];
 static int s_ndevs;
 
 static void sys_add_locked(const t5_ble_report_t *r)

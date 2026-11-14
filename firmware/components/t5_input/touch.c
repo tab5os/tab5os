@@ -212,7 +212,8 @@ t5_err_t t5_touch_init(void)
             s_info.max_x, s_info.max_y, s_info.polling ? "polling" : "interrupt on G23");
     T5_RETURN_ON_ERR(t5_touch_hw_init(!s_info.polling));
     /* Core 1 with the UI: touch latency matters more than anything on core 0. */
-    return t5_task_create("t5_touch", touch_task, NULL, 4096, 12, 1, NULL);
+    /* Polls I2C and posts input: no flash writes, so a PSRAM stack. */
+    return t5_task_create_ext("t5_touch", touch_task, NULL, 4096, 12, 1, NULL);
 }
 
 t5_err_t t5_touch_read(t5_touch_state_t *out)

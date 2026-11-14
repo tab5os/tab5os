@@ -34,6 +34,11 @@
 #include "usb/usb_host.h"
 #include "usb/uvc_host.h"
 #include "usb_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.usb";
 
@@ -51,7 +56,7 @@ static bool s_inited, s_installed, s_enabled = true, s_saved_enabled = true;
 static t5_rail_hold_t *s_rail;
 static usb_host_client_handle_t s_client;
 static QueueHandle_t s_work;
-static t5_usb_dev_t s_devs[T5_USB_MAX_DEVICES];
+EXT_RAM_BSS_ATTR static t5_usb_dev_t s_devs[T5_USB_MAX_DEVICES];
 static int s_ndevs;
 static t5_usb_stats_t s_st;
 /* An app has the whole bus (t5_core/excl.h): the OS's drivers stay off it. */

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "t5_core/log.h"
+#include "t5_core/os.h"
 #include "t5_pkg/pkg.h"
 #include "t5_pkg/png.h"
 #include "t5_shell/app_icon.h"
@@ -191,7 +192,7 @@ static icon_t *lookup(const char *id, int32_t px)
     for (icon_t *e = s_icons; e; e = e->next) {
         if (e->gen == gen && e->size == px && !strcmp(e->id, id)) return e;
     }
-    icon_t *e = calloc(1, sizeof *e);
+    icon_t *e = t5_calloc_ext(1, sizeof *e);
     if (!e) return NULL;
     snprintf(e->id, sizeof e->id, "%s", id);
     e->size = px;

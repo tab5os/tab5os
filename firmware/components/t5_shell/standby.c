@@ -24,6 +24,11 @@
 #include <strings.h>
 #include <time.h>
 #include "shell_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define STANDBY_PERCENT 20          /* backlight cap */
 #define STANDBY_NIGHT_PERCENT 5
@@ -41,7 +46,7 @@ typedef struct {
     char sig[200];
 } slot_t;
 
-static struct {
+EXT_RAM_BSS_ATTR static struct {
     t5ui_obj_t *root, *clock_pane, *clock, *date, *side, *stack_row, *stack, *dots, *music;
     t5ui_obj_t *m_title, *m_artist, *m_bar, *m_play;
     slot_t slot[MAX_CARDS];

@@ -20,6 +20,11 @@
 #include "t5_core/os.h"
 #include "t5_pkg/pkg.h"
 #include "shell_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.standby";
 
@@ -34,7 +39,7 @@ typedef struct {
 } cand_t;
 
 /* When each app was last run, kept across standby sessions this boot. */
-static struct {
+EXT_RAM_BSS_ATTR static struct {
     char id[T5_APP_ID_LEN];
     int64_t at;                     /* t5_time_us */
 } s_last[MAX_APPS];

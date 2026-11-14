@@ -30,6 +30,11 @@
 #include "t5_gui/t5ui.h"
 #include "t5_gui/t5ui_icons.h"
 #include "t5_gui/t5ui_sys.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 
 static sa_nav_t s_nav;
@@ -1188,7 +1193,7 @@ static void upd_refresh(sa_nav_t *nav, void *arg)
     }
     if (p->shown != -1) return;
     p->shown = 0;
-    static char paths[8][128];
+    EXT_RAM_BSS_ATTR static char paths[8][128];
     int n = t5_ota_find_on_sd(paths, 8);
     for (int i = 0; i < n; i++) {
         t5ui_obj_t *r = row(p->list, T5UI_ICON_SD_STORAGE, paths[i], "Tap to install");

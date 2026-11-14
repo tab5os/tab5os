@@ -5,6 +5,11 @@
 #include "t5_core/res.h"
 #include "t5_power/rail.h"
 #include "priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.rail";
 
@@ -16,7 +21,7 @@ struct t5_rail_hold {
     char owner[T5_RAIL_OWNER_LEN];
 };
 
-static struct t5_rail_hold s_holds[T5_RAIL_MAX_HOLDS];
+EXT_RAM_BSS_ATTR static struct t5_rail_hold s_holds[T5_RAIL_MAX_HOLDS];
 static bool s_on[T5_RAIL_COUNT];          /* hardware state */
 static bool s_suspended[T5_RAIL_COUNT];   /* dropped for Sleep, holds kept */
 static uint32_t s_errors[T5_RAIL_COUNT];

@@ -32,6 +32,11 @@
 #include "t5_ui/ui_diag.h"
 #include "ui_hw.h"
 #include "ui_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.ui";
 
@@ -46,7 +51,7 @@ _Static_assert(T5_FBT_BUFS == T5_DISPLAY_FBS, "damage tracking keeps one list pe
 static lv_display_t *s_disp;
 static lv_indev_t *s_indev;
 static t5_rotation_t s_rot = T5_ROT_90;  /* landscape first (plan defaults) */
-static t5_fbt_t s_fbt;
+EXT_RAM_BSS_ATTR static t5_fbt_t s_fbt;
 static t5_mutex_t s_lock;
 static t5_task_t s_task;
 static volatile bool s_ready, s_paused;
@@ -166,7 +171,7 @@ void t5_ui_get_stats(t5_ui_stats_t *out)
     if (out) *out = s_st.out;
 }
 
-static t5_ui_frame_rec_t s_flog[T5_UI_FRAME_LOG];
+EXT_RAM_BSS_ATTR static t5_ui_frame_rec_t s_flog[T5_UI_FRAME_LOG];
 static uint32_t s_flog_n;   /* frames logged, ever */
 
 int t5_ui_frame_log(t5_ui_frame_rec_t *out, int max)
@@ -232,7 +237,7 @@ static int s_band_lines;
 static uint16_t *s_band[2];       /* the bands LVGL draws in */
 static int s_target = -1;           /* back buffer of the frame being drawn */
 static int s_front = -1;            /* newest complete buffer */
-static t5_rect_t s_frame[FRAME_MAX_AREAS];
+EXT_RAM_BSS_ATTR static t5_rect_t s_frame[FRAME_MAX_AREAS];
 static int s_nframe;
 static bool s_flushed;
 static bool s_redraw_all;
@@ -857,8 +862,8 @@ typedef struct async {
  * rather than using up memory. Guarded by the UI lock. */
 #define ASYNC_POOL 64
 #define ASYNC_MAX_PENDING 512
-static async_t s_async_pool[ASYNC_POOL];
-static async_t *s_async_free[ASYNC_POOL];
+EXT_RAM_BSS_ATTR static async_t s_async_pool[ASYNC_POOL];
+EXT_RAM_BSS_ATTR static async_t *s_async_free[ASYNC_POOL];
 static int s_async_nfree = -1;
 static uint32_t s_async_pending;
 

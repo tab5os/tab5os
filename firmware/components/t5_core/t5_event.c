@@ -9,6 +9,11 @@
 #include "t5_core/event_test.h"
 #include "t5_core/os.h"
 #include "t5_event_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define MAX_SUBS 48
 
@@ -18,7 +23,7 @@ typedef struct {
     void *arg;
 } sub_t;
 
-static sub_t s_subs[MAX_SUBS];
+EXT_RAM_BSS_ATTR static sub_t s_subs[MAX_SUBS];
 static t5_mutex_t s_lock;
 
 t5_err_t t5_event_table_init(void)

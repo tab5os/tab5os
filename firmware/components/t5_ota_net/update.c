@@ -21,6 +21,11 @@
 #include "t5_ota_net/ota_url.h"
 #include "t5_ota_net/update.h"
 #include "ota_rule.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.update";
 
@@ -34,7 +39,7 @@ static const char *TAG = "t5.update";
 typedef enum { JOB_CHECK, JOB_INSTALL } job_t;
 
 static t5_mutex_t s_mx;
-static t5_update_status_t s_st;
+EXT_RAM_BSS_ATTR static t5_update_status_t s_st;
 static bool s_busy;
 static int64_t s_next_us;                       /* when the next check is due, 0 not yet scheduled */
 static char s_notified[32];                     /* the last version found() was told about */

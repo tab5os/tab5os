@@ -6,6 +6,11 @@
 #include "t5_core/log.h"
 #include "t5_core/os.h"
 #include "priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.suspend";
 
@@ -16,7 +21,7 @@ typedef struct {
     bool suspended;      /* suspend ran (or had nothing to do): resume it */
 } slot_t;
 
-static slot_t s_slots[T5_SUSPEND_MAX_HOOKS];
+EXT_RAM_BSS_ATTR static slot_t s_slots[T5_SUSPEND_MAX_HOOKS];
 static t5_mutex_t s_mtx;
 
 static void lock(void)

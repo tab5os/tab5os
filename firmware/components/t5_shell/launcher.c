@@ -17,6 +17,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include "shell_priv.h"
+#include "t5_core/os.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define DOCK_N 5
 #define CELL_MIN_W_DP 96
@@ -34,8 +40,8 @@ static t5ui_obj_t *s_drawer, *s_recent_row, *s_recent_box, *s_grid;
 static bool s_drawer_open;
 static shell_app_t *s_apps;
 static int s_napps;
-static char s_shown_recents[SHELL_RECENTS][T5_APP_ID_LEN];
-static char s_dock_ids[DOCK_N][T5_APP_ID_LEN];
+EXT_RAM_BSS_ATTR static char s_shown_recents[SHELL_RECENTS][T5_APP_ID_LEN];
+EXT_RAM_BSS_ATTR static char s_dock_ids[DOCK_N][T5_APP_ID_LEN];
 
 /* A stable hue per app from its id. Badges are tonal: the accent's soft
  * 200 tone for the glyph on a dark circle tinted with the same hue, so a

@@ -19,6 +19,11 @@
 #include "t5_core/excl.h"
 #include "t5_power/power.h"
 #include "diag_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static void print_status(void)
 {
@@ -221,7 +226,7 @@ static int cmd_net(int argc, char **argv)
         return t5_radio_antenna_set(!strcmp(argv[2], "ext") ? T5_ANT_EXTERNAL : T5_ANT_INTERNAL) != T5_OK;
     }
     if (!strcmp(c, "handles")) {
-        static char buf[2048];
+        EXT_RAM_BSS_ATTR static char buf[2048];
         int n = t5_net_handles_dump(buf, sizeof buf);
         printf("%s%d open\n", buf, n);
         return 0;
@@ -354,7 +359,7 @@ static int ble_link_cmd(const char *c, int argc, char **argv)
     }
     if (!strcmp(c, "gatt")) {
         t5_err_t e = t5_ble_gatt_discover(s_ble_link, 10000);
-        static t5_ble_chr_t ch[T5_BLE_MAX_CHARS];
+        EXT_RAM_BSS_ATTR static t5_ble_chr_t ch[T5_BLE_MAX_CHARS];
         int n = t5_ble_gatt_chars(s_ble_link, ch, T5_BLE_MAX_CHARS);
         printf("discover: %s, %d characteristic(s), mtu %u\n", t5_err_str(e), n, t5_ble_conn_mtu(s_ble_link));
         for (int i = 0; i < n; i++) {

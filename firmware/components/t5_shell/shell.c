@@ -17,6 +17,11 @@
 #include "shell_priv.h"
 #include "t5_shell/standby.h"
 #include "t5_ui/t5_ui.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static bool s_ready;
 static char s_cur[T5_APP_ID_LEN];          /* "" = home */
@@ -24,7 +29,7 @@ static bool s_fullscreen;
 static t5ui_obj_t *s_app_screen;
 /* What the bars take from the app's screen, in dp (any task reads it). */
 static volatile int32_t s_inset_top, s_inset_bottom;
-static shell_recents_t s_recents;
+EXT_RAM_BSS_ATTR static shell_recents_t s_recents;
 static t5ui_timer_t *s_tick;
 
 bool shell_in_app(void)

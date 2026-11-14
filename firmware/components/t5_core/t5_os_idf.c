@@ -43,6 +43,12 @@ void t5_mutex_release_all(t5_mutex_t m)
     }
 }
 
+void *t5_calloc_ext(size_t n, size_t size)
+{
+    void *p = heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : calloc(n, size);
+}
+
 int64_t t5_time_us(void)
 {
     return esp_timer_get_time();
@@ -162,8 +168,10 @@ static void trampoline(void *p)
     t5_task_delete(NULL);
 }
 
+typedef enum { STACK_L2, STACK_LP, STACK_EXT } stack_where_t;
+
 static t5_err_t task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
-                            int prio, int core, t5_task_t *out, bool lp)
+                            int prio, int core, t5_task_t *out, stack_where_t where)
 {
     if (!fn || stack_bytes < 1024) {
         return T5_ERR_INVALID_ARG;
@@ -190,7 +198,13 @@ static t5_err_t task_create(const char *name, t5_task_fn_t fn, void *arg, uint32
         t5_task_guard_margin((t5_task_t)h);
     }
     /* Room for the stack and the task block, with some left over. */
-    if (ok != pdPASS && lp && heap_caps_get_largest_free_block(MALLOC_CAP_RTCRAM) >= stack_bytes + 1024) {
+    if (ok != pdPASS && where == STACK_EXT) {
+        t->caps = true;
+        ok = xTaskCreatePinnedToCoreWithCaps(trampoline, name, stack_bytes, t, prio, &h, c,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (ok != pdPASS) t->caps = false;
+    }
+    if (ok != pdPASS && where == STACK_LP && heap_caps_get_largest_free_block(MALLOC_CAP_RTCRAM) >= stack_bytes + 1024) {
         t->caps = true;
         ok = xTaskCreatePinnedToCoreWithCaps(trampoline, name, stack_bytes, t, prio, &h, c,
                                              MALLOC_CAP_RTCRAM | MALLOC_CAP_8BIT);
@@ -213,13 +227,19 @@ static t5_err_t task_create(const char *name, t5_task_fn_t fn, void *arg, uint32
 t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
                         int prio, int core, t5_task_t *out)
 {
-    return task_create(name, fn, arg, stack_bytes, prio, core, out, false);
+    return task_create(name, fn, arg, stack_bytes, prio, core, out, STACK_L2);
 }
 
 t5_err_t t5_task_create_lp(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
                            int prio, int core, t5_task_t *out)
 {
-    return task_create(name, fn, arg, stack_bytes, prio, core, out, true);
+    return task_create(name, fn, arg, stack_bytes, prio, core, out, STACK_LP);
+}
+
+t5_err_t t5_task_create_ext(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
+                            int prio, int core, t5_task_t *out)
+{
+    return task_create(name, fn, arg, stack_bytes, prio, core, out, STACK_EXT);
 }
 
 void t5_task_delete(t5_task_t task)

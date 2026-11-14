@@ -4,8 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 #include "ports_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
-static broker_pin_t s_pins[PORTS_GPIO_MAX];
+EXT_RAM_BSS_ATTR static broker_pin_t s_pins[PORTS_GPIO_MAX];
 
 void broker_reset(void)
 {

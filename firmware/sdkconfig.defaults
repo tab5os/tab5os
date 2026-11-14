@@ -47,6 +47,12 @@ CONFIG_ESP_HOSTED_HOST_CP_RESET_SETTLE_MS=800
 # Wi-Fi transport buffers in PSRAM (the P4's SDMMC DMAs to it): a download
 # no longer eats internal RAM. Per-frame buffers too, see t5_net/hosted_compat.c.
 CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
+# esp_hosted's six worker task stacks (24 KB) in PSRAM. They only move data
+# and post events (callbacks: t5_net/ble.c hci_rx, wifimon.c); none writes
+# flash, the one thing that needs an internal stack.
+CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
+# NVS page cache and key hash list in PSRAM (about 7 KB).
+CONFIG_NVS_ALLOCATE_CACHE_IN_SPIRAM=y
 # App networking (t5_net/sock.h): room for app sockets next to the OS's own,
 # and TLS buffers (about 20 KB a connection) in PSRAM, not internal RAM.
 CONFIG_LWIP_MAX_SOCKETS=16
@@ -166,3 +172,8 @@ CONFIG_TINYUSB_MIDI_COUNT=1
 # Opaque messages to and from the C6: Wi-Fi monitor mode (t5_net/wifimon.c).
 CONFIG_ESP_HOSTED_HOST_FEAT_PEER_DATA=y
 CONFIG_ESP_HOSTED_HOST_FEAT_PEER_DATA_MAX_CUSTOM_MSG_HANDLERS=4
+# Not CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH / LIBC_LOCKS_PLACE_IN_IRAM off,
+# though XIP from PSRAM would allow them (16 KB of internal RAM): with the
+# heap and lock code fetched from PSRAM, the UI gate fell from 29 to 22 fps
+# scrolling (render max 18 -> 65 ms) and transitions from 25.6 to 15.8 fps
+# (2026-11-14). LVGL allocates draw tasks every frame.

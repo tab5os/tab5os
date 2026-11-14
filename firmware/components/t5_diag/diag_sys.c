@@ -25,6 +25,11 @@
 #include "t5_core/os.h"
 #include "t5_power/power.h"
 #include "diag_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *reset_reason_str(esp_reset_reason_t r)
 {
@@ -165,7 +170,32 @@ static int cmd_stacks(int argc, char **argv)
 
 /* l2eat KB | 0: hold internal RAM to test the low-memory path (isolate.h). */
 #define EAT_MAX 256
-static void *s_eat[EAT_MAX];
+EXT_RAM_BSS_ATTR static void *s_eat[EAT_MAX];
+
+#if CONFIG_HEAP_TRACING_STANDALONE
+#include "esp_heap_trace.h"
+/* heaplive [min]: live internal-RAM allocations traced since boot (a
+ * diagnostic build with CONFIG_HEAP_TRACING_STANDALONE), one per line:
+ * "H size addr pc pc ...". Resolve the PCs against the ELF on the host. */
+static int cmd_heaplive(int argc, char **argv)
+{
+    uint32_t min = 0;
+    if (argc >= 2 && !diag_parse_u32(argv[1], 0, 1u << 20, &min)) return 1;
+    size_t n = heap_trace_get_count(), shown = 0, bytes = 0;
+    heap_trace_record_t r;
+    for (size_t i = 0; i < n; i++) {
+        if (heap_trace_get(i, &r) != ESP_OK || !r.address || r.freed || !esp_ptr_internal(r.address)) continue;
+        bytes += r.size;
+        if (r.size < min) continue;
+        shown++;
+        printf("H %u %p", (unsigned)r.size, r.address);
+        for (int d = 0; d < CONFIG_HEAP_TRACING_STACK_DEPTH && r.alloced_by[d]; d++) printf(" %p", r.alloced_by[d]);
+        printf("\n");
+    }
+    printf("heaplive: %u records, internal live %u B, %u shown\n", (unsigned)n, (unsigned)bytes, (unsigned)shown);
+    return 0;
+}
+#endif
 
 static int cmd_l2eat(int argc, char **argv)
 {
@@ -263,6 +293,10 @@ void diag_register_sys(void)
     const esp_console_cmd_t cmds[] = {
         { .command = "sys", .help = "Chip, clocks, memory, partition, reset reason", .func = cmd_sys },
         { .command = "tasks", .help = "FreeRTOS task list and CPU use", .func = cmd_tasks },
+#if CONFIG_HEAP_TRACING_STANDALONE
+        { .command = "heaplive", .help = "heaplive [min]: live internal allocations since boot, with callers",
+          .hint = "[min]", .func = cmd_heaplive },
+#endif
         { .command = "l2eat", .help = "l2eat KB: hold internal RAM (low-memory test), 0 frees", .hint = "KB", .func = cmd_l2eat },
         { .command = "stacks", .help = "Each task's stack: size, memory, high-water mark", .func = cmd_stacks },
         { .command = "psram", .help = "psram [MB]: pattern test and bandwidth", .hint = "[MB]", .func = cmd_psram },
