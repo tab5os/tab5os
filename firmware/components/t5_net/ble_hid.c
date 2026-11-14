@@ -10,8 +10,11 @@
  * makes the device advertise as one and lets its reports through.
  *
  * Reports reach a host as notifications on its report characteristics,
- * which need an encrypted (paired) link; the host pairs when it first reads
+ * which need an authenticated link: the host pairs when it first reads
  * them, and ble.c's pairing handler asks the person to confirm the code.
+ * Just Works pairing (a host that can't show or confirm a code) encrypts
+ * the link without that step, so it doesn't count: such a host gets no
+ * reports, and one that connected to the HID advertisement is dropped.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +44,7 @@ static const char *TAG = "t5.blehid";
 #define HID_MAGIC 0x42484944u   /* "BHID" */
 #define MAX_HOSTS 3
 #define EVQ 16
+#define KEY_SIZE 16             /* the full 128-bit key: no shortened ones */
 
 /* Report slots: input reports by part, and the keyboard's LED output. */
 enum { R_KBD, R_MOUSE, R_CC, R_PAD, R_ABS, R_KBD_OUT, R_COUNT };
@@ -78,7 +82,10 @@ struct t5_ble_hid {
 
 static struct {
     uint16_t conn;
-    bool used, enc, told;
+    bool used, told;
+    bool auth;                 /* encrypted with an authenticated, full-size key */
+    bool via_hid;              /* connected to the HID advertisement */
+    bool refused;              /* unauthenticated, already told to go */
     uint8_t subs;              /* by slot: notifications on */
     uint8_t addr[6];
 } s_hosts[MAX_HOSTS];
@@ -93,10 +100,21 @@ static uint16_t s_val[R_COUNT], s_batt_val;
 /* ---- the attribute table ---------------------------------------------------- */
 static int access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg);
 
+/* HID data needs an authenticated link (a code the person confirmed) with
+ * a full-size key. NimBLE checks these flags before calling access(); the
+ * NOTIFY_INDICATE ones guard the CCCD NimBLE adds, so a Just Works peer
+ * can't subscribe either. HID Information, battery level and device
+ * information stay readable by anyone: they say what the device is, not
+ * what is typed. */
+#define RD_AUTH (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_READ_AUTHEN)
+#define WR_AUTH (BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN)
+#define NTF_AUTH \
+    (BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC | BLE_GATT_CHR_F_NOTIFY_INDICATE_AUTHEN)
+
 #define U16(v) BLE_UUID16_DECLARE(v)
-#define REF_DSC(slot) \
-    { { .uuid = U16(0x2908), .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC, .access_cb = access, \
-        .arg = (void *)(A_REF + (slot)) }, { 0 } }
+#define REF_DSC(slot)                                                                                      \
+    { { .uuid = U16(0x2908), .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC | BLE_ATT_F_READ_AUTHEN,     \
+        .min_key_size = KEY_SIZE, .access_cb = access, .arg = (void *)(A_REF + (slot)) }, { 0 } }
 
 static struct ble_gatt_dsc_def s_ref[R_COUNT][2] = {
     REF_DSC(R_KBD), REF_DSC(R_MOUSE), REF_DSC(R_CC), REF_DSC(R_PAD), REF_DSC(R_ABS), REF_DSC(R_KBD_OUT),
@@ -104,23 +122,22 @@ static struct ble_gatt_dsc_def s_ref[R_COUNT][2] = {
 
 #define IN_REPORT(slot)                                                                                   \
     { .uuid = U16(0x2a4d), .access_cb = access, .arg = (void *)(slot), .descriptors = s_ref[slot],       \
-      .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY, .val_handle = &s_val[slot] }
+      .flags = RD_AUTH | NTF_AUTH, .min_key_size = KEY_SIZE, .val_handle = &s_val[slot] }
 
 static const struct ble_gatt_chr_def s_hid_chrs[] = {
     { .uuid = U16(0x2a4a), .access_cb = access, .arg = (void *)A_INFO, .flags = BLE_GATT_CHR_F_READ },
-    { .uuid = U16(0x2a4b), .access_cb = access, .arg = (void *)A_MAP,
-      .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC },
-    { .uuid = U16(0x2a4c), .access_cb = access, .arg = (void *)A_CTRL, .flags = BLE_GATT_CHR_F_WRITE_NO_RSP },
+    { .uuid = U16(0x2a4b), .access_cb = access, .arg = (void *)A_MAP, .flags = RD_AUTH, .min_key_size = KEY_SIZE },
+    { .uuid = U16(0x2a4c), .access_cb = access, .arg = (void *)A_CTRL, .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | WR_AUTH,
+      .min_key_size = KEY_SIZE },
     { .uuid = U16(0x2a4e), .access_cb = access, .arg = (void *)A_PROTO,
-      .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP },
+      .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP | WR_AUTH, .min_key_size = KEY_SIZE },
     IN_REPORT(R_KBD),
     IN_REPORT(R_MOUSE),
     IN_REPORT(R_CC),
     IN_REPORT(R_PAD),
     IN_REPORT(R_ABS),
     { .uuid = U16(0x2a4d), .access_cb = access, .arg = (void *)R_KBD_OUT, .descriptors = s_ref[R_KBD_OUT],
-      .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC |
-               BLE_GATT_CHR_F_WRITE_NO_RSP,
+      .flags = RD_AUTH | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | WR_AUTH, .min_key_size = KEY_SIZE,
       .val_handle = &s_val[R_KBD_OUT] },
     { 0 },
 };
@@ -165,6 +182,19 @@ static int host_index(uint16_t conn)
     return -1;
 }
 
+/* A host that may get reports and send output: paired with a code. */
+static bool host_usable(int i)
+{
+    return i >= 0 && s_hosts[i].used && s_hosts[i].auth;
+}
+
+/* The link's security now, from the stack. */
+static void host_sec_locked(int i, const struct ble_gap_conn_desc *d)
+{
+    const struct ble_gap_sec_state *s = &d->sec_state;
+    s_hosts[i].auth = s->encrypted && s->authenticated && s->key_size >= KEY_SIZE;
+}
+
 /* NimBLE's host task. */
 static int access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -177,17 +207,28 @@ static int access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctx
         return append(ctxt, ref, sizeof ref);
     }
     if (a < R_COUNT) {
-        if (read) return append(ctxt, s_last[a], SLOTS[a].len);
+        if (read) {
+            t5_mutex_lock(ble_mx());
+            uint8_t last[T5_HID_GAMEPAD_LEN];
+            bool ok = host_usable(host_index(conn));
+            if (ok) memcpy(last, s_last[a], SLOTS[a].len);
+            t5_mutex_unlock(ble_mx());
+            return ok ? append(ctxt, last, SLOTS[a].len) : BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+        }
         uint8_t buf[8];
         uint16_t n = 0;
         if (ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof buf, &n)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         if (a == R_KBD_OUT) {
             t5_mutex_lock(ble_mx());
-            t5_ble_hid_ev_t ev = { .type = T5_BLE_HID_OUTPUT, .report_id = T5_HID_ID_KEYBOARD };
             int i = host_index(conn);
-            if (i >= 0) memcpy(ev.addr, s_hosts[i].addr, 6);
-            push_locked(&ev, buf, n);
+            bool ok = host_usable(i);
+            if (ok) {
+                t5_ble_hid_ev_t ev = { .type = T5_BLE_HID_OUTPUT, .report_id = T5_HID_ID_KEYBOARD };
+                memcpy(ev.addr, s_hosts[i].addr, 6);
+                push_locked(&ev, buf, n);
+            }
             t5_mutex_unlock(ble_mx());
+            if (!ok) return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
         }
         return 0;
     }
@@ -205,10 +246,13 @@ static int access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctx
         uint8_t v = 0;
         ble_hs_mbuf_to_flat(ctxt->om, &v, 1, NULL);
         t5_mutex_lock(ble_mx());
-        t5_ble_hid_ev_t ev = { .type = T5_BLE_HID_SUSPEND, .on = v == 0 };
         int i = host_index(conn);
-        if (i >= 0) memcpy(ev.addr, s_hosts[i].addr, 6);
-        push_locked(&ev, NULL, 0);
+        bool ok = host_usable(i);
+        if (ok) {
+            t5_ble_hid_ev_t ev = { .type = T5_BLE_HID_SUSPEND, .on = v == 0 };
+            memcpy(ev.addr, s_hosts[i].addr, 6);
+            push_locked(&ev, NULL, 0);
+        }
         t5_mutex_unlock(ble_mx());
         return 0;
     }
@@ -238,7 +282,7 @@ int ble_hid_register(void)
 /* ---- hosts ------------------------------------------------------------------ */
 static void maybe_connected_locked(int i)
 {
-    if (s_hosts[i].told || !s_hosts[i].enc || !(s_hosts[i].subs & (1u << R_KBD | 1u << R_MOUSE))) return;
+    if (s_hosts[i].told || !host_usable(i) || !(s_hosts[i].subs & (1u << R_KBD | 1u << R_MOUSE))) return;
     s_hosts[i].told = true;
     t5_ble_hid_ev_t ev = { .type = T5_BLE_HID_CONNECTED };
     memcpy(ev.addr, s_hosts[i].addr, 6);
@@ -255,10 +299,12 @@ void ble_hid_gap_locked(const struct ble_gap_event *e)
         if (e->connect.status != 0) return;
         for (int i = 0; i < MAX_HOSTS; i++) {
             if (s_hosts[i].used) continue;
-            s_hosts[i] = (typeof(s_hosts[i])){ .conn = e->connect.conn_handle, .used = true };
+            /* While HID is open the only advertisement is HID's own. */
+            s_hosts[i] = (typeof(s_hosts[i])){ .conn = e->connect.conn_handle, .used = true,
+                                                .via_hid = s_open != NULL };
             if (ble_gap_conn_find(e->connect.conn_handle, &d) == 0) {
                 memcpy(s_hosts[i].addr, d.peer_id_addr.val, 6);
-                s_hosts[i].enc = d.sec_state.encrypted;
+                host_sec_locked(i, &d);
             }
             break;
         }
@@ -278,9 +324,22 @@ void ble_hid_gap_locked(const struct ble_gap_event *e)
     case BLE_GAP_EVENT_ENC_CHANGE: {
         int i = host_index(e->enc_change.conn_handle);
         if (i < 0 || e->enc_change.status != 0) return;
-        if (ble_gap_conn_find(e->enc_change.conn_handle, &d) == 0) {
-            s_hosts[i].enc = d.sec_state.encrypted;
-            memcpy(s_hosts[i].addr, d.peer_id_addr.val, 6);   /* the identity address, now known */
+        if (ble_gap_conn_find(e->enc_change.conn_handle, &d) != 0) return;
+        host_sec_locked(i, &d);
+        memcpy(s_hosts[i].addr, d.peer_id_addr.val, 6);   /* the identity address, now known */
+        if (s_hosts[i].via_hid && !s_hosts[i].auth && !s_hosts[i].refused) {
+            /* Just Works (or a short key): nobody confirmed a code, so this
+             * could be anyone nearby. A host that can show or enter a code
+             * never ends up here. Any bond it made stays (the event doesn't
+             * say whether it is new, and an app's GATT peer may own it); it
+             * gets the host refused again, and pairing again with a code
+             * replaces it. */
+            s_hosts[i].refused = true;
+            const uint8_t *p = s_hosts[i].addr;
+            T5_LOGW(TAG, "host %02x:%02x:%02x:%02x:%02x:%02x refused: paired without a code (key %u bytes)", p[5],
+                    p[4], p[3], p[2], p[1], p[0], (unsigned)d.sec_state.key_size);
+            ble_gap_terminate(e->enc_change.conn_handle, BLE_ERR_AUTH_FAIL);
+            return;
         }
         maybe_connected_locked(i);
         return;
@@ -328,7 +387,7 @@ static t5_err_t notify_all(int slot, const void *report, uint32_t timeout_ms)
     t5_mutex_lock(ble_mx());
     memcpy(s_last[slot], report, SLOTS[slot].len);
     for (int i = 0; i < MAX_HOSTS; i++) {
-        if (s_hosts[i].used && s_hosts[i].enc && (s_hosts[i].subs & (1u << slot))) conns[n++] = s_hosts[i].conn;
+        if (host_usable(i) && (s_hosts[i].subs & (1u << slot))) conns[n++] = s_hosts[i].conn;
     }
     uint16_t h = s_val[slot];
     t5_mutex_unlock(ble_mx());
@@ -368,7 +427,7 @@ bool t5_ble_hid_connected(t5_ble_hid_t *h)
     if (!valid(h) || h->revoked) return false;
     bool any = false;
     t5_mutex_lock(ble_mx());
-    for (int i = 0; i < MAX_HOSTS; i++) any |= s_hosts[i].used && s_hosts[i].told;
+    for (int i = 0; i < MAX_HOSTS; i++) any |= host_usable(i) && s_hosts[i].told;
     t5_mutex_unlock(ble_mx());
     return any;
 }
@@ -460,7 +519,7 @@ t5_err_t t5_ble_hid_open(const t5_ble_hid_cfg_t *cfg, t5_ble_hid_t **out)
         s_open = h;
         /* Hosts already connected and listening (paired before) count now. */
         for (int i = 0; i < MAX_HOSTS; i++) {
-            if (s_hosts[i].used && s_hosts[i].told) {
+            if (host_usable(i) && s_hosts[i].told) {
                 t5_ble_hid_ev_t ev = { .type = T5_BLE_HID_CONNECTED };
                 memcpy(ev.addr, s_hosts[i].addr, 6);
                 push_locked(&ev, NULL, 0);
