@@ -16,6 +16,7 @@ extern "C" {
 #define T5_NETCFG_MIN_RSSI (-88)
 #define T5_NETCFG_BACKOFF_MIN_MS 5000u
 #define T5_NETCFG_BACKOFF_MAX_MS (5u * 60 * 1000)
+#define T5_NETCFG_AUTH_OPEN 0          /* t5_net_ap_t.auth: WIFI_AUTH_OPEN */
 
 typedef struct {
     char ssid[T5_NET_SSID_LEN];
@@ -38,8 +39,20 @@ typedef struct {
 void t5_netcfg_init(t5_netcfg_t *c);
 bool t5_netcfg_valid(const t5_netcfg_t *c);
 int t5_netcfg_find(const t5_netcfg_t *c, const char *ssid);
-/* Add or update; the oldest-used entry goes when full. Returns the index. */
+/* Add or update; the oldest-used entry goes when full. Returns the index.
+ * A NULL or empty pass never replaces a saved password: an open network with
+ * a saved secured one's name is a different network (an "evil twin" can take
+ * any name). To change a password, save a new non-empty one; to drop it,
+ * remove the entry. */
 int t5_netcfg_add(t5_netcfg_t *c, const char *ssid, const char *pass);
+/* Saved, with a password: joined only with it, at WPA2 or better. */
+bool t5_netcfg_secured(const t5_netcfg_t *c, const char *ssid);
+/* The saved entry a scanned network can be, or -1. By name, except that an
+ * open network is never one saved with a password. */
+int t5_netcfg_find_ap(const t5_netcfg_t *c, const t5_net_ap_t *ap);
+/* The password to join ssid with: pass if given; with NULL, the saved one
+ * (or "" if ssid isn't saved). */
+const char *t5_netcfg_pass_for(const t5_netcfg_t *c, const char *ssid, const char *pass);
 bool t5_netcfg_remove(t5_netcfg_t *c, const char *ssid);
 /* Record a successful connection (moves it up the order). */
 void t5_netcfg_mark_ok(t5_netcfg_t *c, const char *ssid);
@@ -62,7 +75,8 @@ void t5_netcfg_clear_fail(t5_netcfg_backoff_t *b, const char *ssid);
 uint32_t t5_netcfg_next_retry(const t5_netcfg_backoff_t *b, uint32_t now_ms);
 
 /* From scan results, the saved network to try: strongest usable signal, a
- * bonus for the most recently successful, skipping ones in backoff. -1 if
+ * bonus for the most recently successful, skipping ones in backoff and open
+ * networks that only share a secured saved network's name. -1 if
  * none. Returns the index into c->e; *ap_idx gets the scan entry. */
 int t5_netcfg_pick(const t5_netcfg_t *c, const t5_netcfg_backoff_t *b, const t5_net_ap_t *aps, int n,
                    uint32_t now_ms, int *ap_idx);

@@ -236,17 +236,60 @@ static void open_password(const char *ssid)
     t5_shell_keyboard_show(t5ui_sys_native_input(p->field));
 }
 
+static void connecting_snackbar(const char *ssid)
+{
+    char msg[80];
+    snprintf(msg, sizeof msg, "Connecting to %s", ssid);
+    t5ui_snackbar(msg, NULL, NULL, NULL);
+}
+
+typedef struct {
+    char ssid[T5_NET_SSID_LEN];
+} join_open_t;
+
+static void join_open_answer(int b, void *ud)
+{
+    join_open_t *j = ud;
+    if (b == 0) {
+        /* Not saved: it would sit beside, not replace, the secured one. */
+        if (t5_net_connect(j->ssid, "", false) == T5_OK) connecting_snackbar(j->ssid);
+        else t5ui_snackbar("Couldn't connect", NULL, NULL, NULL);
+    }
+    free(j);
+}
+
+static bool saved_name(const wifi_page_t *w, const char *ssid)
+{
+    for (int i = 0; i < w->nsaved; i++) {
+        if (!strcmp(w->saved_ssids[i], ssid)) return true;
+    }
+    return false;
+}
+
 static void ap_clicked(t5ui_event_t *e)
 {
     wifi_page_t *w = s_nav.lv[s_nav.depth - 1].arg;
     int i = (int)(intptr_t)t5ui_event_user(e);
     if (i < 0 || i >= w->naps) return;
     t5_net_ap_t *ap = &w->aps[i];
+    if (ap->auth == 0 && !ap->saved && saved_name(w, ap->ssid)) {
+        /* Open, with the name of a network saved with a password (the
+         * service doesn't count it as saved): likely someone else's network
+         * posing as it. Ask, and never save it over the real one. */
+        join_open_t *j = calloc(1, sizeof *j);
+        if (!j) return;
+        snprintf(j->ssid, sizeof j->ssid, "%s", ap->ssid);
+        char title[80];
+        snprintf(title, sizeof title, "Join open %s?", j->ssid);
+        t5ui_dialog(title, "Your saved network with this name needs a password, and this one doesn't, so it may be "
+                           "someone else's network using the same name. It won't be saved.", "Join", "Cancel",
+                    join_open_answer, j);
+        return;
+    }
     if (ap->saved || ap->auth == 0) {
+        /* Saved: NULL joins with the saved password. Open: "" joins it open. */
         t5_net_connect(ap->ssid, ap->auth == 0 ? "" : NULL, true);
-        char msg[80];
-        snprintf(msg, sizeof msg, "Connecting to %s", ap->ssid);
-        t5ui_snackbar(msg, NULL, NULL, NULL);
+        connecting_snackbar(ap->ssid);
     } else {
         open_password(ap->ssid);
     }

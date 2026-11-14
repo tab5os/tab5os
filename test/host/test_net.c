@@ -82,6 +82,75 @@ static void test_backoff(void)
     TEST_ASSERT_EQUAL(1000, t5_netcfg_next_retry(&b, 1000));
 }
 
+#define WPA2 3          /* WIFI_AUTH_WPA2_PSK */
+
+/* An empty password (an open network with a saved one's name) never
+ * overwrites a saved password; a new non-empty one does. */
+static void test_empty_pass_keeps_saved(void)
+{
+    t5_netcfg_t c;
+    t5_netcfg_init(&c);
+    TEST_ASSERT_EQUAL(0, t5_netcfg_add(&c, "home", "secret123"));
+    TEST_ASSERT_EQUAL(0, t5_netcfg_add(&c, "home", ""));
+    TEST_ASSERT_EQUAL_STRING("secret123", c.e[0].pass);
+    TEST_ASSERT_EQUAL(0, t5_netcfg_add(&c, "home", NULL));
+    TEST_ASSERT_EQUAL_STRING("secret123", c.e[0].pass);
+    TEST_ASSERT_EQUAL(0, t5_netcfg_add(&c, "home", "changed99"));    /* change password */
+    TEST_ASSERT_EQUAL_STRING("changed99", c.e[0].pass);
+    TEST_ASSERT_EQUAL(1, c.n);
+    /* Open networks still save, and an open one can be given a password. */
+    TEST_ASSERT_EQUAL(1, t5_netcfg_add(&c, "cafe", ""));
+    TEST_ASSERT_EQUAL_STRING("", c.e[1].pass);
+    TEST_ASSERT_FALSE(t5_netcfg_secured(&c, "cafe"));
+    TEST_ASSERT_EQUAL(1, t5_netcfg_add(&c, "cafe", "nowlocked"));
+    TEST_ASSERT_TRUE(t5_netcfg_secured(&c, "cafe"));
+    TEST_ASSERT_TRUE(t5_netcfg_remove(&c, "home"));                 /* forget, then save open */
+    TEST_ASSERT_EQUAL(1, t5_netcfg_add(&c, "home", ""));
+    TEST_ASSERT_FALSE(t5_netcfg_secured(&c, "home"));
+    TEST_ASSERT_TRUE(t5_netcfg_valid(&c));
+}
+
+/* Connecting without a password uses the saved one, never "" for a saved
+ * secured network; an explicit password always wins. */
+static void test_pass_for(void)
+{
+    t5_netcfg_t c;
+    t5_netcfg_init(&c);
+    t5_netcfg_add(&c, "home", "secret123");
+    t5_netcfg_add(&c, "cafe", "");
+    TEST_ASSERT_EQUAL_STRING("secret123", t5_netcfg_pass_for(&c, "home", NULL));
+    TEST_ASSERT_EQUAL_STRING("", t5_netcfg_pass_for(&c, "cafe", NULL));
+    TEST_ASSERT_EQUAL_STRING("", t5_netcfg_pass_for(&c, "stranger", NULL));
+    TEST_ASSERT_EQUAL_STRING("typed", t5_netcfg_pass_for(&c, "home", "typed"));
+    TEST_ASSERT_EQUAL_STRING("", t5_netcfg_pass_for(&c, "home", ""));     /* explicit open join */
+    TEST_ASSERT_TRUE(t5_netcfg_secured(&c, "home"));
+    TEST_ASSERT_FALSE(t5_netcfg_secured(&c, "cafe"));
+    TEST_ASSERT_FALSE(t5_netcfg_secured(&c, "stranger"));
+}
+
+/* An open network with a secured saved network's name (an evil twin) is not
+ * that network: not shown as saved, and never picked for auto-connect. */
+static void test_open_twin_not_saved(void)
+{
+    t5_netcfg_t c;
+    t5_netcfg_init(&c);
+    t5_netcfg_add(&c, "home", "secret123");
+    t5_netcfg_add(&c, "cafe", "");
+    t5_net_ap_t twin = { .ssid = "home", .rssi = -30, .auth = T5_NETCFG_AUTH_OPEN };
+    t5_net_ap_t real = { .ssid = "home", .rssi = -70, .auth = WPA2 };
+    t5_net_ap_t cafe = { .ssid = "cafe", .rssi = -60, .auth = T5_NETCFG_AUTH_OPEN };
+    TEST_ASSERT_EQUAL(-1, t5_netcfg_find_ap(&c, &twin));
+    TEST_ASSERT_EQUAL(0, t5_netcfg_find_ap(&c, &real));
+    TEST_ASSERT_EQUAL(1, t5_netcfg_find_ap(&c, &cafe));              /* saved open stays saved */
+    int ap = -1;
+    TEST_ASSERT_EQUAL(-1, t5_netcfg_pick(&c, NULL, &twin, 1, 0, &ap)); /* twin alone: nothing */
+    TEST_ASSERT_EQUAL(-1, ap);
+    t5_net_ap_t both[] = { twin, real };
+    TEST_ASSERT_EQUAL(0, t5_netcfg_pick(&c, NULL, both, 2, 0, &ap));  /* the weaker real one */
+    TEST_ASSERT_EQUAL(1, ap);
+    TEST_ASSERT_EQUAL(1, t5_netcfg_pick(&c, NULL, &cafe, 1, 0, &ap));
+}
+
 static void test_pick(void)
 {
     t5_netcfg_t c;
@@ -89,10 +158,10 @@ static void test_pick(void)
     t5_netcfg_add(&c, "home", "password");
     t5_netcfg_add(&c, "office", "password");
     t5_net_ap_t aps[] = {
-        { .ssid = "stranger", .rssi = -30 },
-        { .ssid = "office", .rssi = -60 },
-        { .ssid = "home", .rssi = -65 },
-        { .ssid = "home", .rssi = -95 },   /* too weak */
+        { .ssid = "stranger", .rssi = -30, .auth = WPA2 },
+        { .ssid = "office", .rssi = -60, .auth = WPA2 },
+        { .ssid = "home", .rssi = -65, .auth = WPA2 },
+        { .ssid = "home", .rssi = -95, .auth = WPA2 },   /* too weak */
     };
     int ap = -1;
     TEST_ASSERT_EQUAL(1, t5_netcfg_pick(&c, NULL, aps, 4, 0, &ap));   /* strongest saved */
@@ -423,6 +492,9 @@ int main(void)
     RUN_TEST(test_valid_rejects_garbage);
     RUN_TEST(test_backoff);
     RUN_TEST(test_pick);
+    RUN_TEST(test_empty_pass_keeps_saved);
+    RUN_TEST(test_pass_for);
+    RUN_TEST(test_open_twin_not_saved);
     RUN_TEST(test_c6img_parse);
     RUN_TEST(test_c6img_rejects);
     RUN_TEST(test_ble_addr);

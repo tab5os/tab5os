@@ -28,6 +28,26 @@ int t5_netcfg_find(const t5_netcfg_t *c, const char *ssid)
     return -1;
 }
 
+bool t5_netcfg_secured(const t5_netcfg_t *c, const char *ssid)
+{
+    int i = t5_netcfg_find(c, ssid);
+    return i >= 0 && c->e[i].pass[0];
+}
+
+int t5_netcfg_find_ap(const t5_netcfg_t *c, const t5_net_ap_t *ap)
+{
+    int i = t5_netcfg_find(c, ap->ssid);
+    if (i >= 0 && ap->auth == T5_NETCFG_AUTH_OPEN && c->e[i].pass[0]) return -1;
+    return i;
+}
+
+const char *t5_netcfg_pass_for(const t5_netcfg_t *c, const char *ssid, const char *pass)
+{
+    if (pass) return pass;
+    int i = t5_netcfg_find(c, ssid);
+    return i >= 0 ? c->e[i].pass : "";
+}
+
 int t5_netcfg_add(t5_netcfg_t *c, const char *ssid, const char *pass)
 {
     if (!ssid || !ssid[0] || strlen(ssid) >= T5_NET_SSID_LEN || (pass && strlen(pass) >= T5_NET_PASS_LEN)) {
@@ -46,6 +66,10 @@ int t5_netcfg_add(t5_netcfg_t *c, const char *ssid, const char *pass)
         }
         memset(&c->e[i], 0, sizeof c->e[i]);
         strcpy(c->e[i].ssid, ssid);
+    } else if ((!pass || !pass[0]) && c->e[i].pass[0]) {
+        /* Joining an open network that has a saved secured one's name doesn't
+         * make it that network: keep the password (forget it to change it). */
+        return i;
     }
     memset(c->e[i].pass, 0, sizeof c->e[i].pass);
     if (pass) strcpy(c->e[i].pass, pass);
@@ -137,7 +161,7 @@ int t5_netcfg_pick(const t5_netcfg_t *c, const t5_netcfg_backoff_t *b, const t5_
     }
     for (int a = 0; a < n; a++) {
         if (aps[a].rssi < T5_NETCFG_MIN_RSSI) continue;
-        int i = t5_netcfg_find(c, aps[a].ssid);
+        int i = t5_netcfg_find_ap(c, &aps[a]);
         if (i < 0 || (b && in_backoff(b, c->e[i].ssid, now_ms))) continue;
         int score = aps[a].rssi + (newest && c->e[i].last_ok == newest ? 10 : 0);
         if (score > best_score) {
