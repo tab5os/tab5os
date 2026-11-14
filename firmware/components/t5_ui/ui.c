@@ -744,6 +744,11 @@ static void *s_pc_arg;
 static volatile int s_pc_state;
 static SemaphoreHandle_t s_pc_done;   /* given on RUNNING -> DONE */
 static SemaphoreHandle_t s_wake;      /* wakes the UI task while it is paused */
+/* Set by t5_ui_async_paused: the UI task drains the queue on its next turn
+ * even while paused, when lv_timer_handler, and with it async_drain's LVGL
+ * timer, doesn't run. */
+static volatile bool s_drain_paused;
+static void async_drain(void *unused);
 
 static bool pc_move(int from, int to)
 {
@@ -790,7 +795,8 @@ static void ui_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        if (s_paused && __atomic_load_n(&s_pc_state, __ATOMIC_ACQUIRE) != PC_POSTED) {
+        if (s_paused && __atomic_load_n(&s_pc_state, __ATOMIC_ACQUIRE) != PC_POSTED &&
+            !__atomic_load_n(&s_drain_paused, __ATOMIC_ACQUIRE)) {
             s_busy_since_us = 0;
             xSemaphoreTake(s_wake, pdMS_TO_TICKS(50));
             continue;
@@ -804,6 +810,10 @@ static void ui_task(void *arg)
             s_busy_since_us = t5_time_us();
             t5_ui_lock();
             pc_run();
+            /* Paused, the queue waits for the screen, except after a
+             * t5_ui_async_paused. Unpaused, lv_timer_handler drains it. A
+             * drain timer left pending finds the queue empty. */
+            if (__atomic_exchange_n(&s_drain_paused, false, __ATOMIC_ACQ_REL) && s_paused) async_drain(NULL);
             apply_low_power();
             next = s_paused ? LV_NO_TIMER_READY : lv_timer_handler();
             t5_ui_unlock();
@@ -944,6 +954,15 @@ static t5_err_t post(t5_ui_fn_t fn, void *arg, sync_wait_t *wait, async_t **out)
 t5_err_t t5_ui_async(t5_ui_fn_t fn, void *arg)
 {
     return post(fn, arg, NULL, NULL);
+}
+
+t5_err_t t5_ui_async_paused(t5_ui_fn_t fn, void *arg)
+{
+    t5_err_t e = post(fn, arg, NULL, NULL);
+    if (e != T5_OK) return e;
+    __atomic_store_n(&s_drain_paused, true, __ATOMIC_RELEASE);
+    xSemaphoreGive(s_wake);
+    return T5_OK;
 }
 
 t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms)

@@ -31,7 +31,8 @@ void apps_hw_elf_unload(void *handle);
 void apps_hw_heap_install(void);
 size_t apps_hw_free_psram(void);
 size_t apps_hw_free_l2(void);
-void apps_hw_reserve_take(void);
+size_t apps_hw_largest_l2(void);
+bool apps_hw_reserve_take(void);
 void apps_hw_reserve_release(void);
 /* Does p lie in this app's heap (live block or not)? */
 bool apps_hw_heap_contains(const t5_tracker_t *t, const void *p);
