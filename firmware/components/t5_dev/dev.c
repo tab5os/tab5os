@@ -27,6 +27,11 @@
 #include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 #include "t5_ui/t5_ui.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.dev";
 
@@ -49,7 +54,7 @@ typedef struct {
 } clients_db_t;
 
 static t5_mutex_t s_lock;
-static clients_db_t s_db;
+EXT_RAM_BSS_ATTR static clients_db_t s_db;
 static httpd_handle_t s_httpd;
 static bool s_enabled;
 static uint32_t s_requests, s_denied;

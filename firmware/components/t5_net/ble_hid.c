@@ -30,6 +30,11 @@
 #include "t5_hid/hid.h"
 #include "t5_net/ble.h"
 #include "ble_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.blehid";
 
@@ -79,7 +84,7 @@ static struct {
 } s_hosts[MAX_HOSTS];
 
 static t5_ble_hid_t *s_open;
-static uint8_t s_map[T5_HID_DESC_MAX];
+EXT_RAM_BSS_ATTR static uint8_t s_map[T5_HID_DESC_MAX];
 static int s_map_len;
 static uint8_t s_last[R_COUNT][T5_HID_GAMEPAD_LEN];
 static uint8_t s_proto = 1;    /* report protocol */

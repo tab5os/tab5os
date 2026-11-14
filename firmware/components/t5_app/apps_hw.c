@@ -237,6 +237,11 @@ size_t apps_hw_free_l2(void)
     return heap_caps_get_free_size(CAPS_L2);
 }
 
+size_t apps_hw_largest_l2(void)
+{
+    return heap_caps_get_largest_free_block(CAPS_L2);
+}
+
 /* An app's heap: PSRAM chunks of its own, each a private TLSF heap, with the
  * bookkeeping outside them. Every call comes in under the apps lock, so the
  * heaps need no spinlock of their own: a fault in one (a corrupted heap)
@@ -343,9 +348,12 @@ bool apps_hw_heap_contains(const t5_tracker_t *t, const void *p)
 /* ---- internal RAM reserve (isolate.h) ------------------------------------------- */
 static void *volatile s_reserve;
 
-void apps_hw_reserve_take(void)
+/* False when it isn't held after the call: no free block of
+ * T5_ISO_L2_RESERVE is left (free RAM in pieces), so take it back later. */
+bool apps_hw_reserve_take(void)
 {
     if (!s_reserve) s_reserve = heap_caps_malloc(T5_ISO_L2_RESERVE, CAPS_L2);
+    return s_reserve != NULL;
 }
 
 void apps_hw_reserve_release(void)

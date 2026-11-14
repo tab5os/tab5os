@@ -32,6 +32,11 @@
 #include "t5_ui/ui_diag.h"
 #include "ui_hw.h"
 #include "ui_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.ui";
 
@@ -46,7 +51,7 @@ _Static_assert(T5_FBT_BUFS == T5_DISPLAY_FBS, "damage tracking keeps one list pe
 static lv_display_t *s_disp;
 static lv_indev_t *s_indev;
 static t5_rotation_t s_rot = T5_ROT_90;  /* landscape first (plan defaults) */
-static t5_fbt_t s_fbt;
+EXT_RAM_BSS_ATTR static t5_fbt_t s_fbt;
 static t5_mutex_t s_lock;
 static t5_task_t s_task;
 static volatile bool s_ready, s_paused;
@@ -119,6 +124,12 @@ void t5_ui_set_low_power(bool on)
     __atomic_store_n(&s_low_power, on, __ATOMIC_RELAXED);
 }
 
+/* LVGL's animation timer is created at LV_DEF_REFR_PERIOD (lv_anim.c) and
+ * nothing here changes it, so it must match the display timer's period or
+ * animations step slower than frames are drawn (they ran at ~30 fps while
+ * CONFIG_LV_DEF_REFR_PERIOD was LVGL's default of 33). */
+_Static_assert(LV_DEF_REFR_PERIOD == T5_UI_REFRESH_MS, "CONFIG_LV_DEF_REFR_PERIOD must equal T5_UI_REFRESH_MS");
+
 /* UI task, under the lock. */
 static void apply_low_power(void)
 {
@@ -166,7 +177,7 @@ void t5_ui_get_stats(t5_ui_stats_t *out)
     if (out) *out = s_st.out;
 }
 
-static t5_ui_frame_rec_t s_flog[T5_UI_FRAME_LOG];
+EXT_RAM_BSS_ATTR static t5_ui_frame_rec_t s_flog[T5_UI_FRAME_LOG];
 static uint32_t s_flog_n;   /* frames logged, ever */
 
 int t5_ui_frame_log(t5_ui_frame_rec_t *out, int max)
@@ -211,13 +222,15 @@ void t5_ui_show_stats(bool on)
  */
 /* Bands are drawn in internal RAM: CPU writes there don't pull PSRAM lines
  * into the cache first or need writing back, and the PPA reads them off the
- * PSRAM bus. Scroll went from 37 to 55 fps (2026-11-06). The two 20-line
- * bands are one 100 KB block, which the camera's H.264 encoder uses as its
- * reference buffer while it records (t5_ui_lend_internal); meanwhile the UI
- * draws in 40-line PSRAM bands. Bigger bands don't pay: the rest of the
- * system (LVGL's objects especially) needs ~130 KB of internal RAM free, and
- * the UI slows down 2-4x once they spill into PSRAM. */
-#define BAND_LINES_INT 20
+ * PSRAM bus. Scroll went from 37 to 55 fps (2026-11-06). The two bands are
+ * one block (26 lines: 130 KB), which the camera's H.264 encoder uses as its
+ * reference buffer while it records (needs 92 KB; t5_ui_lend_internal);
+ * meanwhile the UI draws in 40-line PSRAM bands. 2026-11-14, portrait gate,
+ * with OS data moved to PSRAM: 20 lines 50 fps scrolling, 26 or 30 lines 58
+ * (render 17 -> 13 ms, transitions 25.6 -> 29.8 fps). 26 rather than 30
+ * leaves room for a bigger LVGL pool (lv_mem_t5.c) at the same headroom
+ * (~57 KB internal free at a soak's low point). */
+#define BAND_LINES_INT 26
 #define BAND_LINES_PSRAM 40
 #define BAND_INT_BYTES ((size_t)T5_PANEL_H * BAND_LINES_INT * 2)
 #define BAND_INT_BLOCK (2 * BAND_INT_BYTES)
@@ -232,7 +245,7 @@ static int s_band_lines;
 static uint16_t *s_band[2];       /* the bands LVGL draws in */
 static int s_target = -1;           /* back buffer of the frame being drawn */
 static int s_front = -1;            /* newest complete buffer */
-static t5_rect_t s_frame[FRAME_MAX_AREAS];
+EXT_RAM_BSS_ATTR static t5_rect_t s_frame[FRAME_MAX_AREAS];
 static int s_nframe;
 static bool s_flushed;
 static bool s_redraw_all;
@@ -744,6 +757,11 @@ static void *s_pc_arg;
 static volatile int s_pc_state;
 static SemaphoreHandle_t s_pc_done;   /* given on RUNNING -> DONE */
 static SemaphoreHandle_t s_wake;      /* wakes the UI task while it is paused */
+/* Set by t5_ui_async_paused: the UI task drains the queue on its next turn
+ * even while paused, when lv_timer_handler, and with it async_drain's LVGL
+ * timer, doesn't run. */
+static volatile bool s_drain_paused;
+static void async_drain(void *unused);
 
 static bool pc_move(int from, int to)
 {
@@ -790,7 +808,8 @@ static void ui_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        if (s_paused && __atomic_load_n(&s_pc_state, __ATOMIC_ACQUIRE) != PC_POSTED) {
+        if (s_paused && __atomic_load_n(&s_pc_state, __ATOMIC_ACQUIRE) != PC_POSTED &&
+            !__atomic_load_n(&s_drain_paused, __ATOMIC_ACQUIRE)) {
             s_busy_since_us = 0;
             xSemaphoreTake(s_wake, pdMS_TO_TICKS(50));
             continue;
@@ -804,6 +823,10 @@ static void ui_task(void *arg)
             s_busy_since_us = t5_time_us();
             t5_ui_lock();
             pc_run();
+            /* Paused, the queue waits for the screen, except after a
+             * t5_ui_async_paused. Unpaused, lv_timer_handler drains it. A
+             * drain timer left pending finds the queue empty. */
+            if (__atomic_exchange_n(&s_drain_paused, false, __ATOMIC_ACQ_REL) && s_paused) async_drain(NULL);
             apply_low_power();
             next = s_paused ? LV_NO_TIMER_READY : lv_timer_handler();
             t5_ui_unlock();
@@ -847,8 +870,8 @@ typedef struct async {
  * rather than using up memory. Guarded by the UI lock. */
 #define ASYNC_POOL 64
 #define ASYNC_MAX_PENDING 512
-static async_t s_async_pool[ASYNC_POOL];
-static async_t *s_async_free[ASYNC_POOL];
+EXT_RAM_BSS_ATTR static async_t s_async_pool[ASYNC_POOL];
+EXT_RAM_BSS_ATTR static async_t *s_async_free[ASYNC_POOL];
 static int s_async_nfree = -1;
 static uint32_t s_async_pending;
 
@@ -944,6 +967,15 @@ static t5_err_t post(t5_ui_fn_t fn, void *arg, sync_wait_t *wait, async_t **out)
 t5_err_t t5_ui_async(t5_ui_fn_t fn, void *arg)
 {
     return post(fn, arg, NULL, NULL);
+}
+
+t5_err_t t5_ui_async_paused(t5_ui_fn_t fn, void *arg)
+{
+    t5_err_t e = post(fn, arg, NULL, NULL);
+    if (e != T5_OK) return e;
+    __atomic_store_n(&s_drain_paused, true, __ATOMIC_RELEASE);
+    xSemaphoreGive(s_wake);
+    return T5_OK;
 }
 
 t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms)

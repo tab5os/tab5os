@@ -8,6 +8,11 @@
 #include "t5_gui/t5ui_sys.h"   /* t5ui_sys_native: the shell's keyboard takes the text area */
 #include "t5_shell/shell.h"
 #include "codeview.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define INDENT 4
 #define GUTTER 4                 /* line number columns */
@@ -565,7 +570,7 @@ typedef struct {
 static void flush_run(line_draw_t *d)
 {
     if (!d->n) return;
-    static char buf[RUN_BUF];
+    EXT_RAM_BSS_ATTR static char buf[RUN_BUF];
     size_t n = d->n < sizeof buf - 1 ? d->n : sizeof buf - 1;
     memcpy(buf, d->start, n);
     buf[n] = 0;

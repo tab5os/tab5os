@@ -108,6 +108,18 @@ t5_err_t t5_ui_async(t5_ui_fn_t fn, void *arg)
     return T5_OK;
 }
 
+/* No PSRAM on the host. */
+void *t5_calloc_ext(size_t n, size_t size)
+{
+    return calloc(n, size);
+}
+
+/* The simulator never pauses rendering. */
+t5_err_t t5_ui_async_paused(t5_ui_fn_t fn, void *arg)
+{
+    return t5_ui_async(fn, arg);
+}
+
 t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms)
 {
     fn(arg);

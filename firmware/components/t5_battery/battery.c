@@ -410,7 +410,7 @@ static t5_err_t hist_save(void *arg)
 
 static void history_init(void)
 {
-    s_hist = calloc(1, sizeof *s_hist);
+    s_hist = t5_calloc_ext(1, sizeof *s_hist);
     if (!s_hist) return;
     char p[96];
     path(p, sizeof p, HIST_FILE);

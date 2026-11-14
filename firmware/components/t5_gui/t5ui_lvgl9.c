@@ -78,7 +78,7 @@ static node_t *node_of(lv_obj_t *o)
 
 static node_t *node_add(lv_obj_t *o, t5ui_kind_t kind)
 {
-    node_t *n = calloc(1, sizeof *n);
+    node_t *n = t5_calloc_ext(1, sizeof *n);
     if (!n) return NULL;
     n->obj = o;
     n->kind = (uint16_t)kind;
@@ -562,7 +562,7 @@ t5_err_t t5ui_be_on(t5ui_obj_t *obj, t5ui_ev_t ev, t5ui_event_cb_t cb, void *use
     if (k == T5UI_MD_ROW && ev == T5UI_EV_CLICK && !lv_obj_is_clickable(o)) {
         md_row_set_clickable(o, NULL, NULL);   /* clickable with a ripple */
     }
-    rec_t *r = malloc(sizeof *r);
+    rec_t *r = t5_calloc_ext(1, sizeof *r);
     if (!r) return T5_ERR_NO_MEM;
     *r = (rec_t){ cb, user, o, ev };
     lv_obj_add_event_cb(on, tramp, code_of(ev), r);
@@ -843,7 +843,7 @@ t5ui_obj_t *t5ui_be_create(t5ui_obj_t *parent, t5ui_kind_t kind)
     } else if (pk == T5UI_MD_PAGE) {
         p = md_page_body(p);                   /* content goes under the app bar */
     }
-    node_t *n = calloc(1, sizeof *n);
+    node_t *n = t5_calloc_ext(1, sizeof *n);
     if (!n) return NULL;
     lv_obj_t *o = make(p, kind, n);
     if (!o) {

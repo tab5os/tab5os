@@ -17,6 +17,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include "shell_priv.h"
+#include "t5_core/os.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define DOCK_N 5
 #define CELL_MIN_W_DP 96
@@ -29,13 +35,13 @@
 static const char *const DOCK_PREFS[] = { T5_APP_ID_SETTINGS, T5_APP_ID_FILES, T5_APP_ID_CAMERA,
                                           T5_APP_ID_MANAGER, T5_APP_ID_POWER };
 
-static t5ui_obj_t *s_scr, *s_time, *s_date, *s_dock;
+static t5ui_obj_t *s_scr, *s_time, *s_date, *s_dock, *s_wall;
 static t5ui_obj_t *s_drawer, *s_recent_row, *s_recent_box, *s_grid;
 static bool s_drawer_open;
 static shell_app_t *s_apps;
 static int s_napps;
-static char s_shown_recents[SHELL_RECENTS][T5_APP_ID_LEN];
-static char s_dock_ids[DOCK_N][T5_APP_ID_LEN];
+EXT_RAM_BSS_ATTR static char s_shown_recents[SHELL_RECENTS][T5_APP_ID_LEN];
+EXT_RAM_BSS_ATTR static char s_dock_ids[DOCK_N][T5_APP_ID_LEN];
 
 /* A stable hue per app from its id. Badges are tonal: the accent's soft
  * 200 tone for the glyph on a dark circle tinted with the same hue, so a
@@ -403,10 +409,90 @@ static void safe_banner(t5ui_obj_t *parent, const char *why)
     t5ui_on(b, T5UI_EV_CLICK, restart_clicked, NULL);
 }
 
+/* ---- wallpaper --------------------------------------------------------------
+ * Plain background under the status bar and the clock, warming into the
+ * primary colour behind the dock: from WALL_STOP/255 of the height down, the
+ * background blends into wall_bottom(). Drawn by LVGL as a gradient it
+ * banded: the two colours are a few dozen RGB565 steps apart, spread over
+ * ~800 rows, so each step showed as a flat stripe 20-40 rows tall. Here it
+ * is rendered once into an RGB565 image with ordered (4x4 Bayer) dithering,
+ * which spreads each step over neighbouring pixels, and redone only when the
+ * size or the colours change. 1.8 MB of PSRAM at 720x1280. If that can't be
+ * had, the screen keeps LVGL's gradient. */
+#define WALL_STOP 64
+
+static int32_t s_wall_w, s_wall_h;
+static t5ui_color_t s_wall_top, s_wall_bot;
+
+static t5ui_color_t wall_bottom(t5ui_color_t bg)
+{
+    return t5ui_mix(t5ui_theme_color(T5UI_COLOR_PRIMARY_VARIANT), bg, 112);
+}
+
+/* One channel, v in 1/256ths of an 8-bit level, to `max` levels (31 or 63),
+ * rounded up or down by the Bayer threshold t (0..15). */
+/* Shown or not; the screen's own gradient only while it isn't (under the
+ * image it would be drawn for nothing). */
+static void wall_show(bool on)
+{
+    t5ui_set_int(s_wall, T5UI_P_HIDDEN, !on);
+    t5ui_set_int(s_scr, T5UI_P_BG_GRAD_DIR, on ? T5UI_GRAD_NONE : T5UI_GRAD_VER);
+    if (!on) s_wall_w = s_wall_h = 0;
+}
+
+static inline uint32_t dither_ch(uint32_t v, uint32_t max, uint32_t t)
+{
+    uint32_t q = (v * max / 255u + t * 16u + 8u) >> 8;
+    return q > max ? max : q;
+}
+
+static void wall_render(void)
+{
+    if (!s_wall) return;
+    int32_t w = 0, h = 0;
+    t5ui_screen_size(&w, &h);
+    t5ui_color_t top = t5ui_theme_color(T5UI_COLOR_BACKGROUND), bot = wall_bottom(top);
+    if (w <= 0 || h <= 0) return;
+    if (w == s_wall_w && h == s_wall_h && top == s_wall_top && bot == s_wall_bot) return;
+    uint16_t *px = t5_calloc_ext((size_t)w * (size_t)h, sizeof *px);
+    if (!px) {
+        wall_show(false);
+        return;
+    }
+    static const uint8_t bayer[4][4] = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } };
+    int32_t y0 = h * WALL_STOP / 255, span = h - 1 - y0 > 0 ? h - 1 - y0 : 1;
+    int32_t c0[3] = { (int32_t)(top >> 16 & 0xff), (int32_t)(top >> 8 & 0xff), (int32_t)(top & 0xff) };
+    int32_t c1[3] = { (int32_t)(bot >> 16 & 0xff), (int32_t)(bot >> 8 & 0xff), (int32_t)(bot & 0xff) };
+    for (int32_t y = 0; y < h; y++) {
+        int32_t k = y <= y0 ? 0 : y - y0;
+        uint32_t v[3];    /* this row's colour, in 1/256ths of a level */
+        for (int i = 0; i < 3; i++) v[i] = (uint32_t)(c0[i] * 256 + (c1[i] - c0[i]) * 256 * k / span);
+        uint16_t *row = px + (size_t)y * (size_t)w;
+        const uint8_t *b = bayer[y & 3];
+        for (int32_t x = 0; x < w; x++) {
+            uint32_t t = b[x & 3];
+            row[x] = (uint16_t)(dither_ch(v[0], 31, t) << 11 | dither_ch(v[1], 63, t) << 5 | dither_ch(v[2], 31, t));
+        }
+    }
+    t5ui_pixels_t p = { .size = sizeof p, .w = (uint16_t)w, .h = (uint16_t)h, .format = T5UI_PX_RGB565, .data = px };
+    t5_err_t e = t5ui_image_pixels(s_wall, &p);    /* takes a copy */
+    free(px);
+    if (e != T5_OK) {
+        wall_show(false);
+        return;
+    }
+    wall_show(true);
+    s_wall_w = w;
+    s_wall_h = h;
+    s_wall_top = top;
+    s_wall_bot = bot;
+}
+
 static void scr_resized(t5ui_event_t *e)
 {
     (void)e;
     size_cells();
+    wall_render();
 }
 
 /* The colours taken from the accent. Local styles don't follow an accent
@@ -416,10 +502,11 @@ void launcher_restyle(void)
     if (!s_scr) return;
     t5ui_color_t bg = t5ui_theme_color(T5UI_COLOR_BACKGROUND);
     t5ui_set_color(s_scr, T5UI_P_BG_COLOR, bg);
-    t5ui_set_color(s_scr, T5UI_P_BG_GRAD_COLOR, t5ui_mix(t5ui_theme_color(T5UI_COLOR_PRIMARY_VARIANT), bg, 112));
+    t5ui_set_color(s_scr, T5UI_P_BG_GRAD_COLOR, wall_bottom(bg));
     for (int i = 0; i < s_nheaders; i++) {
         t5ui_set_color(s_headers[i], T5UI_P_TEXT_COLOR, t5ui_theme_color(T5UI_COLOR_PRIMARY));
     }
+    wall_render();
 }
 
 t5ui_obj_t *launcher_get(void)
@@ -429,11 +516,20 @@ t5ui_obj_t *launcher_get(void)
     /* The wallpaper: plain background under the status bar and the clock,
      * warming into the primary colour behind the dock. Starting dark means
      * no hard edge where the opaque status bar meets it, and the colour
-     * sits where the hands go. */
+     * sits where the hands go. The dithered image (wall_render) covers the
+     * screen; this gradient is what shows if it can't be made. */
     t5ui_set_int(s_scr, T5UI_P_BG_GRAD_DIR, T5UI_GRAD_VER);
-    t5ui_set_int(s_scr, T5UI_P_BG_MAIN_STOP, 64);
+    t5ui_set_int(s_scr, T5UI_P_BG_MAIN_STOP, WALL_STOP);
     t5ui_set_int(s_scr, T5UI_P_SCROLLABLE, false);
     t5ui_on(s_scr, T5UI_EV_RESIZE, scr_resized, NULL);
+
+    s_wall = t5ui_create(s_scr, T5UI_IMAGE);
+    s_wall_w = s_wall_h = 0;
+    t5ui_set_int(s_wall, T5UI_P_FLOATING, true);
+    t5ui_set_int(s_wall, T5UI_P_X, 0);
+    t5ui_set_int(s_wall, T5UI_P_Y, 0);
+    t5ui_set_int(s_wall, T5UI_P_CLICKABLE, false);
+    t5ui_set_int(s_wall, T5UI_P_HIDDEN, true);    /* until wall_render has drawn it */
 
     t5ui_obj_t *home = shell_box(s_scr);
     shell_size(home, T5UI_PCT(100), T5UI_PCT(100));
@@ -482,7 +578,8 @@ t5ui_obj_t *launcher_get(void)
 
 void launcher_reset(void)
 {
-    s_scr = s_time = s_date = s_dock = NULL;
+    s_scr = s_time = s_date = s_dock = s_wall = NULL;
+    s_wall_w = s_wall_h = 0;
     s_nheaders = 0;
     s_drawer = s_recent_row = s_recent_box = s_grid = NULL;
     s_drawer_open = false;

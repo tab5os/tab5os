@@ -4,6 +4,11 @@
 #include "t5_core/os.h"
 #include "t5_core/res.h"
 #include "priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.lock";
 
@@ -16,7 +21,7 @@ struct t5_wakelock {
     char owner[T5_WAKELOCK_OWNER_LEN];
 };
 
-static struct t5_wakelock s_locks[T5_WAKELOCK_MAX];
+EXT_RAM_BSS_ATTR static struct t5_wakelock s_locks[T5_WAKELOCK_MAX];
 static t5_mutex_t s_mtx;
 
 static void lock(void)

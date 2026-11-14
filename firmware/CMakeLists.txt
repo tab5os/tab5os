@@ -25,6 +25,29 @@ foreach(hot lvgl__lvgl md t5_ui t5_audio)
     target_compile_options(${hot_lib} PRIVATE -O2)
 endforeach()
 
+# ESP-IDF and the managed components (Espressif's, LVGL's) log warnings and
+# errors only: their INFO and lower calls compile out, which keeps the image
+# inside its size budget (t5 size-check). Tab5 OS's own components keep
+# CONFIG_LOG_MAXIMUM_LEVEL. LVGL's own logger is set to WARN in sdkconfig.defaults.
+# vfs is skipped: vfs.c defines LOG_LOCAL_LEVEL itself (NONE, with the default
+# CONFIG_VFS_SUPPRESS_SELECT_DEBUG_OUTPUT), and a second definition is an error.
+# IDF's other own definitions sit behind *_ENABLE_DEBUG_LOG options, which are off.
+idf_build_get_property(t5_all_components BUILD_COMPONENTS)
+foreach(comp ${t5_all_components})
+    idf_component_get_property(comp_dir ${comp} COMPONENT_DIR)
+    if(comp STREQUAL "vfs")
+        continue()
+    endif()
+    if(comp STREQUAL "esp_driver_ppa"
+       OR NOT (comp_dir MATCHES "^${CMAKE_CURRENT_LIST_DIR}/(components|sysapps|main)(/|$)"))
+        idf_component_get_property(comp_lib ${comp} COMPONENT_LIB)
+        get_target_property(comp_type ${comp_lib} TYPE)
+        if(NOT comp_type STREQUAL "INTERFACE_LIBRARY")
+            target_compile_definitions(${comp_lib} PRIVATE LOG_LOCAL_LEVEL=ESP_LOG_WARN)
+        endif()
+    endif()
+endforeach()
+
 # Coding standard (docs/coding-standard.md). esp_driver_ppa is a vendored
 # copy of the IDF driver and keeps IDF's own warning set.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/t5_standard.cmake)

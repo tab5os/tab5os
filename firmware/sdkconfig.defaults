@@ -47,9 +47,26 @@ CONFIG_ESP_HOSTED_HOST_CP_RESET_SETTLE_MS=800
 # Wi-Fi transport buffers in PSRAM (the P4's SDMMC DMAs to it): a download
 # no longer eats internal RAM. Per-frame buffers too, see t5_net/hosted_compat.c.
 CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
+# esp_hosted's six worker task stacks (24 KB) in PSRAM. They only move data
+# and post events (callbacks: t5_net/ble.c hci_rx, wifimon.c); none writes
+# flash, the one thing that needs an internal stack.
+CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
+# NVS page cache and key hash list in PSRAM (about 7 KB).
+CONFIG_NVS_ALLOCATE_CACHE_IN_SPIRAM=y
 # App networking (t5_net/sock.h): room for app sockets next to the OS's own,
 # and TLS buffers (about 20 KB a connection) in PSRAM, not internal RAM.
 CONFIG_LWIP_MAX_SOCKETS=16
+# TCP receive window: IDF's default of 5760 bytes (4 segments) caps a
+# connection at window / round trip, about 19 KB/s (150 kb/s) to a server
+# 300 ms away, under a 160 kb/s radio stream, so it falls behind and never
+# catches up after a pause (Radio, 2026-11-14). 32 KB allows about 870 kb/s
+# at 300 ms without window scaling. The receive mailbox follows IDF's
+# guidance, window / MSS + 2. Unread data sits in the received frames,
+# which t5_net/hosted_compat.c moves to PSRAM (esp_hosted copied them into
+# internal RAM, where one unread socket could take ~50 KB): at worst 32 KB a
+# socket, in PSRAM.
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=25
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # Chains that end in a cross-signed root (Google's, among others) verify against the bundle.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
@@ -90,6 +107,11 @@ CONFIG_LV_OS_NONE=y
 CONFIG_LV_USE_CUSTOM_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y
+# LVGL's animation timer runs at this period (lv_anim.c), not at the display
+# timer's (T5_UI_REFRESH_MS, set in t5_ui/ui.c): left at LVGL's 33 ms, every
+# animation (scrolling, transitions, dialogs) advanced at ~30 fps. t5_ui/ui.c
+# checks the two agree.
+CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_DPI_DEF=320
 CONFIG_LV_DRAW_BUF_ALIGN=64
 # PPA fills run alongside the band copies. They used to hang the PPA on
@@ -155,3 +177,8 @@ CONFIG_TINYUSB_MIDI_COUNT=1
 # Opaque messages to and from the C6: Wi-Fi monitor mode (t5_net/wifimon.c).
 CONFIG_ESP_HOSTED_HOST_FEAT_PEER_DATA=y
 CONFIG_ESP_HOSTED_HOST_FEAT_PEER_DATA_MAX_CUSTOM_MSG_HANDLERS=4
+# Not CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH / LIBC_LOCKS_PLACE_IN_IRAM off,
+# though XIP from PSRAM would allow them (16 KB of internal RAM): with the
+# heap and lock code fetched from PSRAM, the UI gate fell from 29 to 22 fps
+# scrolling (render max 18 -> 65 ms) and transitions from 25.6 to 15.8 fps
+# (2026-11-14). LVGL allocates draw tasks every frame.

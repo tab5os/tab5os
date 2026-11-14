@@ -10,6 +10,11 @@
 #include "t5_core/res.h"
 #include "t5_shell/shell.h"
 #include "shell_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define ACT_TABLE 16          /* every app's together */
 
@@ -21,7 +26,7 @@ struct t5_shell_activity {
     int8_t percent;
 };
 
-static struct t5_shell_activity s_act[ACT_TABLE];
+EXT_RAM_BSS_ATTR static struct t5_shell_activity s_act[ACT_TABLE];
 static t5_mutex_t s_mx;
 
 static t5_mutex_t mx(void)

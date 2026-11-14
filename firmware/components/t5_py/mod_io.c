@@ -27,6 +27,11 @@
 #include "t5_usb/usbdev.h"
 #include "bind_perm.h"
 #include "py_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 #define SLICE_MS 100
 
@@ -581,7 +586,7 @@ static mp_obj_t wifimon_pcap(mp_obj_t o, mp_obj_t path_in, mp_obj_t secs)
     fwrite(hdr, 1, t5_wifimon_pcap_header(hdr), f);
     wifimon_wait_t *w = m_new_obj(wifimon_wait_t);
     w->m = m;
-    static uint8_t rec[16 + 16 + 1400];
+    EXT_RAM_BSS_ATTR static uint8_t rec[16 + 16 + 1400];
     uint32_t count = 0, until = t5_time_ms() + (uint32_t)s * 1000u;
     nlr_buf_t nlr;
     if (nlr_push(&nlr) == 0) {

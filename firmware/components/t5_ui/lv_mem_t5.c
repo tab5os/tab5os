@@ -22,9 +22,11 @@
 
 /* Pool size and the largest request it serves. Bigger requests (image and
  * layer buffers, label text of long documents) go to the system heap,
- * which puts anything over 4 KB in PSRAM. */
+ * which puts anything over 4 KB in PSRAM. 88 KB held the shell but not
+ * apps: Weather, Radio, Music and App Manager filled it and 44% of LVGL's
+ * allocations overflowed to PSRAM; at 112 KB 28% do (2026-11-14). */
 #ifndef T5_LV_POOL_BYTES
-#define T5_LV_POOL_BYTES (88 * 1024)
+#define T5_LV_POOL_BYTES (112 * 1024)
 #endif
 #ifndef T5_LV_POOL_MAX_REQ
 #define T5_LV_POOL_MAX_REQ (4096)

@@ -44,6 +44,11 @@
 #include "app_priv.h"
 #include "app_session.h"
 #include "apps_hw.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.app";
 
@@ -57,11 +62,11 @@ static t5_app_t *s_fg;
 static t5_app_t *s_headless;        /* app running on_alarm */
 static const t5_builtin_app_t *s_builtins[T5_APPS_BUILTIN_MAX];
 static int s_nbuiltins;
-static t5_crash_db_t s_db;
+EXT_RAM_BSS_ATTR static t5_crash_db_t s_db;
 static bool s_inited;
 static char s_crashed[T5_APP_ID_LEN];   /* the app that crashed or hung on the last run */
 static const t5_apps_home_t *s_home;
-static t5_energy_db_t s_energy;
+EXT_RAM_BSS_ATTR static t5_energy_db_t s_energy;
 static uint32_t s_energy_saved_seq;
 static bool s_restoring;            /* the next launch is a session restore */
 static bool s_safe;                 /* safe mode: installed apps don't run */
@@ -1605,7 +1610,8 @@ static void fault_report(const t5_fault_info_t *info, bool ends)
     /* On the UI task, ui_unwound() takes over after the unwind. */
     if (a == s_headless) xSemaphoreGive(s_alarm_end);
     if (!t5_ui_on_ui_task() && a == s_fg) {
-        if (t5_ui_async(kill_fg, a) != T5_OK) T5_LOGE(TAG, "%s crashed; can't queue its exit", a->id);
+        /* _paused: with the screen off a plain async waits for it to come on. */
+        if (t5_ui_async_paused(kill_fg, a) != T5_OK) T5_LOGE(TAG, "%s crashed; can't queue its exit", a->id);
     }
 }
 
@@ -1667,9 +1673,16 @@ static void ui_unwound(const void *p)
     }
 }
 
+/* The app an out-of-memory close is queued for (apps_lock): the memory
+ * check polls every 500 ms and must not queue (and log) one per poll. */
+static t5_app_t *s_oom_queued;
+
 static void oom_async(void *p)
 {
     t5_app_t *a = p;
+    apps_lock();
+    if (s_oom_queued == a) s_oom_queued = NULL;
+    apps_unlock();
     if (a != s_fg || !valid(a)) return;
     a->oom = true;
     kill_fg(a);
@@ -1680,17 +1693,25 @@ void apps_close_for_memory(void)
     apps_lock();
     t5_app_t *a = s_fg;
     /* Only installed apps: built-ins are part of the OS. */
-    bool target = valid(a) && !a->builtin && !a->exiting;
+    bool target = valid(a) && !a->builtin && !a->exiting && s_oom_queued != a;
+    if (target) s_oom_queued = a;
     apps_unlock();
     if (!target) return;
     T5_LOGW(TAG, "memory critically low (PSRAM %u KB, internal %u KB free) with %s open (heap %u KB): closing it",
             (unsigned)(apps_hw_free_psram() / 1024), (unsigned)(apps_hw_free_l2() / 1024), a->id,
             (unsigned)(a->trk.heap_bytes / 1024));
-    if (t5_ui_async(oom_async, a) != T5_OK) T5_LOGE(TAG, "can't queue %s's exit", a->id);
+    /* _paused: an app playing with the screen off is closed now, not when
+     * the screen next comes on. */
+    if (t5_ui_async_paused(oom_async, a) != T5_OK) {
+        T5_LOGE(TAG, "can't queue %s's exit", a->id);
+        apps_lock();
+        if (s_oom_queued == a) s_oom_queued = NULL;
+        apps_unlock();
+    }
 }
 
 #define HOG_MAX T5_APP_MAX_TASKS
-static struct {
+EXT_RAM_BSS_ATTR static struct {
     void *task;
     uint64_t last;
     uint8_t strikes;

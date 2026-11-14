@@ -33,6 +33,7 @@ void mock_mutex_timeout_next(int n) { s_lock_timeouts = n; }
 void t5_mutex_unlock(t5_mutex_t m) { m->depth--; }
 
 int64_t t5_time_us(void) { return s_now_us; }
+void *t5_calloc_ext(size_t n, size_t size) { return calloc(n, size); }
 void t5_delay_ms(uint32_t ms) { mock_time_advance_ms(ms); }
 
 void *t5_app_ctx_get(void) { return s_ctx; }
@@ -54,6 +55,12 @@ t5_err_t t5_task_create(const char *name, t5_task_fn_t fn, void *arg, uint32_t s
 
 t5_err_t t5_task_create_lp(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
                            int prio, int core, t5_task_t *out)
+{
+    return t5_task_create(name, fn, arg, stack_bytes, prio, core, out);
+}
+
+t5_err_t t5_task_create_ext(const char *name, t5_task_fn_t fn, void *arg, uint32_t stack_bytes,
+                            int prio, int core, t5_task_t *out)
 {
     return t5_task_create(name, fn, arg, stack_bytes, prio, core, out);
 }

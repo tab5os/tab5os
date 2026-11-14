@@ -49,6 +49,11 @@
 #include "t5_storage/paths.h"
 #include "t5_storage/t5_storage.h"
 #include "audio_hw.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.audio";
 
@@ -129,7 +134,7 @@ typedef struct {
     char core[2][configMAX_TASK_NAME_LEN];
 } dry_t;
 #define DRY_KEEP 6
-static dry_t s_dry[DRY_KEEP], s_dry_now;
+EXT_RAM_BSS_ATTR static dry_t s_dry[DRY_KEEP], s_dry_now;
 static uint32_t s_ndry;
 
 struct t5_audio_in {
@@ -472,8 +477,8 @@ static void mix_streams(int32_t *acc, t5_audio_out_t **sts, int n, bool duck)
 static void out_task(void *arg)
 {
     (void)arg;
-    static int32_t acc[BLOCK_SAMPLES];
-    static int16_t blk[BLOCK_SAMPLES];
+    EXT_RAM_BSS_ATTR static int32_t acc[BLOCK_SAMPLES];
+    EXT_RAM_BSS_ATTR static int16_t blk[BLOCK_SAMPLES];
     t5_voice_t voices[MAX_VOICES] = { 0 };
     t5_audio_out_t *sts[T5_AUDIO_OUT_MAX];
     bool running = false, hp = false, speaker = false;
@@ -592,8 +597,8 @@ static void out_task(void *arg)
 static void in_task(void *arg)
 {
     (void)arg;
-    static int16_t raw[BLOCK_SAMPLES], mono[BLOCK_FRAMES], ref48[BLOCK_FRAMES];
-    static int16_t mic16[BLOCK_FRAMES / 3], ref16[BLOCK_FRAMES / 3], conv[BLOCK_SAMPLES];
+    EXT_RAM_BSS_ATTR static int16_t raw[BLOCK_SAMPLES], mono[BLOCK_FRAMES], ref48[BLOCK_FRAMES];
+    EXT_RAM_BSS_ATTR static int16_t mic16[BLOCK_FRAMES / 3], ref16[BLOCK_FRAMES / 3], conv[BLOCK_SAMPLES];
     for (;;) {
         xEventGroupSetBits(s_ev, EV_IN_FREE);
         t5_mutex_lock(s_mx);

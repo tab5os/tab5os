@@ -40,6 +40,11 @@
 #include "t5_time/t5_time.h"
 #include "c6img.h"
 #include "net_priv.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.net";
 
@@ -76,10 +81,10 @@ static QueueHandle_t s_q;
 static SemaphoreHandle_t s_done;     /* CMD_SUSPEND completion */
 static t5_mutex_t s_mtx;
 static t5_net_status_t s_st;
-static t5_net_ap_t s_scan[T5_NET_MAX_SCAN];
+EXT_RAM_BSS_ATTR static t5_net_ap_t s_scan[T5_NET_MAX_SCAN];
 static int s_nscan;
-static t5_netcfg_t s_cfg;
-static t5_netcfg_backoff_t s_backoff;
+EXT_RAM_BSS_ATTR static t5_netcfg_t s_cfg;
+EXT_RAM_BSS_ATTR static t5_netcfg_backoff_t s_backoff;
 static t5_rail_hold_t *s_rail;
 static esp_netif_t *s_netif;
 static bool s_hosted_up, s_wifi_up, s_sntp_started;

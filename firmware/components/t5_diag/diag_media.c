@@ -234,7 +234,7 @@ static void echo_player(void *arg)
     t5_audio_out_cfg_t c = { .rate = 16000, .channels = 1, .buffer_ms = 300 };
     t5_audio_out_t *o;
     if (t5_audio_out_open(&c, &o) != T5_OK) return;
-    static int16_t buf[160];
+    EXT_RAM_BSS_ATTR static int16_t buf[160];
     uint32_t seed = 7;
     for (uint32_t blk = 0; blk < s_echo_secs * 100 + 50; blk++) {
         for (int i = 0; i < 160; i++) {
@@ -626,7 +626,7 @@ static struct {
 static void usbdev_test_task(void *arg)
 {
     (void)arg;
-    static uint8_t mouse_desc[T5_HID_DESC_MAX];
+    EXT_RAM_BSS_ATTR static uint8_t mouse_desc[T5_HID_DESC_MAX];
     int ml = t5_hid_descriptor(T5_HID_PART_MOUSE | T5_HID_PART_CONSUMER, mouse_desc, sizeof mouse_desc);
     t5_usbdev_cfg_t cfg = {
         .size = sizeof cfg,

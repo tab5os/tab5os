@@ -178,6 +178,7 @@ static void ripple_event(lv_event_t *e)
         break;
     case LV_EVENT_RELEASED:
     case LV_EVENT_PRESS_LOST:
+    case LV_EVENT_INDEV_RESET:   /* the press was cancelled (a system swipe): no PRESS_LOST follows */
         rp->pressed = false;
         if (rp->expanded) fade_out(rp);
         break;

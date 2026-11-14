@@ -49,6 +49,12 @@ bool t5_ui_on_ui_task(void);
  * order they were posted (with t5_ui_sync calls too). */
 typedef void (*t5_ui_fn_t)(void *arg);
 t5_err_t t5_ui_async(t5_ui_fn_t fn, void *arg);
+/* As t5_ui_async, but it runs even while rendering is paused (Screen off and
+ * Sleep), when t5_ui_async's calls wait for the screen to come back: for
+ * work that can't wait, such as closing an app that crashed or ran the
+ * device out of memory. It runs every call queued before it too (order is
+ * kept), with no LVGL timers or rendering around them. */
+t5_err_t t5_ui_async_paused(t5_ui_fn_t fn, void *arg);
 /* Run fn(arg) on the UI task and wait for it (up to timeout_ms). */
 t5_err_t t5_ui_sync(t5_ui_fn_t fn, void *arg, uint32_t timeout_ms);
 /* As t5_ui_sync, but it also runs while rendering is paused (Screen off and

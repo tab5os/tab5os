@@ -12,6 +12,11 @@
 #include "t5_i2c/t5_i2c_test.h"
 #include "t5_pins/pins.h"
 #include "t5_pins/table.h"
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+#else
+#define EXT_RAM_BSS_ATTR
+#endif
 
 static const char *TAG = "t5.i2c";
 
@@ -29,7 +34,7 @@ struct t5_i2c_dev {
     uint32_t last_attempt_ms;
 };
 
-static struct t5_i2c_dev s_devs[T5_I2C_MAX_DEVICES];
+EXT_RAM_BSS_ATTR static struct t5_i2c_dev s_devs[T5_I2C_MAX_DEVICES];
 static t5_mutex_t s_bus;
 /* Fair hand-off. The FreeRTOS mutex isn't fair across cores: the releasing
  * task can re-take it before a waiter on the other core runs, so under full
@@ -47,7 +52,7 @@ static t5_i2c_bus_stats_t s_stats;
 static struct { t5_i2c_recover_cb_t cb; void *arg; } s_recover_cbs[MAX_RECOVER_CBS];
 
 static bool s_trace_on;
-static t5_i2c_trace_t s_trace[T5_I2C_TRACE_LEN];
+EXT_RAM_BSS_ATTR static t5_i2c_trace_t s_trace[T5_I2C_TRACE_LEN];
 static uint32_t s_trace_head;   /* total entries ever written */
 
 bool t5_i2c_addr_reserved(uint8_t addr)

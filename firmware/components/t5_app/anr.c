@@ -148,7 +148,20 @@ static void isolation_checks(void)
             apps_hw_reserve_release();
             break;
         case T5_ISO_L2_RETAKE:
-            apps_hw_reserve_take();
+            /* Plenty free, but maybe not in one piece: while the reserve
+             * was out, other blocks can land in its hole. Then it stays
+             * released (the next check tries again) rather than counted as
+             * held, so a later low doesn't "release" nothing. */
+            if (!apps_hw_reserve_take()) {
+                l2.released = true;
+                static uint32_t last_log;
+                if (!last_log || now - last_log >= 60000) {
+                    last_log = now;
+                    T5_LOGW(TAG, "can't take the internal RAM reserve back: %u free, largest block %u",
+                            (unsigned)apps_hw_free_l2(),
+                            (unsigned)apps_hw_largest_l2());
+                }
+            }
             break;
         case T5_ISO_L2_CLOSE_APP:
             apps_close_for_memory();

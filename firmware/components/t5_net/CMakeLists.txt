@@ -11,7 +11,9 @@ idf_component_register(
 
 # esp_hosted host vs the factory C6 firmware: keep SDIO RX staging dynamic
 # when the C6 advertises no capacity (hosted_compat.c).
-# Wi-Fi packet buffers from PSRAM instead of internal RAM (hosted_compat.c).
+# Wi-Fi packet buffers and received frames from PSRAM instead of internal RAM
+# (hosted_compat.c).
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=eh_host_bus_sdio_set_rx_staging_target"
                       "-u __wrap_eh_host_bus_sdio_set_rx_staging_target"
-                      "-Wl,--wrap=eh_host_port_dma_alloc" "-u __wrap_eh_host_port_dma_alloc")
+                      "-Wl,--wrap=eh_host_port_dma_alloc" "-u __wrap_eh_host_port_dma_alloc"
+                      "-Wl,--wrap=esp_wifi_remote_channel_rx" "-u __wrap_esp_wifi_remote_channel_rx")
