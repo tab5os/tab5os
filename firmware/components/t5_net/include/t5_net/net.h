@@ -74,7 +74,8 @@ t5_err_t t5_net_enable(bool on);
 
 t5_err_t t5_net_scan(void);                       /* -> T5_EV_NET_SCAN_DONE */
 int t5_net_scan_results(t5_net_ap_t *out, int max);
-/* pass may be NULL or "" for open networks. save: remember on success. */
+/* pass: NULL uses the saved password (a saved secured network is never joined
+ * open); "" joins an open network. save: remember on success. */
 t5_err_t t5_net_connect(const char *ssid, const char *pass, bool save);
 t5_err_t t5_net_disconnect(void);                 /* and stop auto-connect until the next connect */
 t5_err_t t5_net_forget(const char *ssid);

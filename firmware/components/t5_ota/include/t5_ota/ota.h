@@ -11,12 +11,14 @@
  *     signed only as t5_ota_source_t allows,
  *   - that it is a Tab5 OS image for this chip's revision (the image
  *     header's min/max chip revision),
- * and only then makes the new slot the boot slot.
+ * and only then makes the new slot the boot slot. If any check fails after
+ * the slot was written, its first sector is erased so nothing can boot it.
  *
  * The update slot: running from an A/B slot, the other one. Running from
  * the recovery image, the slot the device is failing to boot (the current
  * boot slot), so the other one, which may hold the last OS that worked,
- * stays as it is.
+ * stays as it is. Because that slot boots next, a file install from
+ * recovery checks the whole file before writing it.
  *
  * The new image boots "on trial" (ESP-IDF app rollback). t5_ota_boot_ok()
  * marks it valid once the services are up, the shell has drawn, and it has
@@ -70,7 +72,7 @@ typedef struct {
     uint32_t done, total;       /* bytes */
     char version[16];           /* the incoming image's */
     char error[96];
-    bool signed_ok;             /* signed by a built-in key */
+    bool signed_ok;             /* installed, and a built-in key's signature verified */
     char signer[17];            /* the key's id, first 16 hex digits */
 } t5_ota_status_t;
 
@@ -96,14 +98,20 @@ typedef int (*t5_ota_read_fn)(void *ctx, void *buf, size_t n);
 T5_MUST_CHECK t5_err_t t5_ota_install_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t from, bool consent,
                                              t5_ota_hdr_t *hdr, char *err, size_t errlen);
 
-/* Install a .t5os from a file (/sd/...). URLs: t5_ota_net/ota_url.h. */
+/* Install a .t5os from a file (/sd/...). From recovery, the whole file is
+ * checked (t5_ota_verify_file) before anything is written. URLs:
+ * t5_ota_net/ota_url.h. */
 T5_MUST_CHECK t5_err_t t5_ota_install_file(const char *path, t5_ota_source_t from, bool consent, char *err,
                                            size_t errlen);
-/* Read a .t5os file's header and apply the source's rule, installing
- * nothing: T5_OK when the header is one the install would take. trusted:
- * a built-in key signed it (the signature itself is checked on install). */
-T5_MUST_CHECK t5_err_t t5_ota_peek(const char *path, t5_ota_source_t from, bool consent, t5_ota_hdr_t *hdr,
-                                   bool *trusted, char *err, size_t errlen);
+/* Every check the install makes, reading the whole file and writing
+ * nothing: the header and the source's rule, the image's head (chip,
+ * project, version), its length, its SHA-256, and the signature when the
+ * header names a built-in key. T5_OK when the install would take it.
+ * hdr gets the header once read. verified: a built-in key's signature
+ * checked out (false for an image the source takes unsigned). Takes a
+ * few seconds for a whole OS image. */
+T5_MUST_CHECK t5_err_t t5_ota_verify_file(const char *path, t5_ota_source_t from, bool consent, t5_ota_hdr_t *hdr,
+                                          bool *verified, char *err, size_t errlen);
 void t5_ota_status(t5_ota_status_t *out);
 /* .t5os files in the SD card's top folder and /update, newest first (by
  * modification time). Returns the count. */

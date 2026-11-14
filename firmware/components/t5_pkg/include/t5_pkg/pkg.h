@@ -3,12 +3,20 @@
  *
  * Layout, per root (T5_APPS_SD_DIR or T5_APPS_DATA_DIR, t5_storage/paths.h):
  *   <root>/<id>/            installed app (zip contents, incl. manifest.toml)
- *   <root>/<id>/.install    install record ("t5pkg 1"): size, install time
+ *   <root>/<id>/.install    install record ("t5pkg 1"): size, install time, and
+ *                           a MAC with this Tab5's key (t5_secret_mac)
  *   <root>/<id>~new/        staging during install
  *   <root>/<id>~old/        previous version during the swap
  *   <root>/<id>~del/        being removed
- * App data: <appdata>/<id>/ (T5_APPDATA_DIR; never touched by install or upgrade), with
- * permission grants in <appdata>/<id>/.grants.
+ * App data: <appdata>/<id>/ (T5_APPDATA_DIR; never touched by install or upgrade).
+ * Permission grants: <sys>/grants/<id> (t5_sys_path, T5_GRANTS_DIR_NAME),
+ * outside anything an app can write; removed with the app, data kept or not.
+ * A .grants left in the data dir by older firmware is deleted, never read.
+ *
+ * The SD card is removable and writable from a PC, so an SD install counts
+ * only if its record's MAC verifies: a card prepared elsewhere, or moved
+ * from another Tab5, shows no apps (reinstall from the .t5app). An internal
+ * install always wins over an SD copy of the same id.
  *
  * The staging suffixes use '~' rather than '.' because '.' is legal in an
  * id: "com.foo.new" is a valid app, so "<id>.new" would be ambiguous.
@@ -44,7 +52,7 @@ typedef struct {
     char entry_path[T5_PKG_PATH_MAX]; /* absolute path of the entry file */
     uint64_t size;                    /* installed bytes */
     int64_t install_time;             /* time() at install */
-    bool shadowed;                    /* also installed on the other root; this one (SD) wins */
+    bool shadowed;                    /* also installed on the SD card; this one (internal) wins */
 } t5_pkg_info_t;
 
 /* Validate a .t5app without installing: manifest.toml at the root, valid,
@@ -60,9 +68,9 @@ T5_MUST_CHECK t5_err_t t5_pkg_install(const char *path, t5_pkg_dest_t dest, t5_p
  * still removed when keep_data is false). */
 T5_MUST_CHECK t5_err_t t5_pkg_remove(const char *id, bool keep_data);
 
-/* SD first, then DATA. */
+/* DATA first, then SD. */
 T5_MUST_CHECK t5_err_t t5_pkg_find(const char *id, t5_pkg_info_t *out);
-/* Fill up to max entries (SD first); returns how many were stored. */
+/* Fill up to max entries (DATA first); returns how many were stored. */
 int t5_pkg_list(t5_pkg_info_t *out, int max);
 
 /* Goes up on every install, upgrade and removal. Anything cached from an
@@ -74,12 +82,23 @@ uint32_t t5_pkg_generation(void);
  * Returns the number of directories repaired or deleted. */
 int t5_pkg_recover(void);
 
+/* Once per device (a marker in the system dir): give the SD apps installed
+ * by firmware older than the MAC a valid record. Call at boot after
+ * t5_pkg_recover. Returns how many it bound. */
+int t5_pkg_bind_sd_once(void);
+
 /* <appdata>/<id>: an app's data dir, built-in or installed (may not exist yet). */
 T5_MUST_CHECK t5_err_t t5_pkg_data_dir(const char *id, char *out, size_t n);
 
 /* Permission grants. Missing file: T5_ERR_NOT_FOUND with both outputs 0. */
 T5_MUST_CHECK t5_err_t t5_pkg_grants_load(const char *id, uint32_t *granted, uint32_t *denied);
 T5_MUST_CHECK t5_err_t t5_pkg_grants_save(const char *id, uint32_t granted, uint32_t denied);
+
+/* Whether the person has opened the app in the foreground at least once
+ * (kept in the grants file). Headless runs (standby refreshes, alarms,
+ * session restore) need it, so an app nobody chose to open never runs. */
+bool t5_pkg_launched(const char *id);
+T5_MUST_CHECK t5_err_t t5_pkg_set_launched(const char *id);
 
 #ifdef __cplusplus
 }

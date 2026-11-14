@@ -37,6 +37,7 @@
  * close.
  */
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1338,8 +1339,11 @@ t5_err_t t5_jpeg_dims(const uint8_t *jpeg, size_t len, uint16_t *w, uint16_t *h)
 
 void *t5_jpeg_alloc(size_t bytes)
 {
-    size_t n = (bytes + 127) & ~(size_t)127;
-    return heap_caps_aligned_calloc(128, 1, n ? n : 128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    /* A size that would wrap when rounded up gets nothing, not a small
+     * buffer the caller thinks is huge. 0 still gets the smallest one. */
+    if (bytes > SIZE_MAX - 127) return NULL;
+    size_t n = bytes ? (bytes + 127) & ~(size_t)127 : 128;
+    return heap_caps_aligned_calloc(128, 1, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
 static t5_err_t jpeg_decode_req(const uint8_t *jpeg, size_t len, uint16_t *out, size_t out_bytes, uint16_t *w,

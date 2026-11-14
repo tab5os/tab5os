@@ -19,6 +19,7 @@
 #include "t5_pkg/pkg.h"
 #include "t5_pkg/zip.h"
 #include "t5_storage/paths.h"
+#include "t5_storage/secret.h"
 #include "pkg_test.h"
 
 static const char *TAG = "t5.pkg";
@@ -28,7 +29,7 @@ static const char *TAG = "t5.pkg";
 #define MANIFEST_MAX (64 * 1024)
 #define MANIFEST_NAME "manifest.toml"
 #define INSTALL_NAME ".install"
-#define GRANTS_NAME ".grants"
+#define LEGACY_GRANTS_NAME ".grants"   /* in the app's data dir: see drop_legacy_grants */
 
 static char s_sd[ROOT_MAX] = T5_APPS_SD_DIR;
 static char s_data[ROOT_MAX] = T5_APPS_DATA_DIR;
@@ -294,9 +295,12 @@ t5_err_t t5_pkg_inspect(const char *path, t5_manifest_t *out, char *err, size_t 
 
 /* --- registry -------------------------------------------------------------- */
 
+#define MAC_HEX (2 * T5_SECRET_MAC_LEN)
+
 typedef struct {
     uint64_t size;
     int64_t time;
+    char mac[MAC_HEX + 1];   /* "" if the record has none */
 } install_rec_t;
 
 static bool read_install_rec(const char *dir, install_rec_t *r)
@@ -317,10 +321,65 @@ static bool read_install_rec(const char *dir, install_rec_t *r)
         } else if (sscanf(line, "time=%lld", &t) == 1) {
             r->time = t;
             got_time = true;
+        } else if (!strncmp(line, "mac=", 4) && strlen(line + 4) == MAC_HEX) {
+            memcpy(r->mac, line + 4, MAC_HEX + 1);
         }
     }
     free(text);
     return ok && got_size && got_time;
+}
+
+/* The record's MAC, over its fields and the app id with this Tab5's key
+ * (t5_secret_mac). The SD card is removable and anyone can write it, so an
+ * SD install counts only if this device wrote its record. */
+static bool rec_mac(const char *id, uint64_t size, int64_t t, char hex[MAC_HEX + 1])
+{
+    char msg[192];
+    int n = snprintf(msg, sizeof msg, "t5pkg 1\nid=%s\nsize=%" PRIu64 "\ntime=%lld\n", id, size, (long long)t);
+    uint8_t mac[T5_SECRET_MAC_LEN];
+    if (n < 0 || (size_t)n >= sizeof msg || t5_secret_mac(msg, (size_t)n, mac) != T5_OK) return false;
+    for (int i = 0; i < T5_SECRET_MAC_LEN; i++) snprintf(hex + 2 * i, 3, "%02x", mac[i]);
+    return true;
+}
+
+static bool rec_bound(const char *id, const install_rec_t *r)
+{
+    char want[MAC_HEX + 1];
+    if (!r->mac[0] || !rec_mac(id, r->size, r->time, want)) return false;
+    unsigned diff = 0;   /* no early exit: the record is attacker-written */
+    for (int i = 0; i < MAC_HEX; i++) diff |= (unsigned)(want[i] ^ r->mac[i]);
+    return diff == 0;
+}
+
+/* The install record's text, with its MAC. need_mac: fail without one (an
+ * SD install isn't valid without it); internal installs don't depend on
+ * it, as nothing but the OS writes /data/apps. Returns the length or -1. */
+static int rec_text(char *buf, size_t cap, const char *id, uint64_t size, int64_t t, bool need_mac)
+{
+    char hex[MAC_HEX + 1] = "";
+    if (!rec_mac(id, size, t, hex) && need_mac) return -1;
+    int n = snprintf(buf, cap, "t5pkg 1\nsize=%" PRIu64 "\ntime=%lld\n%s%s%s", size, (long long)t,
+                     hex[0] ? "mac=" : "", hex, hex[0] ? "\n" : "");
+    return n >= 0 && (size_t)n < cap ? n : -1;
+}
+
+/* Ids already warned about this boot: a card of unbound apps would
+ * otherwise log on every launcher refresh. Full table: log each time. */
+static uint32_t s_warned[8];
+
+static void warn_unbound(const char *dir, const char *id)
+{
+    uint32_t h = 2166136261u;
+    for (const char *p = id; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
+    h |= 1;   /* 0 marks a free slot */
+    for (size_t i = 0; i < sizeof s_warned / sizeof s_warned[0]; i++) {
+        if (s_warned[i] == h) return;
+        if (!s_warned[i]) {
+            s_warned[i] = h;
+            break;
+        }
+    }
+    T5_LOGW(TAG, "%s: not installed on this Tab5 (no valid install record); ignored", dir);
 }
 
 static t5_err_t load_info(t5_pkg_dest_t root, const char *id, t5_pkg_info_t *out)
@@ -335,6 +394,10 @@ static t5_err_t load_info(t5_pkg_dest_t root, const char *id, t5_pkg_info_t *out
     install_rec_t rec = {0};
     if (!read_install_rec(out->dir, &rec)) {
         T5_LOGW(TAG, "%s: no install record", out->dir);
+        return T5_ERR_NOT_FOUND;
+    }
+    if (root == T5_PKG_DEST_SD && !rec_bound(id, &rec)) {
+        warn_unbound(out->dir, id);
         return T5_ERR_NOT_FOUND;
     }
     char p[PATH_BUF];
@@ -364,36 +427,40 @@ static t5_err_t load_info(t5_pkg_dest_t root, const char *id, t5_pkg_info_t *out
 t5_err_t t5_pkg_find(const char *id, t5_pkg_info_t *out)
 {
     if (!t5_manifest_id_ok(id) || !out) return T5_ERR_INVALID_ARG;
-    t5_err_t e = load_info(T5_PKG_DEST_SD, id, out);
+    /* Internal first: a copy on the card must never stand in for an
+     * internal install, whose grants and data it would take over. */
+    t5_err_t e = load_info(T5_PKG_DEST_DATA, id, out);
     if (e == T5_OK) {
         t5_pkg_info_t other;
-        out->shadowed = load_info(T5_PKG_DEST_DATA, id, &other) == T5_OK;
+        out->shadowed = load_info(T5_PKG_DEST_SD, id, &other) == T5_OK;
         return T5_OK;
     }
-    return load_info(T5_PKG_DEST_DATA, id, out);
+    return load_info(T5_PKG_DEST_SD, id, out);
 }
 
 int t5_pkg_list(t5_pkg_info_t *out, int max)
 {
     if (!out || max <= 0) return 0;
     int n = 0;
-    const t5_pkg_dest_t roots[2] = {T5_PKG_DEST_SD, T5_PKG_DEST_DATA};
+    const t5_pkg_dest_t roots[2] = {T5_PKG_DEST_DATA, T5_PKG_DEST_SD};   /* internal wins, as in t5_pkg_find */
     for (int r = 0; r < 2 && n < max; r++) {
         DIR *d = opendir(root_path(roots[r]));
         if (!d) continue;
         struct dirent *de;
         while (n < max && (de = readdir(d)) != NULL) {
             if (!t5_manifest_id_ok(de->d_name)) continue;   /* also skips ~new/~old/~del */
+            /* Loaded into the next free slot, which a duplicate leaves free:
+             * only a valid SD copy counts as shadowed. */
+            if (load_info(roots[r], de->d_name, &out[n]) != T5_OK) continue;
             bool dup = false;
             for (int i = 0; i < n; i++) {
                 if (out[i].root != roots[r] && strcmp(out[i].manifest.id, de->d_name) == 0) {
                     out[i].shadowed = true;
                     dup = true;
-                    T5_LOGW(TAG, "%s installed on both SD and internal storage; using SD", de->d_name);
+                    T5_LOGW(TAG, "%s installed on both SD and internal storage; using internal", de->d_name);
                 }
             }
-            if (dup) continue;
-            if (load_info(roots[r], de->d_name, &out[n]) == T5_OK) n++;
+            if (!dup) n++;
         }
         closedir(d);
     }
@@ -472,6 +539,65 @@ static int recover_root(const char *root)
 int t5_pkg_recover(void)
 {
     return recover_root(s_sd) + recover_root(s_data);
+}
+
+/* --- SD binding migration -------------------------------------------------- */
+
+#define SDBIND_MARKER "sdapps.bound"
+
+/* Give an unbound SD record its MAC. True if it was rewritten. */
+static bool adopt_sd(const char *id)
+{
+    char dir[PATH_BUF], p[PATH_BUF];
+    if (!fmt_path(dir, sizeof dir, "%s/%s", s_sd, id) || !fmt_path(p, sizeof p, "%s/" INSTALL_NAME, dir)) {
+        return false;
+    }
+    install_rec_t rec = {0};
+    if (!read_install_rec(dir, &rec) || rec_bound(id, &rec)) return false;
+    char text[256];
+    int n = rec_text(text, sizeof text, id, rec.size, rec.time, true);
+    return n > 0 && write_atomic(p, text, (size_t)n) == T5_OK;
+}
+
+int t5_pkg_bind_sd_once(void)
+{
+    char marker[PATH_BUF];
+    if (t5_sys_path(marker, sizeof marker, SDBIND_MARKER) != T5_OK || is_file(marker)) return 0;
+    /* Records before this firmware had no MAC, so the SD apps present now
+     * are adopted once, then never again. This trusts whatever card is in
+     * the Tab5 at that first boot: a card planted before the upgrade gets
+     * its apps adopted too. */
+    int n = 0;
+    DIR *d = opendir(s_sd);
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (t5_manifest_id_ok(de->d_name) && adopt_sd(de->d_name)) n++;
+        }
+        closedir(d);
+    }
+    if (write_file_sync(marker, "1\n", 2) != T5_OK) T5_LOGE(TAG, "cannot write %s", marker);
+    if (n) T5_LOGI(TAG, "bound %d SD app(s) to this Tab5", n);
+    return n;
+}
+
+/* --- grants storage -------------------------------------------------------- */
+
+/* <sys>/grants/<id> (dir gets <sys>/grants): outside every folder an app can
+ * write, as the system dir is protected (fspolicy.c). Both PATH_BUF. */
+static bool grants_path(const char *id, char *dir, char *p)
+{
+    return t5_sys_path(dir, PATH_BUF, T5_GRANTS_DIR_NAME) == T5_OK && fmt_path(p, PATH_BUF, "%s/%s", dir, id);
+}
+
+/* Grants used to live in <appdata>/<id>/.grants, which the app itself can
+ * write. Never trusted, never copied: removed, so the person is asked again. */
+static void drop_legacy_grants(const char *id)
+{
+    char p[PATH_BUF];
+    if (fmt_path(p, sizeof p, "%s/%s/" LEGACY_GRANTS_NAME, s_appdata, id) && unlink(p) == 0) {
+        T5_LOGW(TAG, "%s: removed grants from its data folder; it will ask again", id);
+    }
 }
 
 /* --- install / remove ------------------------------------------------------ */
@@ -612,9 +738,9 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
         goto done;
     }
     char record[256];
-    int rn = snprintf(record, sizeof record, "t5pkg 1\nsize=%" PRIu64 "\ntime=%lld\n", total, (long long)time(NULL));
+    int rn = rec_text(record, sizeof record, id, total, (int64_t)time(NULL), dest == T5_PKG_DEST_SD);
     /* Written last: its presence marks the staged copy as complete. */
-    e = write_file_sync(rec, record, (size_t)rn);
+    e = rn > 0 ? write_file_sync(rec, record, (size_t)rn) : T5_ERR_FAIL;
     if (e != T5_OK) {
         seterr(err, errlen, "cannot write install record");
         rm_rf(stage);
@@ -643,6 +769,7 @@ t5_err_t t5_pkg_install_ex(const char *path, t5_pkg_dest_t dest, uint32_t flags,
     if (fmt_path(pb->data, sizeof pb->data, "%s/%s", s_appdata, id) && !mkdir_p(pb->data)) {
         T5_LOGW(TAG, "%s: cannot create data dir %s", id, pb->data);
     }
+    drop_legacy_grants(id);
     T5_LOGI(TAG, "installed %s %s on %s (%" PRIu64 " bytes)%s", id, m.version, root_str(dest), total,
             have_old ? ", upgrade" : "");
     if (out) {
@@ -670,6 +797,13 @@ t5_err_t t5_pkg_remove(const char *id, bool keep_data)
         char data[PATH_BUF];
         if (fmt_path(data, sizeof data, "%s/%s", s_appdata, id)) rm_rf(data);
     }
+    /* Grants go even when the data stays: whoever installs this id next
+     * (perhaps another author) starts with none. */
+    drop_legacy_grants(id);
+    char dir[PATH_BUF], p[PATH_BUF];
+    if (grants_path(id, dir, p) && unlink(p) != 0 && errno != ENOENT) {
+        T5_LOGW(TAG, "%s: cannot remove its grants", id);
+    }
     if (found) T5_LOGI(TAG, "removed %s%s", id, keep_data ? " (data kept)" : "");
     atomic_fetch_add(&s_generation, 1);
     return found ? T5_OK : T5_ERR_NOT_FOUND;
@@ -677,38 +811,80 @@ t5_err_t t5_pkg_remove(const char *id, bool keep_data)
 
 /* --- grants ---------------------------------------------------------------- */
 
+typedef struct {
+    uint32_t granted, denied;
+    bool launched;
+} grants_t;
+
+/* Zeroes g first, so a failure reads as "nothing granted, never opened". */
+static t5_err_t grants_read(const char *id, grants_t *g)
+{
+    memset(g, 0, sizeof *g);
+    drop_legacy_grants(id);
+    char dir[PATH_BUF], p[PATH_BUF];
+    if (!grants_path(id, dir, p)) return T5_ERR_INVALID_ARG;
+    char *text = read_text(p, 256, NULL);
+    if (!text) return T5_ERR_NOT_FOUND;
+    unsigned gr, de;
+    int n = sscanf(text, "t5grants 1\ngranted=%x\ndenied=%x", &gr, &de);
+    /* launched= came later; a file without it reads as never opened. */
+    bool launched = strstr(text, "\nlaunched=1") != NULL;
+    free(text);
+    if (n != 2) return T5_ERR_FAIL;
+    g->granted = gr & (T5_PERM_ALL | T5_CORE_CAPS);
+    g->denied = de & (T5_PERM_ALL | T5_CORE_CAPS) & ~g->granted;
+    g->launched = launched;
+    return T5_OK;
+}
+
+static t5_err_t grants_write(const char *id, const grants_t *g)
+{
+    char dir[PATH_BUF], p[PATH_BUF];
+    if (!grants_path(id, dir, p)) return T5_ERR_INVALID_ARG;
+    if (!mkdir_p(dir)) return T5_ERR_IO;
+    uint32_t granted = g->granted & (T5_PERM_ALL | T5_CORE_CAPS);
+    uint32_t denied = g->denied & (T5_PERM_ALL | T5_CORE_CAPS) & ~granted;
+    char text[80];
+    int n = snprintf(text, sizeof text, "t5grants 1\ngranted=%x\ndenied=%x\n%s", (unsigned)granted, (unsigned)denied,
+                     g->launched ? "launched=1\n" : "");
+    return write_atomic(p, text, (size_t)n);
+}
+
 t5_err_t t5_pkg_grants_load(const char *id, uint32_t *granted, uint32_t *denied)
 {
     if (granted) *granted = 0;
     if (denied) *denied = 0;
     if (!t5_manifest_id_ok(id) || !granted || !denied) return T5_ERR_INVALID_ARG;
-    char p[PATH_BUF];
-    if (!fmt_path(p, sizeof p, "%s/%s/" GRANTS_NAME, s_appdata, id)) return T5_ERR_INVALID_ARG;
-    char *text = read_text(p, 256, NULL);
-    if (!text) return T5_ERR_NOT_FOUND;
-    unsigned g, d;
-    int n = sscanf(text, "t5grants 1\ngranted=%x\ndenied=%x", &g, &d);
-    free(text);
-    if (n != 2) return T5_ERR_FAIL;
-    *granted = g & (T5_PERM_ALL | T5_CORE_CAPS);
-    *denied = d & (T5_PERM_ALL | T5_CORE_CAPS) & ~*granted;
+    grants_t g;
+    T5_RETURN_ON_ERR(grants_read(id, &g));
+    *granted = g.granted;
+    *denied = g.denied;
     return T5_OK;
 }
 
 t5_err_t t5_pkg_grants_save(const char *id, uint32_t granted, uint32_t denied)
 {
     if (!t5_manifest_id_ok(id)) return T5_ERR_INVALID_ARG;
-    char dir[PATH_BUF], p[PATH_BUF];
-    if (!fmt_path(dir, sizeof dir, "%s/%s", s_appdata, id) ||
-        !fmt_path(p, sizeof p, "%s/" GRANTS_NAME, dir)) {
-        return T5_ERR_INVALID_ARG;
-    }
-    if (!mkdir_p(dir)) return T5_ERR_IO;
-    granted &= T5_PERM_ALL | T5_CORE_CAPS;
-    denied &= (T5_PERM_ALL | T5_CORE_CAPS) & ~granted;
-    char text[64];
-    int n = snprintf(text, sizeof text, "t5grants 1\ngranted=%x\ndenied=%x\n", (unsigned)granted, (unsigned)denied);
-    return write_atomic(p, text, (size_t)n);
+    grants_t g;
+    T5_IGNORE(grants_read(id, &g));   /* only to keep launched; unreadable reads as not launched */
+    g.granted = granted;
+    g.denied = denied;
+    return grants_write(id, &g);
+}
+
+bool t5_pkg_launched(const char *id)
+{
+    grants_t g;
+    return t5_manifest_id_ok(id) && grants_read(id, &g) == T5_OK && g.launched;
+}
+
+t5_err_t t5_pkg_set_launched(const char *id)
+{
+    if (!t5_manifest_id_ok(id)) return T5_ERR_INVALID_ARG;
+    grants_t g;
+    if (grants_read(id, &g) == T5_OK && g.launched) return T5_OK;   /* no write on every launch */
+    g.launched = true;
+    return grants_write(id, &g);
 }
 
 t5_err_t t5_pkg_data_dir(const char *id, char *out, size_t n)

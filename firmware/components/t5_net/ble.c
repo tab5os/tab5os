@@ -427,11 +427,25 @@ static bool sec_event(struct ble_gap_event *e, int *rc)
         }
         return true;
     }
-    case BLE_GAP_EVENT_REPEAT_PAIRING:
-        /* The other device forgot us and pairs again: drop the old bond. */
-        if (ble_gap_conn_find(e->repeat_pairing.conn_handle, &d) == 0) ble_store_util_delete_peer(&d.peer_id_addr);
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        /* The other device forgot us and pairs again: drop the old bond.
+         * Unless that would trade a bond made with a confirmed code for a
+         * weaker one: anyone can claim a bonded host's address, and Just
+         * Works would then replace its keys without asking the person. */
+        const struct ble_gap_repeat_pairing *p = &e->repeat_pairing;
+        bool weaker = (p->cur_authenticated && !p->new_authenticated) || (p->cur_sc && !p->new_sc) ||
+                      p->new_key_size < p->cur_key_size;
+        if (weaker) {
+            T5_LOGW(TAG, "pairing refused: weaker than the bond it would replace (authenticated %u->%u, sc %u->%u)",
+                    (unsigned)p->cur_authenticated, (unsigned)p->new_authenticated, (unsigned)p->cur_sc,
+                    (unsigned)p->new_sc);
+            *rc = BLE_GAP_REPEAT_PAIRING_IGNORE;
+            return true;
+        }
+        if (ble_gap_conn_find(p->conn_handle, &d) == 0) ble_store_util_delete_peer(&d.peer_id_addr);
         *rc = BLE_GAP_REPEAT_PAIRING_RETRY;
         return true;
+    }
     case BLE_GAP_EVENT_ENC_CHANGE: {
         t5_ev_ble_pair_t ev = { .conn = e->enc_change.conn_handle,
                                 .err = e->enc_change.status ? T5_ERR_DENIED : T5_OK };
@@ -1483,7 +1497,10 @@ static void stack_start(void)
     ble_svc_gap_device_name_set(DEVICE_NAME);
     /* Pairing: LE Secure Connections with numeric comparison (the Tab5
      * shows a code, the person confirms it matches), bonds kept in NVS;
-     * when the store is full the oldest bond goes. */
+     * when the store is full the oldest bond goes. sm_mitm only asks for
+     * a code: a peer with no display or keyboard still gets Just Works
+     * (unauthenticated) and no prompt. HID refuses such links
+     * (ble_hid.c); apps' GATT services decide for themselves. */
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_DISP_YES_NO;
     ble_hs_cfg.sm_bonding = 1;
     ble_hs_cfg.sm_mitm = 1;

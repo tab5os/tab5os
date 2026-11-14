@@ -694,6 +694,9 @@ static t5_err_t launch_fg(const char *id, const char *arg)
             return e;
         }
     }
+    /* Opened in the foreground: from now on it may run headless (run_alarm).
+     * A session restore isn't the person's choice, so it doesn't count. */
+    if (!a->builtin && !restoring) T5_LOG_ON_ERR(TAG, t5_pkg_set_launched(a->id));
     apps_lock();
     s_fg = a;
     apps_unlock();
@@ -1148,6 +1151,12 @@ t5_err_t t5_apps_run_alarm(const char *id)
 static t5_err_t run_alarm(const char *id)
 {
     if (!t5_crash_autolaunch_allowed(&s_db, id)) return T5_ERR_DENIED;
+    /* No headless run for an app the person never opened: installing (or a
+     * card turning up) isn't a choice to run its code unattended. */
+    if (!find_builtin(id) && !t5_pkg_launched(id)) {
+        T5_LOGW(TAG, "%s: not run in the background before it has been opened", id);
+        return T5_ERR_DENIED;
+    }
     t5_app_t *a;
     T5_RETURN_ON_ERR(make_app(id, &a));
     if (!a->man.background) {
@@ -1159,9 +1168,11 @@ static t5_err_t run_alarm(const char *id)
     apps_hw_guard_set(a->id, true);
     if (!a->builtin && a->man.runtime == T5_RUNTIME_NATIVE) {
         t5_err_t e = apps_hw_elf_load(a, a->entry_path, &a->elf, &a->desc);
-        if (e != T5_OK || !a->desc) {
+        /* The same API range check as a foreground launch (launch_fg). */
+        if (e == T5_OK && (!a->desc || a->desc->api < 1 || a->desc->api > T5_API_LEVEL)) e = T5_ERR_NOT_SUPPORTED;
+        if (e != T5_OK) {
             destroy(a, false);
-            return e != T5_OK ? e : T5_ERR_NOT_SUPPORTED;
+            return e;
         }
     }
     xSemaphoreTake(s_alarm_end, 0);   /* one left over from an earlier run */
@@ -1242,6 +1253,13 @@ static void boot_actions(void)
     }
     if (!t5_crash_autolaunch_allowed(&s_db, last)) {
         T5_LOGW(TAG, "not restoring %s: it crashed %d times in a row", last, T5_CRASH_BLOCK_AFTER);
+        return;
+    }
+    if (!find_builtin(last) && !t5_pkg_launched(last)) {
+        /* A restore runs it with no tap, so it needs the same first open
+         * as a headless run (run_alarm). */
+        T5_LOGW(TAG, "not restoring %s: it has not been opened since it was installed", last);
+        app_session_set(NULL);
         return;
     }
     T5_LOGI(TAG, "restoring %s", last);
@@ -1814,6 +1832,7 @@ t5_err_t t5_apps_init(void)
     s_alarm_end = xSemaphoreCreateBinary();
     if (!s_lock || !s_alarm_end) return T5_ERR_NO_MEM;
     t5_pkg_recover();
+    t5_pkg_bind_sd_once();   /* after recover: a finished install's record counts */
     crash_check();
     t5_res_set_hooks(&s_hooks);
     t5_core_set_task_hook(task_created);

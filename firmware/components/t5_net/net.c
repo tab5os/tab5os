@@ -71,7 +71,8 @@ typedef enum {
 typedef struct {
     msg_type_t type;
     bool flag;                   /* save / force / keep */
-    int32_t arg;                 /* disconnect reason, antenna */
+    int32_t arg;                 /* disconnect reason, antenna, channel; connect: 1 = pass given */
+    uint8_t auth;                /* EV_CONNECTED: the AP's wifi_auth_mode_t */
     char ssid[T5_NET_SSID_LEN];
     char pass[T5_NET_PASS_LEN];
     uint8_t ip[16];
@@ -98,6 +99,8 @@ static bool s_ps;                    /* in modem power save for Sleep */
 static char s_target[T5_NET_SSID_LEN];
 static char s_pending_pass[T5_NET_PASS_LEN];
 static bool s_pending_save;
+static bool s_want_secure;           /* this join asked for WPA2 or better */
+static bool s_joined_open;           /* the AP we associated with has no password */
 static uint32_t s_t_power_on, s_t_connect;
 static uint32_t s_t_link_change;     /* last time we took the link up or down ourselves */
 static bool s_expect_leave;          /* our own esp_wifi_disconnect() is in flight */
@@ -246,6 +249,7 @@ static void on_idf_event(void *arg, esp_event_base_t base, int32_t id, void *dat
             const wifi_event_sta_connected_t *e = data;
             m.type = EV_CONNECTED;
             m.arg = e->channel;
+            m.auth = (uint8_t)e->authmode;
             memcpy(m.ssid, e->ssid, e->ssid_len < T5_NET_SSID_LEN ? e->ssid_len : T5_NET_SSID_LEN - 1);
             break;
         }
@@ -469,13 +473,16 @@ static void reset_c6(const char *why)
     start();
 }
 
+/* pass NULL: the saved password, so a saved secured network is never joined
+ * open. "" joins open (the caller chose an open network). */
 static void do_connect_hint(const char *ssid, const char *pass, uint8_t channel, const uint8_t *bssid)
 {
     if (!s_wifi_up) return;
+    pass = t5_netcfg_pass_for(&s_cfg, ssid, pass);
     wifi_config_t wc = {0};
     memcpy(wc.sta.ssid, ssid, strnlen(ssid, sizeof wc.sta.ssid));
-    if (pass) memcpy(wc.sta.password, pass, strnlen(pass, sizeof wc.sta.password));
-    wc.sta.threshold.authmode = (pass && pass[0]) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    memcpy(wc.sta.password, pass, strnlen(pass, sizeof wc.sta.password));
+    wc.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     wc.sta.pmf_cfg.capable = true;
     wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
     if (channel && bssid) {
@@ -495,6 +502,8 @@ static void do_connect_hint(const char *ssid, const char *pass, uint8_t channel,
         T5_LOGE(TAG, "connect to '%s' could not start", ssid);
         return;
     }
+    s_want_secure = pass[0] != 0;
+    s_joined_open = false;
     scpy(s_target, sizeof s_target, ssid, T5_NET_SSID_LEN);
     s_t_connect = t5_time_ms();
     s_got_ip = false;
@@ -515,6 +524,23 @@ static bool rejoin_last(void)
     s_pending_save = false;
     do_connect_hint(s_cfg.e[i].ssid, s_cfg.e[i].pass, s_last_channel, s_last_bssid);
     return true;
+}
+
+/* A link that was up dropped: rejoin it as the saved network it is, with its
+ * password and at least WPA2. Joining by name alone would take an open
+ * look-alike that knocked us off (an evil twin). A network that isn't saved
+ * isn't rejoined by name: rescan and pick a saved one. */
+static void reconnect(void)
+{
+    int i = t5_netcfg_find(&s_cfg, s_target);
+    if (i < 0) {
+        s_target[0] = 0;
+        start_scan(true);
+        return;
+    }
+    if (!strcmp(s_target, s_last_ssid) && rejoin_last()) return;
+    s_pending_save = false;
+    do_connect(s_cfg.e[i].ssid, s_cfg.e[i].pass);
 }
 
 static void auto_pick(void)
@@ -552,7 +578,7 @@ static void on_scan_done(void)
         a->rssi = rec[i].rssi;
         a->channel = rec[i].primary;
         a->auth = (uint8_t)rec[i].authmode;
-        a->saved = t5_netcfg_find(&s_cfg, a->ssid) >= 0;
+        a->saved = t5_netcfg_find_ap(&s_cfg, a) >= 0;
         s_nscan++;
     }
     t5_mutex_unlock(s_mtx);
@@ -578,12 +604,39 @@ static t5_err_t sntp_request(bool again)
     return e == ESP_OK ? T5_OK : T5_ERR_IO;
 }
 
+/* Defence in depth against an evil twin: we asked for WPA2 with a saved
+ * password, but the AP we got has none (the C6 should never allow this).
+ * Leave it without using the address or touching the saved entry. */
+static void leave_open_twin(void)
+{
+    T5_LOGE(TAG, "'%s' answered as an open network, not the saved secured one: leaving", s_st.ssid);
+    s_got_ip = false;
+    s_expect_leave = true;
+    esp_wifi_disconnect();
+    t5_netcfg_fail(&s_backoff, s_target, t5_time_ms());
+    s_pending_save = false;
+    memset(s_pending_pass, 0, sizeof s_pending_pass);
+    set_state(T5_NET_IDLE);
+    if (s_auto) s_next_scan = t5_time_ms() + 1000;
+}
+
+static bool no_password(wifi_auth_mode_t a)
+{
+    return a == WIFI_AUTH_OPEN || a == WIFI_AUTH_OWE;
+}
+
 static void on_got_ip(const msg_t *m)
 {
+    wifi_ap_record_t ap = {0};
+    /* The AP's auth mode: from the connected event, and from the C6 now. */
+    bool ap_ok = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+    bool open = s_joined_open || (ap_ok && no_password(ap.authmode));
+    if (open && s_want_secure) {
+        leave_open_twin();
+        return;
+    }
     s_got_ip = true;
     uint32_t ms = t5_time_ms() - s_t_connect;
-    wifi_ap_record_t ap = {0};
-    esp_wifi_sta_get_ap_info(&ap);
     esp_netif_dns_info_t dns = {0};
     if (s_netif) esp_netif_get_dns_info(s_netif, ESP_NETIF_DNS_MAIN, &dns);
     t5_mutex_lock(s_mtx);
@@ -598,13 +651,18 @@ static void on_got_ip(const msg_t *m)
     set_state(T5_NET_CONNECTED);
     T5_LOGI(TAG, "'%s' up: %u.%u.%u.%u in %u ms, rssi %d", s_st.ssid, m->ip[0], m->ip[1], m->ip[2], m->ip[3],
             (unsigned)ms, ap.rssi);
-    t5_netcfg_clear_fail(&s_backoff, s_st.ssid);
-    scpy(s_last_ssid, sizeof s_last_ssid, s_st.ssid, sizeof s_st.ssid);
-    memcpy(s_last_bssid, ap.bssid, 6);
-    s_last_channel = ap.primary;
+    /* An open network the user chose that has a saved secured one's name:
+     * it isn't that network, so it isn't saved, marked or rejoined as it. */
+    bool twin = open && t5_netcfg_secured(&s_cfg, s_st.ssid);
+    if (!twin) {
+        t5_netcfg_clear_fail(&s_backoff, s_st.ssid);
+        scpy(s_last_ssid, sizeof s_last_ssid, s_st.ssid, sizeof s_st.ssid);
+        memcpy(s_last_bssid, ap.bssid, 6);
+        s_last_channel = ap.primary;
+    }
     t5_mutex_lock(s_mtx);
-    if (s_pending_save) t5_netcfg_add(&s_cfg, s_st.ssid, s_pending_pass);
-    bool saved = t5_netcfg_find(&s_cfg, s_st.ssid) >= 0;
+    if (s_pending_save && !twin) t5_netcfg_add(&s_cfg, s_st.ssid, s_pending_pass);
+    bool saved = !twin && t5_netcfg_find(&s_cfg, s_st.ssid) >= 0;
     if (saved) t5_netcfg_mark_ok(&s_cfg, s_st.ssid);
     t5_mutex_unlock(s_mtx);
     s_pending_save = false;
@@ -828,14 +886,18 @@ static void handle(const msg_t *m)
     case CMD_SCAN:
         start_scan(false);
         break;
-    case CMD_CONNECT:
+    case CMD_CONNECT: {
         if (s_held) break;                  /* an app's monitor has the radio */
         s_auto = true;
-        s_pending_save = m->flag;
+        /* No password given: a saved network joins with its own, and there's
+         * nothing new to save. */
+        bool use_saved = !m->arg && t5_netcfg_find(&s_cfg, m->ssid) >= 0;
+        s_pending_save = m->flag && !use_saved;
         scpy(s_pending_pass, sizeof s_pending_pass, m->pass, sizeof m->pass);
         t5_netcfg_clear_fail(&s_backoff, m->ssid);
-        do_connect(m->ssid, m->pass);
+        do_connect(m->ssid, use_saved ? NULL : m->pass);
         break;
+    }
     case CMD_DISCONNECT:
         s_auto = false;
         s_target[0] = 0;
@@ -906,6 +968,7 @@ static void handle(const msg_t *m)
     case EV_STA_START:
         break;
     case EV_CONNECTED:
+        s_joined_open = no_password((wifi_auth_mode_t)m->auth);
         t5_mutex_lock(s_mtx);
         scpy(s_st.ssid, sizeof s_st.ssid, m->ssid, sizeof m->ssid);
         s_st.channel = (uint8_t)m->arg;
@@ -983,7 +1046,7 @@ static void timers(void)
     if (!s_wifi_up) return;
     if (due(s_next_connect, now)) {
         s_next_connect = 0;
-        if (s_auto && s_target[0] && s_st.state != T5_NET_CONNECTED) do_connect(s_target, NULL);
+        if (s_auto && s_target[0] && s_st.state != T5_NET_CONNECTED) reconnect();
     }
     if (due(s_next_scan, now)) {
         s_next_scan = 0;
@@ -1084,7 +1147,7 @@ t5_err_t t5_net_connect(const char *ssid, const char *pass, bool save)
     if (!ssid || !ssid[0] || strlen(ssid) >= T5_NET_SSID_LEN || (pass && strlen(pass) >= T5_NET_PASS_LEN)) {
         return T5_ERR_INVALID_ARG;
     }
-    msg_t m = { .type = CMD_CONNECT, .flag = save };
+    msg_t m = { .type = CMD_CONNECT, .flag = save, .arg = pass != NULL };
     strcpy(m.ssid, ssid);
     if (pass) strcpy(m.pass, pass);
     t5_err_t e = send(&m);

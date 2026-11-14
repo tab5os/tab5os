@@ -2,6 +2,7 @@
  * Which A/B slot an install writes (see ota.h). Pure, for host tests.
  */
 #pragma once
+#include <stdbool.h>
 
 /* running: the running image's OTA slot, or -1 when it isn't in one (the
  * recovery image). boot: the slot the bootloader picks next, -1 unknown.
@@ -11,4 +12,11 @@ static inline int t5_ota_target_slot(int running, int boot, int nslots)
     if (nslots < 1) return -1;
     if (running >= 0) return nslots >= 2 ? (running + 1) % nslots : -1;
     return boot >= 0 && boot < nslots ? boot : 0;
+}
+
+/* May a failed install wipe slot (the target's OTA slot) while running from
+ * running (-1: the recovery image)? Never the running system's own slot. */
+static inline bool t5_ota_may_discard(int slot, int running)
+{
+    return slot >= 0 && slot != running;
 }

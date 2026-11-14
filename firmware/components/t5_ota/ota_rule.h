@@ -117,8 +117,18 @@ static inline const char *t5_ota_c6_head_refusal(const uint8_t *head, size_t len
     return NULL;
 }
 
+/* A file install checks the whole file before writing any of it when the
+ * slot it writes is the one that boots next: from recovery. Elsewhere the
+ * running system keeps booting until a verified image switches the slot,
+ * so one pass does. */
+static inline bool t5_ota_check_first(t5_ota_source_t from)
+{
+    return from == T5_OTA_FROM_RECOVERY;
+}
+
 /* NULL when an image with this header may go in from this source, else why
- * not. trusted: a built-in key signed it. */
+ * not. trusted: the header names a built-in key (the install still refuses
+ * the image unless that key's signature verifies). */
 static inline const char *t5_ota_refusal(const t5_ota_hdr_t *h, bool trusted, t5_ota_source_t from, bool consent)
 {
     if (trusted) return NULL;

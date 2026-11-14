@@ -175,7 +175,7 @@ t5_err_t t5_usb_close(t5_usb_handle_t *h);   /* releases every claim */
 
 The GATT server (`t5_ble_server_*`) has one service per handle, no descriptors, and no pairing. HID needs more than it can offer:
 
-- **Pairing and bonding.** Turn on NimBLE's security manager use (LE Secure Connections, which is already compiled in: `CONFIG_BT_NIMBLE_SM_SC=y`), persistent bonds in the P4's NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`, up to 8 bonds) and address resolution (IRKs), so hosts using random private addresses reconnect. IO capability is "display, yes/no": the host shows a 6-digit number and the Tab5 shows the same number for the user to confirm (numeric comparison).
+- **Pairing and bonding.** Turn on NimBLE's security manager use (LE Secure Connections, which is already compiled in: `CONFIG_BT_NIMBLE_SM_SC=y`), persistent bonds in the P4's NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`, up to 8 bonds) and address resolution (IRKs), so hosts using random private addresses reconnect. IO capability is "display, yes/no": the host shows a 6-digit number and the Tab5 shows the same number for the user to confirm (numeric comparison). A host that can only type a code gets one to type instead (passkey entry). A host that can neither show nor confirm a code would get Just Works pairing, with no prompt, so HID refuses it: HID data needs an authenticated link with a full 16-byte key, and a host that connects to the HID advertisement and encrypts without one is disconnected. Pairing again from a bonded address can't replace a bond made with a code by a weaker one (the request is ignored). Apps' own GATT services aren't affected and can still use Just Works.
 - **The pairing prompt belongs to the system**, not the app. The shell shows "Pair with *host name*? Code 123456" so an app can't confirm pairings on its own or hide the code.
 - **Settings > Bluetooth** gets a "Paired devices" list with Forget. Forget only removes the Tab5's side of the bond, so the user also has to remove the Tab5 on the host.
 
@@ -185,7 +185,7 @@ A built-in profile in `t5_net/ble_hid.c` (not on top of the generic server), reg
 
 - HID (0x1812): HID Information, Report Map (the descriptor from `t5/hid.h` or the app's own), one Report characteristic per report ID with its Report Reference descriptor, Protocol Mode, HID Control Point, and the boot keyboard/mouse reports.
 - Battery (0x180F) with the Tab5's real battery level, and Device Information (0x180A) with PnP ID.
-- Advertising with the HID service UUID and the matching appearance (keyboard 0x03C1, mouse 0x03C2, gamepad 0x03C4, generic 0x03C0). Characteristics need an encrypted link, which starts pairing on first connect.
+- Advertising with the HID service UUID and the matching appearance (keyboard 0x03C1, mouse 0x03C2, gamepad 0x03C4, generic 0x03C0). Report Map, reports, Report Reference descriptors, notifications, Protocol Mode and Control Point writes need an authenticated link (a confirmed code), which starts pairing on first connect; HID Information, battery level and device information stay public.
 
 ```c
 typedef struct t5_ble_hid t5_ble_hid_t;

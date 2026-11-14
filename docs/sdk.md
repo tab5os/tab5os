@@ -19,6 +19,8 @@ cd hello && t5 run                   # build, push, launch, stream the log
 
 To install by hand instead: copy the `.t5app` (from `t5 app-build`, in `build/`) to the SD card and tap it in Files, or run `app install /sd/hello.t5app` (or `app fetch <url>`) on the console. `t5 apps` builds the test apps in `test/apps/`, `t5 examples` the examples in `apps/examples/`.
 
+Apps install to the SD card (`/sd/apps/<id>`) when there is one, else internally (`/data/apps/<id>`). An SD install is tied to the Tab5 that installed it: an app folder copied onto the card by hand, or a card moved to another Tab5, shows no apps there. Install the `.t5app` again on that device. If the same app is installed both internally and on the card, the internal copy is used. An installed app doesn't run in the background (standby refreshes, alarms, reopening after a restart) until it has been opened once by hand.
+
 An app compiles with the firmware's own flags for its ABI table (the generated `t5_abi/abi_table.c`) and against the same header files, so it sees exactly the headers and LVGL configuration the OS was built with. `sdk/cmake/sysroot.py` copies the headers the public `t5/*.h` headers reach (the OS's, ESP-IDF's libc, FreeRTOS and lwIP ports, LVGL, the generated `sdkconfig.h`: about 370 files, with their licences) into one tree, keeping each file's relative path so every include resolves as it did in the firmware, and writes the flags with paths relative to that tree. In the source tree `t5_app.cmake` stages it into the app's build directory from `firmware/build`. The SDK release ships it as `sdk/sysroot/`.
 
 ### In its own repo, with CI
@@ -363,7 +365,7 @@ Every app is isolated. It can read and write its own data folder (`t5_app_data_d
 | All of the SD card and USB drives | `all_files = true`; asked on first use. For file managers |
 | OS files, another app's data | Never |
 
-Call `t5_app_request_permission()` before touching a shared folder. Called from the UI task without it, the file call shows the prompt and fails that once. People can change the answer in App Manager. The `storage` permission now only covers ejecting and formatting the SD card.
+Call `t5_app_request_permission()` before touching a shared folder. Called from the UI task without it, the file call shows the prompt and fails that once. People can change the answer in App Manager. The answers are kept in the system folder (`/data/sys/grants/<id>`), out of the app's reach, and are deleted when the app is removed, even if its data is kept. The `storage` permission now only covers ejecting and formatting the SD card.
 
 `t5_file_pick()` shows a large modal over your app, on the UI task, one at a time:
 

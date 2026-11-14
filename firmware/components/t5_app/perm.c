@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Permissions (plan 5.9). The manifest's groups are the app's consent list;
- * camera and mic are asked again on first use and the answer is stored with
- * the app's data (t5_pkg grants). For native apps this is consent and
- * correctness, not a boundary (T5_NATIVE_APP_WARNING).
+ * camera and mic are asked again on first use and the answer is stored in
+ * the system dir, where the app can't write (t5_pkg grants). For native
+ * apps this is consent and correctness, not a boundary
+ * (T5_NATIVE_APP_WARNING).
  */
 #include <stdio.h>
 #include <stdlib.h>
