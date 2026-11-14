@@ -60,6 +60,7 @@ typedef struct {
     int key;                     /* index into t5_ota_keys, -1 unsigned or unknown */
     t5_ota_source_t from;
     bool consent;
+    bool dry;                    /* the check pass before a file install: nothing is written */
 } ota_t;
 
 static t5_ota_status_t s_st;
@@ -136,8 +137,10 @@ static t5_err_t check_hdr(const t5_ota_hdr_t *hdr, t5_ota_source_t from, bool co
     return *why ? T5_ERR_DENIED : T5_OK;
 }
 
-static t5_err_t ota_begin(const t5_ota_hdr_t *hdr, t5_ota_source_t from, bool consent, ota_t **out, char *err,
-                          size_t errlen)
+/* dry: only check (hash and verify as the install would), writing nothing
+ * and leaving the boot slot alone. */
+static t5_err_t ota_begin(const t5_ota_hdr_t *hdr, t5_ota_source_t from, bool consent, bool dry, ota_t **out,
+                          char *err, size_t errlen)
 {
     *out = NULL;
     int key;
@@ -158,7 +161,7 @@ static t5_err_t ota_begin(const t5_ota_hdr_t *hdr, t5_ota_source_t from, bool co
      * recovery the target is the boot slot by design, and recovery itself
      * is never a boot slot. */
     const esp_partition_t *boot = esp_ota_get_boot_partition();
-    if (ota_running_from_slot() && boot && boot->address == part->address &&
+    if (!dry && ota_running_from_slot() && boot && boot->address == part->address &&
         esp_ota_set_boot_partition(esp_ota_get_running_partition()) != ESP_OK) {
         T5_LOGW(TAG, "can't point the next boot back at the running system");
     }
@@ -169,28 +172,40 @@ static t5_err_t ota_begin(const t5_ota_hdr_t *hdr, t5_ota_source_t from, bool co
     o->key = key;
     o->from = from;
     o->consent = consent;
+    o->dry = dry;
     psa_crypto_init();
     o->sha = psa_hash_operation_init();
     if (psa_hash_setup(&o->sha, PSA_ALG_SHA_256) != PSA_SUCCESS ||
-        esp_ota_begin(part, hdr->image_len, &o->h) != ESP_OK) {
+        (!dry && esp_ota_begin(part, hdr->image_len, &o->h) != ESP_OK)) {
         psa_hash_abort(&o->sha);
         free(o);
         return fail(T5_ERR_IO, err, errlen, "can't open the update slot");
     }
     lock();
     memset(&s_st, 0, sizeof s_st);
-    s_st.state = T5_OTA_RECEIVING;
+    s_st.state = dry ? T5_OTA_VERIFYING : T5_OTA_RECEIVING;
     s_st.total = hdr->image_len;
     snprintf(s_st.version, sizeof s_st.version, "%.15s", hdr->os_version);
-    s_st.signed_ok = key >= 0;
-    if (key >= 0) {
-        for (int i = 0; i < 8; i++) snprintf(s_st.signer + 2 * i, 3, "%02x", hdr->key_id[i]);
-    }
     unlock();
-    T5_LOGI(TAG, "receiving Tab5 OS %.15s (%u bytes, %s) into %s", hdr->os_version, (unsigned)hdr->image_len,
-            key >= 0 ? t5_ota_keys[key].name : "not signed by a built-in key", part->label);
+    /* The header only names a key: nothing counts as signed until ota_finish verifies. */
+    T5_LOGI(TAG, "%s Tab5 OS %.15s (%u bytes, %s) %s %s", dry ? "checking" : "receiving", hdr->os_version,
+            (unsigned)hdr->image_len, key >= 0 ? t5_ota_keys[key].name : "no built-in key", dry ? "for" : "into",
+            part->label);
     *out = o;
     return T5_OK;
+}
+
+/* After a failed install the slot's image could still boot: esp_ota_abort
+ * only frees the handle, and from recovery the slot is the boot slot.
+ * Erase its first sector, which holds the image header's magic, so the
+ * bootloader passes it over. Never the running slot (esp_ota_begin refuses
+ * that one too). */
+static void erase_slot_head(const esp_partition_t *part)
+{
+    T5_ASSERT(t5_ota_may_discard(ota_slot_of(part), ota_slot_of(esp_ota_get_running_partition())));
+    if (esp_partition_erase_range(part, 0, part->erase_size) != ESP_OK) {
+        T5_LOGE(TAG, "can't erase the start of %s after a failed install", part->label);
+    }
 }
 
 static t5_err_t check_head(const ota_t *o, char *err, size_t errlen)
@@ -235,7 +250,9 @@ static t5_err_t ota_write(ota_t *o, const void *data, size_t len, char *err, siz
         }
     }
     psa_hash_update(&o->sha, p, len);
-    if (esp_ota_write(o->h, p, len) != ESP_OK) return fail(T5_ERR_IO, err, errlen, "writing the update slot failed");
+    if (!o->dry && esp_ota_write(o->h, p, len) != ESP_OK) {
+        return fail(T5_ERR_IO, err, errlen, "writing the update slot failed");
+    }
     o->done += (uint32_t)len;
     lock();
     s_st.done = o->done;
@@ -266,8 +283,10 @@ static bool verify_sig(const ota_t *o, const uint8_t hash[32])
     return verify_sig_with(o->key, o->hdr.sig, hash);
 }
 
-/* Verify and switch the boot slot. Frees o either way. */
-static t5_err_t ota_finish(ota_t *o, char *err, size_t errlen)
+/* Verify, then (unless dry) switch the boot slot; a failure after the slot
+ * was opened erases its start. verified (may be NULL): a built-in key's
+ * signature checked out. Frees o either way. */
+static t5_err_t ota_finish(ota_t *o, bool *verified, char *err, size_t errlen)
 {
     lock();
     s_st.state = T5_OTA_VERIFYING;
@@ -275,40 +294,65 @@ static t5_err_t ota_finish(ota_t *o, char *err, size_t errlen)
     uint8_t hash[32];
     size_t hl = 0;
     t5_err_t e = T5_OK;
-    psa_hash_finish(&o->sha, hash, sizeof hash, &hl);
-    if (o->done != o->hdr.image_len || !o->checked) {
+    if (psa_hash_finish(&o->sha, hash, sizeof hash, &hl) != PSA_SUCCESS) {
+        e = fail(T5_ERR_FAIL, err, errlen, "can't hash the image");
+    } else if (o->done != o->hdr.image_len || !o->checked) {
         e = fail(T5_ERR_INVALID_ARG, err, errlen, "the image is incomplete");
     } else if (memcmp(hash, o->hdr.image_sha256, 32)) {
         e = fail(T5_ERR_INVALID_ARG, err, errlen, "the image doesn't match its hash (damaged in transfer?)");
     } else if (o->key >= 0 && !verify_sig(o, hash)) {
         e = fail(T5_ERR_DENIED, err, errlen, "the signature doesn't verify");
     }
-    if (e != T5_OK) {
-        esp_ota_abort(o->h);
+    if (o->dry || e != T5_OK) {
+        if (!o->dry) {
+            esp_ota_abort(o->h);
+            erase_slot_head(o->part);
+        }
+        if (e == T5_OK) {
+            lock();
+            s_st.state = T5_OTA_IDLE;
+            unlock();
+        }
+        if (e == T5_OK && verified) *verified = o->key >= 0;
         free(o);
         return e;
     }
-    /* esp_ota_end checks the image structure (segments, its own SHA-256). */
-    if (esp_ota_end(o->h) != ESP_OK) e = fail(T5_ERR_INVALID_ARG, err, errlen, "the image failed ESP-IDF's checks");
-    else if (esp_ota_set_boot_partition(o->part) != ESP_OK) e = fail(T5_ERR_IO, err, errlen, "can't switch the boot slot");
+    /* esp_ota_end checks the image structure (segments, its own SHA-256)
+     * and frees the handle either way. */
+    if (esp_ota_end(o->h) != ESP_OK) {
+        e = fail(T5_ERR_INVALID_ARG, err, errlen, "the image failed ESP-IDF's checks");
+        erase_slot_head(o->part);
+    } else if (esp_ota_set_boot_partition(o->part) != ESP_OK) {
+        e = fail(T5_ERR_IO, err, errlen, "can't switch the boot slot");
+        erase_slot_head(o->part);    /* reported as not installed, so it doesn't boot either */
+    }
     if (e == T5_OK) {
         T5_LOGI(TAG, "Tab5 OS %.15s installed in %s; it runs on trial after a restart", o->hdr.os_version,
                 o->part->label);
         lock();
         s_st.state = T5_OTA_READY;
+        s_st.signed_ok = o->key >= 0;
+        if (o->key >= 0) {
+            for (int i = 0; i < 8; i++) snprintf(s_st.signer + 2 * i, 3, "%02x", o->hdr.key_id[i]);
+        }
         unlock();
+        if (verified) *verified = o->key >= 0;
     }
     free(o);
     return e;
 }
 
+/* The source failed or sent something wrong partway. */
 static void ota_abort(ota_t *o)
 {
     psa_hash_abort(&o->sha);
-    esp_ota_abort(o->h);
+    if (!o->dry) {
+        esp_ota_abort(o->h);
+        erase_slot_head(o->part);
+    }
     free(o);
     lock();
-    if (s_st.state == T5_OTA_RECEIVING) s_st.state = T5_OTA_FAILED;
+    if (s_st.state == T5_OTA_RECEIVING || s_st.state == T5_OTA_VERIFYING) s_st.state = T5_OTA_FAILED;
     unlock();
 }
 
@@ -332,17 +376,25 @@ static int read_full(t5_ota_read_fn rd, void *ctx, void *buf, size_t n)
     return (int)got;
 }
 
-t5_err_t t5_ota_install_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t from, bool consent,
-                               t5_ota_hdr_t *hdr_out, char *err, size_t errlen)
+/* The install, or with dry only its checks. expect (may be NULL): the
+ * header an earlier check pass saw; any other header is refused before
+ * anything is written. verified (may be NULL): see ota_finish. */
+static t5_err_t run_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t from, bool consent, bool dry,
+                           const t5_ota_hdr_t *expect, t5_ota_hdr_t *hdr_out, bool *verified, char *err,
+                           size_t errlen)
 {
     if (err && errlen) err[0] = 0;
+    if (verified) *verified = false;
     t5_ota_hdr_t hdr;
     int r = read_full(rd, ctx, &hdr, sizeof hdr);
     if (r < 0) return fail((t5_err_t)r, err, errlen, "the transfer was interrupted");
     if (r != (int)sizeof hdr) return fail(T5_ERR_INVALID_ARG, err, errlen, "not a .t5os file");
     if (hdr_out) *hdr_out = hdr;
+    if (expect && memcmp(expect, &hdr, sizeof hdr)) {
+        return fail(T5_ERR_INVALID_ARG, err, errlen, "the file changed after it was checked");
+    }
     ota_t *o = NULL;
-    T5_RETURN_ON_ERR(ota_begin(&hdr, from, consent, &o, err, errlen));
+    T5_RETURN_ON_ERR(ota_begin(&hdr, from, consent, dry, &o, err, errlen));
     uint8_t *buf = malloc(CHUNK);
     t5_err_t e = buf ? T5_OK : fail(T5_ERR_NO_MEM, err, errlen, "out of memory");
     while (e == T5_OK && o->done < hdr.image_len) {
@@ -357,7 +409,13 @@ t5_err_t t5_ota_install_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t fro
         ota_abort(o);
         return e;
     }
-    return ota_finish(o, err, errlen);
+    return ota_finish(o, verified, err, errlen);
+}
+
+t5_err_t t5_ota_install_stream(t5_ota_read_fn rd, void *ctx, t5_ota_source_t from, bool consent,
+                               t5_ota_hdr_t *hdr_out, char *err, size_t errlen)
+{
+    return run_stream(rd, ctx, from, consent, false, NULL, hdr_out, NULL, err, errlen);
 }
 
 static int file_read(void *ctx, void *buf, size_t n)
@@ -367,39 +425,36 @@ static int file_read(void *ctx, void *buf, size_t n)
     return r || !ferror(f) ? (int)r : T5_ERR_IO;
 }
 
-t5_err_t t5_ota_install_file(const char *path, t5_ota_source_t from, bool consent, char *err, size_t errlen)
+/* One pass over a file: the check, or the install. */
+static t5_err_t run_file(const char *path, t5_ota_source_t from, bool consent, bool dry, const t5_ota_hdr_t *expect,
+                         t5_ota_hdr_t *hdr, bool *verified, char *err, size_t errlen)
 {
+    if (verified) *verified = false;
     FILE *f = fopen(path, "rb");
     if (!f) {
-        snprintf(err, errlen, "can't open %s", path);
+        if (err && errlen) snprintf(err, errlen, "can't open %s", path);
         return T5_ERR_NOT_FOUND;
     }
-    t5_err_t e = t5_ota_install_stream(file_read, f, from, consent, NULL, err, errlen);
+    t5_err_t e = run_stream(file_read, f, from, consent, dry, expect, hdr, verified, err, errlen);
     fclose(f);
     return e;
 }
 
-t5_err_t t5_ota_peek(const char *path, t5_ota_source_t from, bool consent, t5_ota_hdr_t *hdr, bool *trusted,
-                     char *err, size_t errlen)
+t5_err_t t5_ota_install_file(const char *path, t5_ota_source_t from, bool consent, char *err, size_t errlen)
 {
-    *trusted = false;
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        snprintf(err, errlen, "can't open %s", path);
-        return T5_ERR_NOT_FOUND;
-    }
-    bool whole = fread(hdr, 1, sizeof *hdr, f) == sizeof *hdr;
-    fclose(f);
-    if (!whole) {
-        snprintf(err, errlen, "not a Tab5 OS update (.t5os)");
-        return T5_ERR_INVALID_ARG;
-    }
-    int key;
-    const char *why;
-    t5_err_t e = check_hdr(hdr, from, consent, &key, &why);
-    *trusted = key >= 0;
-    if (e != T5_OK) snprintf(err, errlen, "%s", why);
-    return e;
+    if (!t5_ota_check_first(from)) return run_file(path, from, consent, false, NULL, NULL, NULL, err, errlen);
+    /* From recovery the slot written is the one that boots next: check the
+     * whole file before writing any of it. The install pass checks again
+     * (the file could change in between), and wipes the slot if that fails. */
+    t5_ota_hdr_t hdr;
+    T5_RETURN_ON_ERR(run_file(path, from, consent, true, NULL, &hdr, NULL, err, errlen));
+    return run_file(path, from, consent, false, &hdr, NULL, NULL, err, errlen);
+}
+
+t5_err_t t5_ota_verify_file(const char *path, t5_ota_source_t from, bool consent, t5_ota_hdr_t *hdr, bool *verified,
+                            char *err, size_t errlen)
+{
+    return run_file(path, from, consent, true, NULL, hdr, verified, err, errlen);
 }
 
 /* ---- the C6 radio's firmware (.t5c6) ---------------------------------------- */

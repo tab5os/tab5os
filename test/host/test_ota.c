@@ -115,6 +115,33 @@ static void test_target_slot(void)
     TEST_ASSERT_EQUAL(-1, t5_ota_target_slot(-1, 0, 0));
 }
 
+/* A failed install wipes its target slot: from recovery, the slot it
+ * targets; from an A/B slot, only the other one, never the running one. */
+static void test_discard_slot(void)
+{
+    for (int boot_slot = 0; boot_slot < 2; boot_slot++) {
+        int from_recovery = t5_ota_target_slot(-1, boot_slot, 2);
+        TEST_ASSERT_TRUE(t5_ota_may_discard(from_recovery, -1));
+        for (int running = 0; running < 2; running++) {
+            int t = t5_ota_target_slot(running, boot_slot, 2);
+            TEST_ASSERT_TRUE(t5_ota_may_discard(t, running));
+            TEST_ASSERT_FALSE(t5_ota_may_discard(running, running));
+        }
+    }
+    TEST_ASSERT_FALSE(t5_ota_may_discard(-1, -1));                    /* no slot */
+    TEST_ASSERT_FALSE(t5_ota_may_discard(t5_ota_target_slot(0, 0, 1), 0));
+}
+
+/* Only recovery, whose target slot is the next boot, checks a file before
+ * writing it; the rest write the other slot and switch once verified. */
+static void test_check_first(void)
+{
+    TEST_ASSERT_TRUE(t5_ota_check_first(T5_OTA_FROM_RECOVERY));
+    TEST_ASSERT_FALSE(t5_ota_check_first(T5_OTA_FROM_SETTINGS));
+    TEST_ASSERT_FALSE(t5_ota_check_first(T5_OTA_FROM_CONSOLE));
+    TEST_ASSERT_FALSE(t5_ota_check_first(T5_OTA_FROM_DEV));
+}
+
 static void test_source_rule(void)
 {
     t5_ota_hdr_t unsig = { .sig_len = 0 }, other = { .sig_len = T5_OTA_SIG_LEN };
@@ -356,6 +383,8 @@ int main(void)
     RUN_TEST(test_bootctl_requests);
     RUN_TEST(test_bootctl_full);
     RUN_TEST(test_target_slot);
+    RUN_TEST(test_discard_slot);
+    RUN_TEST(test_check_first);
     RUN_TEST(test_source_rule);
     RUN_TEST(test_version_rule);
     RUN_TEST(test_pick_release);

@@ -61,12 +61,15 @@ static const char *TAG = "recovery";
 #define C_WARN 0xff8a65
 #define RESTART_SHOW_MS 300          /* the "Restarting" line on screen before the reset */
 
-typedef enum { JOB_NONE, JOB_INSTALL, JOB_CLEAR, JOB_ERASE, JOB_LOGS, JOB_RESTART, JOB_SAFE } job_t;
+typedef enum { JOB_NONE, JOB_CHECK, JOB_INSTALL, JOB_CLEAR, JOB_ERASE, JOB_LOGS, JOB_RESTART, JOB_SAFE } job_t;
 
 static TaskHandle_t s_worker;
 static volatile bool s_busy;
 static char s_status[200] = "Choose an action.";
 static char s_job_path[128];
+/* JOB_CHECK's result: the install confirmation for the UI task to show. */
+static char s_ask_body[300];
+static volatile bool s_ask_pending;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_status_dirty = true;
 
@@ -226,6 +229,30 @@ static void job_erase(void)
     status(e == T5_OK ? "/data is empty: apps, settings and files are gone." : "Erasing /data failed.");
 }
 
+/* Read the whole file and check it as the install would (hash, signature),
+ * before asking: a bad signature is refused here, not offered. */
+static void job_check(void)
+{
+    status("Checking %s...", s_job_path);
+    t5_ota_hdr_t h;
+    bool verified = false;
+    char err[96] = "";
+    if (t5_ota_verify_file(s_job_path, T5_OTA_FROM_RECOVERY, true, &h, &verified, err, sizeof err) != T5_OK) {
+        status("Won't install %s: %s", s_job_path, err);
+        return;
+    }
+    char body[sizeof s_ask_body];
+    snprintf(body, sizeof body, "%s\nTab5 OS %.15s%s", s_job_path, h.os_version,
+             verified ? "\n\nSigned by a key this system trusts."
+                      : "\n\nThis update isn't signed. Install it only if you made it or trust where it "
+                        "came from.");
+    taskENTER_CRITICAL(&s_mux);
+    memcpy(s_ask_body, body, sizeof s_ask_body);
+    s_ask_pending = true;
+    taskEXIT_CRITICAL(&s_mux);
+    status("Choose an action.");
+}
+
 static void job_install(void)
 {
     status("Installing %s...", s_job_path);
@@ -251,6 +278,7 @@ static void worker(void *arg)
         uint32_t j = JOB_NONE;
         xTaskNotifyWait(0, UINT32_MAX, &j, portMAX_DELAY);
         switch ((job_t)j) {
+        case JOB_CHECK: job_check(); break;
         case JOB_INSTALL: job_install(); break;
         case JOB_CLEAR: job_clear(); break;
         case JOB_ERASE: job_erase(); break;
@@ -425,18 +453,7 @@ static void act_install(void)
         return;
     }
     snprintf(s_job_path, sizeof s_job_path, "%s", paths[0]);       /* the newest */
-    t5_ota_hdr_t h;
-    bool trusted;
-    char err[96];
-    if (t5_ota_peek(s_job_path, T5_OTA_FROM_RECOVERY, true, &h, &trusted, err, sizeof err) != T5_OK) {
-        status("%s: %s", s_job_path, err);
-        return;
-    }
-    char body[300];
-    snprintf(body, sizeof body, "%s\nTab5 OS %.15s%s", s_job_path, h.os_version,
-             trusted ? "" : "\n\nThis update isn't signed. Install it only if you made it or trust where it "
-                            "came from.");
-    confirm("Reinstall Tab5 OS?", body, "Install", JOB_INSTALL);
+    start(JOB_CHECK);           /* then the main loop asks (s_ask_pending) */
 }
 
 static void act_clear(void)
@@ -580,6 +597,14 @@ void app_main(void)
             s_status_dirty = false;
             taskEXIT_CRITICAL(&s_mux);
             lv_label_set_text(s_status_label, tmp);
+        }
+        if (s_ask_pending && !s_busy) {
+            char body[sizeof s_ask_body];
+            taskENTER_CRITICAL(&s_mux);
+            memcpy(body, s_ask_body, sizeof body);
+            s_ask_pending = false;
+            taskEXIT_CRITICAL(&s_mux);
+            confirm("Reinstall Tab5 OS?", body, "Install", JOB_INSTALL);
         }
         uint32_t next = lv_timer_handler();
         vTaskDelay(pdMS_TO_TICKS(next < 10 ? 10 : next > 50 ? 50 : next));
