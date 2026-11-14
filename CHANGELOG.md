@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.2.1 (pre-release), Nov 14, 2026
+
+Animations run at 60 fps again, the UI scrolls faster, and the OS keeps far more of its fast internal memory free. Internet radio streams keep up. Updates, app installs on the SD card, Bluetooth keyboards and Wi-Fi are harder to fool.
+
+**Before you install**
+
+- It runs only on Tab5 units with ESP32-P4 silicon v1.x. `t5 chip`, or `esptool chip-id`, tells you which you have. Newer v3.x silicon isn't supported.
+- App API levels 1 and 2 and the SDK are unchanged, so apps built with the 0.2.0 SDK keep running without a rebuild. One exception: Python apps can no longer use the `O`, `P` and `S` type codes of `struct` and `array`, which turn integers into pointers.
+- From 0.2.0, install it from Settings > Updates (Over Wi-Fi, or `tab5os-0.2.1.t5os` from the SD card), or with `t5 ota`. Settings and files in `/data` are kept. Coming from 0.1.3 or earlier, see the 0.2.0 notes below.
+- **Apps ask for permissions once more.** Their camera, microphone and folder permissions move to a place apps can't write, and the old ones aren't carried over.
+- **Bluetooth keyboards and trackpads need pairing with a code.** A computer or phone that paired with the Tab5's keyboard, trackpad or gamepad without confirming a code (Just Works) is refused now; forget the Tab5 there and pair again.
+- The Wi-Fi chip's firmware is unchanged (C6 firmware 0.2.0), so the Tab5 doesn't update it this time.
+
+**What changed**
+
+- **Animations at 60 fps again.** Since 0.1.0 every animation (scrolling, screen transitions, dialogs) stepped at about 30 fps, because a build setting LVGL's animation timer depends on had been lost. Scrolling goes from 29 to about 58 fps, transitions from 25.6 to 29.8 fps, dialogs from 34 to 43 fps. Apps' LVGL animations are smoother too, with the same durations.
+- **More internal RAM.** The OS moves data that doesn't need the P4's fast internal memory to PSRAM: the Wi-Fi link's task stacks, the settings store's cache, and about 60 KB of OS state. Some of what that frees goes to wider drawing bands and a bigger pool for UI objects, so the UI draws faster and apps' screens spill less into slower memory.
+- **Faster downloads and streams over long distances.** The TCP receive window is 32 KB instead of 5.7 KB, so a connection to a server 300 ms away can carry about 870 kb/s instead of 150 kb/s. A 160 kb/s internet radio stream no longer runs dry every 40 seconds.
+- **Received Wi-Fi data no longer fills internal RAM.** Data an app hadn't read yet sat in internal memory, so a busy stream could get its app closed for lack of memory. It's kept in PSRAM now.
+- **An app that runs out of memory with the screen off is closed right away**, not when the screen next comes on, and a crashed app is closed the same way.
+- **Updates: nothing unverified can boot.** An update counts as signed only once its signature checks out. From the recovery screen, the whole file is checked before anything is written (and before you're asked to confirm). A failed or damaged install is wiped so it can't start.
+- **Apps on the SD card are tied to this Tab5.** An app counts only if this Tab5 installed it: a card prepared on a computer or another Tab5 shows no apps, so reinstall them from the `.t5app`. Apps you installed on the card before are kept. An app installed internally always wins over a copy on the card.
+- **Apps run in the background only after you've opened them once.** Standby card refreshes, alarms and restoring the last app at startup skip apps that were installed but never opened.
+- **No joining a look-alike Wi-Fi network.** A saved network is always joined with its password, also when reconnecting, so an open network using the same name (an "evil twin") isn't taken. Joining such a network by hand asks first and never replaces the saved one.
+- **Safer handling of damaged files**: the video player skips broken parts of an AVI file, and oversized camera buffers are refused.
+- **A smooth home screen wallpaper.** The gradient showed visible bands; it's now dithered.
+- **Buttons don't stay lit after a swipe.** A swipe that started on a button (such as All apps) and opened the app drawer or went home left the button highlighted.
+- **A smaller OS image.** ESP-IDF and the other bundled libraries log only warnings and errors, which saves about 20 KB. The OS's own logging is unchanged.
+
+**Downloads**
+
+| File | What it is |
+| --- | --- |
+| `tab5os-0.2.1.zip` | Everything below, plus `flash_all.sh` and the install guide |
+| `tab5os-0.2.1.t5os` | The OS as an update package, signed |
+| `tab5os-c6-0.2.0.t5c6` | The Wi-Fi chip's firmware (unchanged from 0.2.0), signed; the OS fetches it by itself |
+| `tab5os-sdk-0.2.1.tar.gz` | The app SDK |
+| `*.t5app` | The example apps, ready to install: BLE Explorer, Calculator, Keyboard & Trackpad, Logger, RS-485 Console, UI Gallery and UVC Monitor |
+| `SHA256SUMS` | Checksums |
+
 ## 0.2.0 (pre-release), Nov 12, 2026
 
 Apps can act as a USB or Bluetooth keyboard, mouse or MIDI device, reach the USB-A bus, the Wi-Fi radio and the Bluetooth controller below the OS, and draw their UI with t5ui, a UI API that doesn't expose LVGL. Releases are now signed and the Tab5 finds them over Wi-Fi.
