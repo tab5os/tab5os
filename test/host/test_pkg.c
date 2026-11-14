@@ -21,7 +21,7 @@
 #include "fixtures/pkg_fixtures.h"
 
 static char s_dir[128];
-static char s_sd[192], s_data[192], s_appdata[192], s_sys[64];
+static char s_sd[192], s_data[192], s_appdata[192], s_sys[192];
 
 static void sh(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void sh(const char *fmt, ...)
