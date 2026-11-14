@@ -33,6 +33,7 @@ static edge_t s_edge;
 static lv_point_t s_start;            /* PLATFORM: input device hook */
 static t5ui_timer_t *s_poll;
 static lv_indev_t *s_edge_indev;       /* PLATFORM: input device hook */
+static lv_obj_t *s_pressed;            /* PLATFORM: what the finger landed on */
 
 static void stop_poll(void)
 {
@@ -43,9 +44,19 @@ static void stop_poll(void)
     s_edge = EDGE_NONE;
 }
 
-/* PLATFORM: input device hook */
+/* PLATFORM: input device hook. lv_indev_reset() only sends the pressed
+ * object LV_EVENT_INDEV_RESET: it keeps LV_STATE_PRESSED and never hears
+ * PRESS_LOST, so a ripple or pressed style stayed lit after a swipe that
+ * began on it (the home screen's "All apps"). End the press as LVGL does
+ * when the finger slides off, then reset. */
 static void cancel_press(lv_indev_t *indev)
 {
+    lv_obj_t *o = s_pressed;
+    s_pressed = NULL;
+    if (o && lv_obj_is_valid(o)) {
+        lv_obj_remove_state(o, LV_STATE_PRESSED);
+        lv_obj_send_event(o, LV_EVENT_PRESS_LOST, indev);
+    }
     lv_indev_reset(indev, NULL);
     lv_indev_wait_release(indev);
 }
@@ -97,6 +108,7 @@ static void indev_event(lv_event_t *e)
     lv_obj_t *obj = lv_event_get_param(e);
     if (code == LV_EVENT_PRESSED) {
         if (lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER) return;
+        s_pressed = obj;
         lv_indev_get_point(indev, &s_start);
         int32_t h;
         t5ui_screen_size(NULL, &h);
@@ -139,4 +151,5 @@ void gesture_reset(void)
 {
     stop_poll();
     s_edge_indev = NULL;
+    s_pressed = NULL;
 }
